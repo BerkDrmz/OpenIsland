@@ -1,0 +1,21 @@
+.build/
+build/
+.swiftpm/
+Vendor/
+*.xcodeproj/xcuserdata/
+.DS_Store
+
+# Local development state and diagnostic records stay on this computer.
+.serena/
+Docs/*
+!Docs/ARCHITECTURE.md
+!Docs/PERFORMANCE.md
+*.log
+*.sample
+*.trace/
+.env
+.env.*
+*.p12
+*.pfx
+*.key
+*.cer

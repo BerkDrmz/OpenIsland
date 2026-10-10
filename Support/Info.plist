@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.openisland.OpenIsland</string>
+	<key>CFBundleName</key>
+	<string>OpenIsland</string>
+	<key>CFBundleDisplayName</key>
+	<string>OpenIsland</string>
+	<key>CFBundleExecutable</key>
+	<string>OpenIsland</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>tr</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<!-- Dock simgesi yok; yalnızca menü çubuğu + çentik paneli -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+
+	<!-- TCC kullanım açıklamaları -->
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Dock'ta uygulama simgesinin üzerine geldiğinizde açık pencerelerin küçük, tek karelik önizlemelerini gösterir. Görüntüler yalnızca bellekte tutulur; ses, video veya görüntü dosyası kaydedilmez.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Yalnızca seçtiğiniz uygulamanın ses seviyesini ve çıkış aygıtını ayarlamak için sistem sesine erişir. Ses kaydedilmez veya gönderilmez.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Bağlanan Bluetooth cihazlarının adını ve bağlantı geri bildirimini çentikte göstermek için kullanılır.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Quick Mirror, toplantı öncesi kadrajınızı kontrol edebilmeniz için FaceTime kamerasının önizlemesini çentikte gösterir. Görüntü hiçbir yere kaydedilmez.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Spotify ve Müzik uygulamalarından çalan parça bilgisini okumak ve oynatmayı kontrol etmek için kullanılır. Eski macOS sürümlerinde, izin verirseniz açık tarayıcı sekmesindeki oynatıcının sesini de ayarlar.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Yaklaşan etkinliklerinizi çentikte göstermek için takviminizi okur.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Yaklaşan etkinliklerinizi çentikte göstermek için takviminizi okur.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Bugünkü anımsatıcılarınızı adada göstermek, tamamlandı olarak işaretlemek ve yeni anımsatıcı eklemek için kullanılır.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Bugünkü anımsatıcılarınızı adada göstermek için kullanılır.</string>
+</dict>
+</plist>
