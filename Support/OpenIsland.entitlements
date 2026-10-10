@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Sandbox KAPALI: aktif CGEventTap (HUD değişimi), private framework'ler (MediaRemote,
+	  DisplayServices, CoreBrightness), /usr/bin/perl ve /usr/bin/shortcuts alt süreçleri
+	  sandbox içinde çalışmaz. Dağıtım: Developer ID + notarization (Mac App Store değil).
+	-->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+
+	<!-- Hardened Runtime kaynak erişim yetkileri -->
+	<!-- Core Audio process taps are audio input to this process, even though
+	     they contain application output rather than microphone audio. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+</dict>
+</plist>
