@@ -113,13 +113,21 @@ final class IslandViewModel {
         let style: MotionStyle = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .reduced : motionStyle
         let layoutChanged = newLayout != layout
         if layoutChanged || newPresentation != presentation || next.hud != hud || next.notice != notice || next.context.isPinned != isPinned {
-            let animation = IslandMotion.morph(from: presentation, to: newPresentation, style: style)
-            withAnimation(animation) {
-                if newPresentation != presentation { presentation = newPresentation }
-                if layoutChanged { layout = newLayout }
-                if next.hud != hud { hud = next.hud }
-                if next.notice != notice { notice = next.notice }
-                if next.context.isPinned != isPinned { isPinned = next.context.isPinned }
+            let isTabSwitch = presentation.isExpanded && newPresentation.isExpanded
+            let animation: Animation? = isTabSwitch
+                ? (layoutChanged ? IslandMotion.resize(style: style) : nil)
+                : IslandMotion.morph(from: presentation, to: newPresentation, style: style)
+            let apply = {
+                if newPresentation != self.presentation { self.presentation = newPresentation }
+                if layoutChanged { self.layout = newLayout }
+                if next.hud != self.hud { self.hud = next.hud }
+                if next.notice != self.notice { self.notice = next.notice }
+                if next.context.isPinned != self.isPinned { self.isPinned = next.context.isPinned }
+            }
+            if let animation {
+                withAnimation(animation, apply)
+            } else {
+                apply()
             }
             if layoutChanged { onLayoutChange?(newLayout) }
         }

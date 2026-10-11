@@ -142,22 +142,27 @@ struct IslandSurface<Surface: InsettableShape>: View {
         ZStack {
             // Yükseltilmeyen notch'ta bu gölge alt ağacı görünmez; shape yolunu her kare yeniden üretme.
             if elevation > 0 {
-                shape
+                let shadowView = shape
                     .fill(IslandPalette.surface)
                     .shadow(color: .black.opacity(IslandElevation.contactOpacity * elevation),
                             radius: IslandElevation.contactRadius, y: IslandElevation.contactOffset)
                     .shadow(color: .black.opacity(IslandElevation.ambientOpacity * elevation),
                             radius: IslandElevation.ambientRadius, y: IslandElevation.ambientOffset)
-                    .padding(Self.bleed)
-                    .mask {
-                        VStack(spacing: 0) {
-                            Color.clear.frame(height: Self.bleed + shadowClearance)
-                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                                .frame(height: shadowClearance > 0 ? 8 : 0)
-                            Color.black
+                if shadowClearance > 0 {
+                    shadowView
+                        .padding(Self.bleed)
+                        .mask {
+                            VStack(spacing: 0) {
+                                Color.clear.frame(height: Self.bleed + shadowClearance)
+                                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                                    .frame(height: 8)
+                                Color.black
+                            }
                         }
-                    }
-                    .padding(-Self.bleed)
+                        .padding(-Self.bleed)
+                } else {
+                    shadowView
+                }
             }
             shape.fill(IslandPalette.surface)
         }

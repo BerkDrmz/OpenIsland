@@ -80,6 +80,18 @@ struct IslandRootView: View {
         guard target != surface else { return }
         pendingOpening?.cancel()
         pendingOpening = nil
+        if target.presentation.isExpanded && surface.presentation.isExpanded {
+            if target.layout == surface.layout {
+                surface = target
+                return
+            } else {
+                let style = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? MotionStyle.reduced : model.motionStyle
+                withAnimation(IslandMotion.resize(style: style)) {
+                    surface = target
+                }
+                return
+            }
+        }
         let update = {
             let style = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? MotionStyle.reduced : model.motionStyle
             withAnimation(IslandMotion.morph(from: surface.presentation, to: target.presentation, style: style)) {

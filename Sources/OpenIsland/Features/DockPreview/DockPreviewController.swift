@@ -59,6 +59,8 @@ final class DockPreviewController {
         self.screenCaptureAllowed = screenCaptureAllowed
     }
 
+    private var dismissMonitor: Any?
+
     func configure(enabled: Bool) {
         self.enabled = enabled
         screenFrames = NSScreen.screens.map(\.frame)
@@ -68,9 +70,12 @@ final class DockPreviewController {
         guard enabled && accessibilityTrusted() else { stop(); return }
         guard globalMonitor == nil else { return }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]
-        ) { [weak self] event in
-            MainActor.assumeIsolated { self?.handle(event) }
+            matching: .mouseMoved
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.enabled else { return }
+                self.pointerMoved(to: NSEvent.mouseLocation)
+            }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]
@@ -79,7 +84,11 @@ final class DockPreviewController {
                 if event.type == .keyDown {
                     if event.keyCode == 53, self?.isVisible == true { self?.dismiss(); return true }
                     if self?.target != nil { self?.dismiss() }
-                } else { self?.handle(event) }
+                } else if event.type == .mouseMoved {
+                    self?.pointerMoved(to: NSEvent.mouseLocation)
+                } else if self?.target != nil || self?.isVisible == true {
+                    self?.handleDismissEvent(event)
+                }
                 return false
             }
             return consumed ? nil : event
@@ -92,8 +101,10 @@ final class DockPreviewController {
         dismiss()
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        if let dismissMonitor { NSEvent.removeMonitor(dismissMonitor) }
         globalMonitor = nil
         localMonitor = nil
+        dismissMonitor = nil
         workspaceObservers.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
         workspaceObservers.removeAll()
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
@@ -106,6 +117,8 @@ final class DockPreviewController {
     func dismiss() {
         // Global clicks, drags and Space notifications also arrive with no preview.
         // An already empty service needs neither cancellation nor observable writes.
+        if let dismissMonitor { NSEvent.removeMonitor(dismissMonitor) }
+        dismissMonitor = nil
         guard target != nil || showTask != nil || dismissTask != nil || probeTask != nil
             || panel?.contentView != nil || !captureTasks.isEmpty || !captureQueue.isEmpty else { return }
         dismissalCount += 1
@@ -152,13 +165,22 @@ final class DockPreviewController {
             }
     }
 
-    private func handle(_ event: NSEvent) {
+    private func attachDismissMonitor() {
+        guard dismissMonitor == nil else { return }
+        dismissMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .leftMouseDragged, .rightMouseDragged, .keyDown, .scrollWheel]
+        ) { [weak self] event in
+            MainActor.assumeIsolated { self?.handleDismissEvent(event) }
+        }
+    }
+
+    private func handleDismissEvent(_ event: NSEvent) {
         guard enabled else { return }
         if event.type == .keyDown {
             if target != nil { dismiss() }
             return
         }
-        let point = event.cgEvent.map { appKitPoint($0.location) } ?? NSEvent.mouseLocation
+        let point = NSEvent.mouseLocation
         if event.type == .scrollWheel {
             if isVisible && panel?.frame.contains(point) != true { dismiss() }
             return
@@ -168,7 +190,15 @@ final class DockPreviewController {
             if !isVisible || panel?.frame.contains(point) != true { dismiss() }
             return
         }
-        pointerMoved(to: point)
+    }
+
+    private func handle(_ event: NSEvent) {
+        guard enabled else { return }
+        if event.type == .mouseMoved {
+            pointerMoved(to: NSEvent.mouseLocation)
+        } else {
+            handleDismissEvent(event)
+        }
     }
 
     /// Separate entry point lets native checks exercise the edge gate without moving the user's cursor.
@@ -225,6 +255,7 @@ final class DockPreviewController {
         }
         dismiss()
         target = next
+        attachDismissMonitor()
         let token = generation
         showTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(DockPreviewRules.hoverDelay)) } catch { return }
@@ -234,6 +265,7 @@ final class DockPreviewController {
                   let live = self.dockTarget(at: NSEvent.mouseLocation),
                   live.app.processIdentifier == next.app.processIdentifier else { return }
             self.target = live
+            self.attachDismissMonitor()
             await self.present(live, token: token)
         }
     }
