@@ -1,3 +1,4 @@
+import AppKit
 import IslandCore
 import SwiftUI
 
@@ -163,7 +164,7 @@ private struct ClipRow: View {
                 .lineLimit(1)
         case .image(let data):
             HStack(spacing: 8) {
-                if let image = NSImage(data: data) {
+                if let image = ClipThumbnailCache.image(for: item, data: data) {
                     Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
                         .frame(width: 30, height: 20).clipShape(RoundedRectangle(cornerRadius: 4))
                 }
@@ -174,5 +175,18 @@ private struct ClipRow: View {
                 .font(IslandType.body)
                 .lineLimit(1)
         }
+    }
+}
+
+@MainActor
+private enum ClipThumbnailCache {
+    private static let cache = NSCache<NSUUID, NSImage>()
+
+    static func image(for item: ClipItem, data: Data) -> NSImage? {
+        let key = item.id as NSUUID
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let image = NSImage(data: data) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
     }
 }

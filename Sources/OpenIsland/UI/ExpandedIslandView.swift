@@ -95,6 +95,7 @@ struct ExpandedIslandView: View {
     private func tabButton(_ item: ExpandedTab) -> some View {
         let isSelected = item == tab
         return Button {
+            guard item != tab else { return }
             model.send(.selectTab(item))
         } label: {
             Image(systemName: item.symbol)

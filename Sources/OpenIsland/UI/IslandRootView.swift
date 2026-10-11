@@ -77,6 +77,7 @@ struct IslandRootView: View {
     }
 
     private func morph(to target: IslandSurfaceState) {
+        guard target != surface else { return }
         pendingOpening?.cancel()
         pendingOpening = nil
         let update = {
