@@ -180,9 +180,17 @@ final class DockPreviewController {
             cancelProbe(); cancelDismiss(); return
         }
         guard DockPreviewRules.nearDockEdge(point, screens: screenFrames) else {
-            cancelProbe()
-            showTask?.cancel(); showTask = nil
-            if isVisible { scheduleDismiss() } else { target = nil }
+            if isVisible {
+                cancelProbe()
+                showTask?.cancel()
+                showTask = nil
+                scheduleDismiss()
+            } else if target != nil || showTask != nil || probeTask != nil {
+                cancelProbe()
+                showTask?.cancel()
+                showTask = nil
+                target = nil
+            }
             return
         }
         let now = ProcessInfo.processInfo.systemUptime

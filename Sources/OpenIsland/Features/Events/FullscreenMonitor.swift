@@ -19,20 +19,25 @@ final class FullscreenMonitor {
     func start() {
         guard observers.isEmpty else { return }
         let center = NSWorkspace.shared.notificationCenter
-        let names = [NSWorkspace.activeSpaceDidChangeNotification,
-                     NSWorkspace.didActivateApplicationNotification,
-                     NSWorkspace.didTerminateApplicationNotification,
-                     NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification]
-        observers = names.map { name in
-            (center, center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.scheduleEvaluation() }
-            })
+        let spaceNames = [NSWorkspace.activeSpaceDidChangeNotification,
+                          NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification]
+        for name in spaceNames {
+            observers.append((center, center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.scheduleEvaluation(spaceTransition: true) }
+            }))
+        }
+        let appNames = [NSWorkspace.didActivateApplicationNotification,
+                        NSWorkspace.didTerminateApplicationNotification]
+        for name in appNames {
+            observers.append((center, center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.scheduleEvaluation(spaceTransition: false) }
+            }))
         }
         let applicationCenter = NotificationCenter.default
         observers.append((applicationCenter, applicationCenter.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.scheduleEvaluation() }
+            MainActor.assumeIsolated { self?.scheduleEvaluation(spaceTransition: true) }
         }))
         evaluate()
     }
@@ -49,18 +54,26 @@ final class FullscreenMonitor {
         }
     }
 
-    private func scheduleEvaluation() {
+    private func scheduleEvaluation(spaceTransition: Bool = true) {
         pending?.cancel()
         pending = Task { [weak self] in
-            for delay in [0.35, 0.9] {
-                try? await Task.sleep(for: .seconds(delay))
-                guard !Task.isCancelled else { return }
-                self?.evaluate()
-            }
-            // A slow exit may produce its first safe snapshot only in the last scheduled poll.
-            // Finish the two-snapshot confirmation instead of waiting for an unrelated event.
-            while self?.exitConfirmation.needsConfirmation == true {
-                try? await Task.sleep(for: .seconds(0.35))
+            if spaceTransition {
+                for delay in [0.35, 0.9] {
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard !Task.isCancelled else { return }
+                    self?.evaluate()
+                }
+                // A slow exit may produce its first safe snapshot only in the last scheduled poll.
+                // Finish the two-snapshot confirmation instead of waiting for an unrelated event.
+                while self?.exitConfirmation.needsConfirmation == true {
+                    try? await Task.sleep(for: .seconds(0.35))
+                    guard !Task.isCancelled else { return }
+                    self?.evaluate()
+                }
+            } else {
+                // Uygulama değişimi: tek kısa gecikme; tam ekran Space animasyonu olmadığından
+                // gereksiz pencere listesi taraması yapılmaz.
+                try? await Task.sleep(for: .milliseconds(150))
                 guard !Task.isCancelled else { return }
                 self?.evaluate()
             }

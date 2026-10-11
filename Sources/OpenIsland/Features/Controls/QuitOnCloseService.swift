@@ -15,6 +15,11 @@ final class QuitOnCloseService {
     private(set) var isMonitoring = false
     private(set) var requestCount = 0
     private var enabled = false
+    private let systemWideElement: AXUIElement = {
+        let element = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(element, 0.05)
+        return element
+    }()
 
     func configure(enabled: Bool) {
         self.enabled = enabled
@@ -44,12 +49,10 @@ final class QuitOnCloseService {
             clearCandidate()
             let point = event.cgEvent?.location ?? CGPoint(x: NSEvent.mouseLocation.x,
                          y: (NSScreen.screens.first?.frame.height ?? 0) - NSEvent.mouseLocation.y)
-            let system = AXUIElementCreateSystemWide()
-            AXUIElementSetMessagingTimeout(system, 0.15)
             var hit: AXUIElement?
-            guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &hit) == .success,
+            guard AXUIElementCopyElementAtPosition(systemWideElement, Float(point.x), Float(point.y), &hit) == .success,
                   let hit else { return }
-            AXUIElementSetMessagingTimeout(hit, 0.15)
+            AXUIElementSetMessagingTimeout(hit, 0.05)
             guard attribute(hit, kAXSubroleAttribute) as? String == kAXCloseButtonSubrole else { return }
             var pid: pid_t = 0
             guard AXUIElementGetPid(hit, &pid) == .success,
