@@ -74,7 +74,11 @@ final class DockPreviewController {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.enabled else { return }
-                self.pointerMoved(to: NSEvent.mouseLocation)
+                let point = NSEvent.mouseLocation
+                if !self.isVisible && self.target == nil && self.showTask == nil && self.probeTask == nil {
+                    guard DockPreviewRules.nearDockEdge(point, screens: self.screenFrames) else { return }
+                }
+                self.pointerMoved(to: point)
             }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(
@@ -85,7 +89,11 @@ final class DockPreviewController {
                     if event.keyCode == 53, self?.isVisible == true { self?.dismiss(); return true }
                     if self?.target != nil { self?.dismiss() }
                 } else if event.type == .mouseMoved {
-                    self?.pointerMoved(to: NSEvent.mouseLocation)
+                    let point = NSEvent.mouseLocation
+                    if self?.isVisible != true && self?.target == nil && self?.showTask == nil && self?.probeTask == nil {
+                        guard let screens = self?.screenFrames, DockPreviewRules.nearDockEdge(point, screens: screens) else { return false }
+                    }
+                    self?.pointerMoved(to: point)
                 } else if self?.target != nil || self?.isVisible == true {
                     self?.handleDismissEvent(event)
                 }

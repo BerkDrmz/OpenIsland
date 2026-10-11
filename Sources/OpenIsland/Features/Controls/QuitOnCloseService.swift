@@ -47,8 +47,8 @@ final class QuitOnCloseService {
             pending?.cancel()
             pending = nil
             clearCandidate()
-            let point = event.cgEvent?.location ?? CGPoint(x: NSEvent.mouseLocation.x,
-                         y: (NSScreen.screens.first?.frame.height ?? 0) - NSEvent.mouseLocation.y)
+            let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+            let point = CGPoint(x: NSEvent.mouseLocation.x, y: primaryHeight - NSEvent.mouseLocation.y)
             var hit: AXUIElement?
             guard AXUIElementCopyElementAtPosition(systemWideElement, Float(point.x), Float(point.y), &hit) == .success,
                   let hit else { return }
