@@ -217,16 +217,19 @@ final class NotchWindowController {
 
     private func refreshTrackingArea() {
         let rect = hitRect(for: targetLayout)
+        let mouseLocation = NSEvent.mouseLocation
+        let inside = rect.containsInclusive(mouseLocation)
         container.setTrackingRect(container.convert(panel.convertFromScreen(rect), from: nil),
-                                  pointerInside: isPointerInside && rect.containsInclusive(NSEvent.mouseLocation))
-        reconcilePointerExit()
+                                  pointerInside: isPointerInside && inside)
+        reconcilePointerExit(mouseLocation: mouseLocation)
     }
 
     /// Yüzey veya girdi yönlendirmesi değişirken AppKit çıkış üretmeyebilir; yalnızca bu olaylarda
     /// (olay güdümlü) bir kez doğrulanır. Girişler asla buradan üretilmez: HUD veya bildirim duran bir
     /// imlecin altında genişlediğinde ada kendiliğinden açılmamalı.
-    func reconcilePointerExit() {
-        guard isPointerInside, !hitRect(for: targetLayout).containsInclusive(NSEvent.mouseLocation) else { return }
+    func reconcilePointerExit(mouseLocation: NSPoint? = nil) {
+        let location = mouseLocation ?? NSEvent.mouseLocation
+        guard isPointerInside, !hitRect(for: targetLayout).containsInclusive(location) else { return }
         pointerDidExit()
     }
 

@@ -56,12 +56,25 @@ enum SystemSensors {
         guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &iterator) == KERN_SUCCESS else { return nil }
         defer { IOObjectRelease(iterator) }
         var best: Double?
+        let propKey = "PerformanceStatistics" as CFString
+        let utilKey = "Device Utilization %" as CFString
+        let keyPtr = Unmanaged.passUnretained(utilKey).toOpaque()
         var service = IOIteratorNext(iterator)
         while service != 0 {
-            if let stats = IORegistryEntryCreateCFProperty(service, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0)?
-                .takeRetainedValue() as? [String: Any],
-               let percent = (stats["Device Utilization %"] as? NSNumber)?.doubleValue, percent.isFinite {
-                best = max(best ?? 0, min(max(percent / 100, 0), 1))
+            if let rawProp = IORegistryEntryCreateCFProperty(service, propKey, kCFAllocatorDefault, 0) {
+                let stats = rawProp.takeRetainedValue()
+                if CFGetTypeID(stats) == CFDictionaryGetTypeID() {
+                    let dict = stats as! CFDictionary
+                    if let valPtr = CFDictionaryGetValue(dict, keyPtr) {
+                        let obj = Unmanaged<AnyObject>.fromOpaque(valPtr).takeUnretainedValue()
+                        if let num = obj as? NSNumber {
+                            let percent = num.doubleValue
+                            if percent.isFinite {
+                                best = max(best ?? 0, min(max(percent / 100, 0), 1))
+                            }
+                        }
+                    }
+                }
             }
             IOObjectRelease(service)
             service = IOIteratorNext(iterator)

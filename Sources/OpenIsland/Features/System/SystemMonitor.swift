@@ -36,6 +36,7 @@ final class SystemMonitor {
     @ObservationIgnored private var didTryPrivate = false
     /// Kaydırıcı sürüklenirken değeri kullanıcı belirler; ölçüm onu ezmez.
     @ObservationIgnored private var adjusting = false
+    @ObservationIgnored private var lastSampleInstant: ContinuousClock.Instant = .now - .seconds(10)
 
     var isRunning: Bool { task != nil }
     var storageObserverCount: Int { storageObservers.count }
@@ -44,11 +45,19 @@ final class SystemMonitor {
 
     func start() {
         guard task == nil else { return }
-        previousTicks = nil
+        let elapsed = ContinuousClock.now - lastSampleInstant
+        if elapsed >= .milliseconds(1500) {
+            previousTicks = nil
+        }
         task = Task { [weak self] in
             // İlk okuma CPU için temel olur; ikinci okuma kısa sürede gelir ki panel boş kalmasın.
             guard !Task.isCancelled else { return }
-            self?.sample()
+            if let self {
+                let elapsed = ContinuousClock.now - self.lastSampleInstant
+                if elapsed >= .milliseconds(1500) {
+                    self.sample()
+                }
+            }
             try? await Task.sleep(for: .milliseconds(500))
             while !Task.isCancelled {
                 guard let self else { return }
@@ -68,7 +77,6 @@ final class SystemMonitor {
         storageTask = nil
         storageObservers.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
         storageObservers.removeAll()
-        thermal = nil // sensör istemcisi yalnızca sekme açıkken tutulur
     }
 
     /// Uyanma / ekran değişimi: devre dışı kalmış kontrole tek bir yeni hak.
@@ -117,6 +125,7 @@ final class SystemMonitor {
     // MARK: - Ölçüm
 
     private func sample() {
+        lastSampleInstant = .now
         // The visible uptime label has minute precision. CPU/GPU still sample at
         // their normal cadence; do not invalidate the temperature column every 2 s
         // merely to republish seconds which it never displays.
