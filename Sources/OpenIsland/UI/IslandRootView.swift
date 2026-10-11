@@ -147,16 +147,18 @@ private struct IslandStateContent: View {
                 DropZoneView(zone: dropZone, metrics: metrics)
                     .transition(.islandReveal(motionStyle))
 
-            case .expanded(let tab):
-                ExpandedIslandView(tab: tab, model: model, environment: environment)
-                    // Reveal only when the prepared surface starts moving. The content uses
-                    // the preview's opacity timing without an additional blur pass.
-                    .opacity(expandedIsVisible ? 1 : 0)
-                    .animation(motionStyle == .expressive ? IslandMotion.livelyContentIn : IslandMotion.contentIn,
-                               value: expandedIsVisible)
-                    .allowsHitTesting(expandedIsVisible)
-                    .transition(.asymmetric(insertion: .identity,
-                        removal: .opacity.animation(motionStyle == .expressive ? IslandMotion.livelyContentOut : IslandMotion.contentOut)))
+            case .expanded:
+                if let tab = presentation.expandedTab {
+                    ExpandedIslandView(tab: tab, model: model, environment: environment)
+                        // Reveal only when the prepared surface starts moving. The content uses
+                        // the preview's opacity timing without an additional blur pass.
+                        .opacity(expandedIsVisible ? 1 : 0)
+                        .animation(motionStyle == .expressive ? IslandMotion.livelyContentIn : IslandMotion.contentIn,
+                                   value: expandedIsVisible)
+                        .allowsHitTesting(expandedIsVisible)
+                        .transition(.asymmetric(insertion: .identity,
+                            removal: .opacity.animation(motionStyle == .expressive ? IslandMotion.livelyContentOut : IslandMotion.contentOut)))
+                }
             }
         }
     }

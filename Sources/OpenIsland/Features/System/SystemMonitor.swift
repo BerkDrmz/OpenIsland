@@ -58,7 +58,11 @@ final class SystemMonitor {
                     self.sample()
                 }
             }
-            try? await Task.sleep(for: .milliseconds(500))
+            if let self, self.cpu == nil {
+                try? await Task.sleep(for: .milliseconds(1000))
+            } else {
+                try? await Task.sleep(for: .seconds(self?.slowPolling == true ? 4 : 2))
+            }
             while !Task.isCancelled {
                 guard let self else { return }
                 self.sample()
@@ -66,7 +70,9 @@ final class SystemMonitor {
             }
         }
         observeVolumes()
-        refreshStorage()
+        if storage.isEmpty {
+            refreshStorage()
+        }
     }
 
     func stop() {
