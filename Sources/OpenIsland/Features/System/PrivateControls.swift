@@ -50,15 +50,23 @@ final class ThermalSensors {
         setMatching(client, ["PrimaryUsagePage": 0xff00, "PrimaryUsage": 5] as CFDictionary)
         let found = copyServices(client)?.takeRetainedValue() as? [AnyObject] ?? []
         guard !found.isEmpty else { PrivateAPIGuard.failed("temperature"); return nil }
+        var matchedServices: [AnyObject] = []
+        var matchedNames: [String] = []
+        for service in found {
+            let pointer = Unmanaged.passUnretained(service).toOpaque()
+            let name = (copyProperty(pointer, "Product" as CFString)?.takeRetainedValue() as? String) ?? ""
+            if name.hasPrefix("PMU tdie") || name.hasPrefix("PMU2 tdie") {
+                matchedServices.append(service)
+                matchedNames.append(name)
+            }
+        }
+        guard !matchedServices.isEmpty else { PrivateAPIGuard.failed("temperature"); return nil }
         self.copyEvent = copyEvent
         self.floatValue = floatValue
         self.copyProperty = copyProperty
         self.client = ownedClient
-        services = found
-        names = found.map { service in
-            let pointer = Unmanaged.passUnretained(service).toOpaque()
-            return (copyProperty(pointer, "Product" as CFString)?.takeRetainedValue() as? String) ?? ""
-        }
+        services = matchedServices
+        names = matchedNames
     }
 
     func read() -> TemperatureRules.Summary {
