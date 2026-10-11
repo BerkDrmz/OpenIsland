@@ -15,6 +15,8 @@ final class QuitOnCloseService {
     private(set) var isMonitoring = false
     private(set) var requestCount = 0
     private var enabled = false
+    private var primaryHeight: CGFloat = NSScreen.screens.first?.frame.height ?? 0
+    private var screenObserver: NSObjectProtocol?
     private let systemWideElement: AXUIElement = {
         let element = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(element, 0.05)
@@ -23,6 +25,18 @@ final class QuitOnCloseService {
 
     func configure(enabled: Bool) {
         self.enabled = enabled
+        primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        if screenObserver == nil {
+            screenObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+                }
+            }
+        }
         let shouldMonitor = enabled && AXIsProcessTrusted()
         if !shouldMonitor { stop(); return }
         guard monitor == nil else { return }
@@ -35,6 +49,8 @@ final class QuitOnCloseService {
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        screenObserver = nil
         clearCandidate()
         pending?.cancel()
         pending = nil
@@ -47,8 +63,7 @@ final class QuitOnCloseService {
             pending?.cancel()
             pending = nil
             clearCandidate()
-            let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-            let point = CGPoint(x: NSEvent.mouseLocation.x, y: primaryHeight - NSEvent.mouseLocation.y)
+            let point = CGPoint(x: event.locationInWindow.x, y: primaryHeight - event.locationInWindow.y)
             var hit: AXUIElement?
             guard AXUIElementCopyElementAtPosition(systemWideElement, Float(point.x), Float(point.y), &hit) == .success,
                   let hit else { return }

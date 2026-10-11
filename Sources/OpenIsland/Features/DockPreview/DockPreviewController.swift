@@ -71,10 +71,10 @@ final class DockPreviewController {
         guard globalMonitor == nil else { return }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: .mouseMoved
-        ) { [weak self] _ in
+        ) { [weak self] event in
             MainActor.assumeIsolated {
                 guard let self, self.enabled else { return }
-                let point = NSEvent.mouseLocation
+                let point = event.locationInWindow
                 if !self.isVisible && self.target == nil && self.showTask == nil && self.probeTask == nil {
                     guard DockPreviewRules.nearDockEdge(point, screens: self.screenFrames) else { return }
                 }
@@ -188,7 +188,7 @@ final class DockPreviewController {
             if target != nil { dismiss() }
             return
         }
-        let point = NSEvent.mouseLocation
+        let point = event.window == nil ? event.locationInWindow : NSEvent.mouseLocation
         if event.type == .scrollWheel {
             if isVisible && panel?.frame.contains(point) != true { dismiss() }
             return
