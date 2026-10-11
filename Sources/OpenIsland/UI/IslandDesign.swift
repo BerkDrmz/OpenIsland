@@ -195,8 +195,3 @@ private struct RevealModifier: ViewModifier {
     }
 }
 
-extension IslandPresentation {
-    var isExpanded: Bool {
-        if case .expanded = self { true } else { false }
-    }
-}
