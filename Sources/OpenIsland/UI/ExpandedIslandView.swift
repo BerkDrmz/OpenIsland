@@ -78,43 +78,32 @@ struct ExpandedIslandView: View {
     private func header(metrics: NotchMetrics) -> some View {
         let visible = environment.preferences.visibleTabs
         let spacing = IslandLayoutEngine.tabSpacing
+        let leadingTabs = IslandLayoutEngine.leadingTabOrder.filter(visible.contains)
+        let trailingTabs = IslandLayoutEngine.trailingTabOrder.filter(visible.contains)
         return HStack(spacing: 0) {
             HStack(spacing: spacing) {
-                ForEach(IslandLayoutEngine.leadingTabOrder.filter(visible.contains), id: \.self, content: tabButton)
+                ForEach(leadingTabs, id: \.self) { item in
+                    TabButton(item: item, isSelected: item == tab, namespace: tabSelection) {
+                        guard item != tab else { return }
+                        model.send(.selectTab(item))
+                    }
+                    .equatable()
+                }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             Color.clear.frame(width: metrics.style == .notch ? metrics.notchSize.width : IslandSpacing.m)
             HStack(spacing: spacing) {
-                ForEach(IslandLayoutEngine.trailingTabOrder.filter(visible.contains), id: \.self, content: tabButton)
+                ForEach(trailingTabs, id: \.self) { item in
+                    TabButton(item: item, isSelected: item == tab, namespace: tabSelection) {
+                        guard item != tab else { return }
+                        model.send(.selectTab(item))
+                    }
+                    .equatable()
+                }
                 PinButton(model: model)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    private func tabButton(_ item: ExpandedTab) -> some View {
-        let isSelected = item == tab
-        return Button {
-            guard item != tab else { return }
-            model.send(.selectTab(item))
-        } label: {
-            Image(systemName: item.symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(isSelected ? IslandPalette.primary : IslandPalette.tertiary)
-                .frame(width: IslandLayoutEngine.tabButtonSize.width, height: IslandLayoutEngine.tabButtonSize.height)
-                .background {
-                    if isSelected {
-                        Capsule()
-                            .fill(IslandPalette.fillHover)
-                            .matchedGeometryEffect(id: "selection", in: tabSelection)
-                    }
-                }
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .help(item.title)
-        .accessibilityLabel(item.title)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -139,6 +128,40 @@ struct ExpandedIslandView: View {
         case .system:
             SystemPanel(system: environment.system)
         }
+    }
+}
+
+/// Sekme butonu: Equatable ile sarmalanır; sekme değiştiğinde yalnızca durumu değişen
+/// butonlar yeniden değerlendirilir, değişmeyen sekmelerin modifier zinciri atlanır.
+private struct TabButton: View, Equatable {
+    let item: ExpandedTab
+    let isSelected: Bool
+    let namespace: Namespace.ID
+    let onSelect: () -> Void
+
+    nonisolated static func == (lhs: TabButton, rhs: TabButton) -> Bool {
+        lhs.item == rhs.item && lhs.isSelected == rhs.isSelected
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            Image(systemName: item.symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isSelected ? IslandPalette.primary : IslandPalette.tertiary)
+                .frame(width: IslandLayoutEngine.tabButtonSize.width, height: IslandLayoutEngine.tabButtonSize.height)
+                .background {
+                    if isSelected {
+                        Capsule()
+                            .fill(IslandPalette.fillHover)
+                            .matchedGeometryEffect(id: "selection", in: namespace)
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(item.title)
+        .accessibilityLabel(item.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

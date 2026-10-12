@@ -180,7 +180,13 @@ final class LauncherStore {
             await Task.detached(priority: .utility) { request.run() }.value
         } onCancel: { request.cancel() }
         guard !Task.isCancelled else {
-            shortcutsLoadedAt = nil
+            // Task iptal edildiğinde: liste doluysa 60 sn cooldown ile gereksiz subprocess
+            // başlatılması engellenir; liste henüz boşsa bir sonraki girişte yüklenmesi için nil tutulur.
+            if !availableShortcuts.isEmpty {
+                shortcutsLoadedAt = Date().addingTimeInterval(-240)
+            } else {
+                shortcutsLoadedAt = nil
+            }
             return
         }
         if names != availableShortcuts { availableShortcuts = names }
