@@ -68,6 +68,7 @@ final class LauncherStore {
     /// Dosya seçici / bağlantı penceresi açıkken adanın kapanmaması için.
     @ObservationIgnored var hold: IslandHold?
     @ObservationIgnored private var shortcutsLoadedAt: Date?
+    @ObservationIgnored private var inFlightFetch: Task<[String], Never>?
     @ObservationIgnored private var iconCache: [UUID: NSImage] = [:]
 
     @ObservationIgnored private let storeURL = AppPaths.support.appendingPathComponent("launcher.json")
@@ -170,21 +171,28 @@ final class LauncherStore {
     /// `shortcuts list` bir alt süreç başlatır; sekme her açıldığında değil, en fazla 5 dakikada bir.
     func refreshShortcutsIfNeeded() async {
         if let loaded = shortcutsLoadedAt, Date().timeIntervalSince(loaded) < 300 { return }
-        shortcutsLoadedAt = Date()
+        if let inFlight = inFlightFetch {
+            let names = await inFlight.value
+            if names != availableShortcuts { availableShortcuts = names }
+            return
+        }
         await refreshShortcuts()
     }
 
     func refreshShortcuts() async {
-        let request = ShortcutsListRequest()
-        let names = await withTaskCancellationHandler {
-            await Task.detached(priority: .utility) { request.run() }.value
-        } onCancel: { request.cancel() }
-        guard !Task.isCancelled else {
-            // Task iptal edildiğinde: 60 saniyelik cooldown ile sekme geçişleri sırasında
-            // her seferinde gereksiz yere /usr/bin/shortcuts alt süreci başlatılması engellenir.
-            shortcutsLoadedAt = Date().addingTimeInterval(-240)
+        if let inFlight = inFlightFetch {
+            let names = await inFlight.value
+            if names != availableShortcuts { availableShortcuts = names }
             return
         }
+        let request = ShortcutsListRequest()
+        let fetchTask = Task.detached(priority: .utility) {
+            request.run()
+        }
+        inFlightFetch = fetchTask
+        let names = await fetchTask.value
+        inFlightFetch = nil
+        shortcutsLoadedAt = Date()
         if names != availableShortcuts { availableShortcuts = names }
     }
 
