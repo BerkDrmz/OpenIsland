@@ -85,3 +85,5 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lI
   Tools/PerformanceChecks/ScriptedPlayerCheck.swift -o "$CHECK_DIR/scripted-player-check"
 "$CHECK_DIR/scripted-player-check"
 python3 Tools/PerformanceChecks/ResourceProbeCheck.py
+
+python3 Tools/PerformanceChecks/TabBenchmarkReportCheck.py

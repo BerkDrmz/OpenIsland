@@ -32,6 +32,13 @@ final class IslandDiagnostics {
     private var lines: [String] = []
     private var lastRendered: CGRect?
     private let signpostLog = OSLog(subsystem: "io.github.openisland.performance", category: .pointsOfInterest)
+    private var benchmarkCPUStart: [String: Double] = [:]
+    private func processCPUSeconds() -> Double? {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return nil }
+        return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+            + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+    }
     private var signpostIDs: [String: OSSignpostID] = [:]
     private var emitsSignposts: Bool { ProcessInfo.processInfo.environment["OPENISLAND_SIGNPOSTS"] == "1" }
 
@@ -398,6 +405,7 @@ final class IslandDiagnostics {
 
     private func beginBenchmarkPhase(_ name: String) {
         log("\(name) start; epoch=\(Date().timeIntervalSince1970)")
+        benchmarkCPUStart[name] = processCPUSeconds()
         guard emitsSignposts else { return }
         let id = OSSignpostID(log: signpostLog)
         signpostIDs[name] = id
@@ -405,7 +413,15 @@ final class IslandDiagnostics {
     }
 
     private func endBenchmarkPhase(_ name: String) {
-        log("\(name) end; epoch=\(Date().timeIntervalSince1970)")
+        let cpu = processCPUSeconds()
+        let start = benchmarkCPUStart.removeValue(forKey: name)
+        let suffix: String
+        if let cpu, let start, cpu >= start {
+            suffix = "; cpu_seconds=\(cpu - start)"
+        } else {
+            suffix = "; cpu_seconds=unavailable"
+        }
+        log("\(name) end; epoch=\(Date().timeIntervalSince1970)\(suffix)")
         guard let id = signpostIDs.removeValue(forKey: name) else { return }
         os_signpost(.end, log: signpostLog, name: "Benchmark phase", signpostID: id, "%{public}@", name as NSString)
     }
