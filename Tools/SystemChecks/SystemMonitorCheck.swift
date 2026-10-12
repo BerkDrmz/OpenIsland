@@ -45,11 +45,51 @@ import IslandCore
         } else {
             print("SKIP: thermal sensor lifecycle; compatible temperature sensors unavailable")
         }
+        // An intentionally suspended backend must not block UI work or publish after close.
+        let gate = SamplingGate()
+        let blocked = SystemMonitor(readPublic: {
+            await gate.read()
+            return SystemSensors.Snapshot(ticks: nil, gpu: 0.25, memory: nil, pressure: .normal)
+        })
+        blocked.privateEnabled = false
+        blocked.start()
+        try await Task.sleep(for: .milliseconds(50))
+        let publicEntered = await gate.entered
+        precondition(publicEntered, "test backend did not start")
+        blocked.stop()
+        await gate.release()
+        try await Task.sleep(for: .milliseconds(50))
+        precondition(blocked.gpu == nil && blocked.sampleCount == 0, "old backend published after close")
+
+        let thermalGate = SamplingGate()
+        let fakeWorker = ThermalSamplingWorker(read: {
+            await thermalGate.read()
+            return .init(cpu: 70, gpu: 60)
+        })
+        let racing = SystemMonitor(thermalWorker: fakeWorker, readPublic: {
+            .init(ticks: nil, gpu: 0.25, memory: nil, pressure: .normal)
+        })
+        racing.start()
+        try await Task.sleep(for: .milliseconds(100))
+        let thermalEntered = await thermalGate.entered
+        precondition(thermalEntered, "thermal backend did not start")
+        racing.privateEnabled = false
+        racing.privateEnabled = true
+        await thermalGate.release()
+        try await Task.sleep(for: .milliseconds(100))
+        precondition(racing.temperatures == nil, "old private settings result was published")
+        racing.stop()
+        print("PASS: asynchronous sensor reads leave main actor responsive; stale close/settings results discarded")
+
         let monitor = SystemMonitor()
         precondition(!monitor.isRunning)
         monitor.start()
         try await Task.sleep(for: .seconds(3.2))
         precondition(monitor.isRunning)
+        let sensorReads = await SystemSamplingWorker.shared.readCount
+        precondition(sensorReads > 0, "Default sensor worker was never called")
+        let sensorRanOnMain = await SystemSamplingWorker.shared.lastReadWasMainThread
+        precondition(!sensorRanOnMain, "Public sensors ran on the main thread")
         precondition(monitor.storageObserverCount == 3)
         let reads = monitor.storageReadCount
         precondition(reads == 1, "Storage must be read once on panel entry, not every CPU sample")
@@ -120,4 +160,14 @@ import IslandCore
         precondition(result == KERN_SUCCESS, "Cannot read process physical footprint")
         return info.phys_footprint
     }
+}
+
+private actor SamplingGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var entered = false
+    func read() async {
+        entered = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func release() { continuation?.resume(); continuation = nil }
 }

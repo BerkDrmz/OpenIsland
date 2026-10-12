@@ -41,6 +41,10 @@ import IslandCore
     }
 
     @MainActor private static func liveCheck(_ fixtureURL: URL) async throws {
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier != "com.apple.loginwindow" else {
+            print("SKIP Dock live: desktop is locked; unlock before testing hover/capture")
+            return
+        }
         guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else {
             print("SKIP Dock live: this test process needs existing Accessibility and Screen Recording permission; no permission is requested")
             return

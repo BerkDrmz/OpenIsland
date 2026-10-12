@@ -304,8 +304,17 @@ final class DockPreviewController {
         let cgPoint = coreGraphicsPoint(point)
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(dock, Float(cgPoint.x), Float(cgPoint.y), &hit) == .success,
-              let hit, attribute(hit, kAXSubroleAttribute) as? String == "AXApplicationDockItem",
-              let url = attribute(hit, kAXURLAttribute) as? URL else { return nil }
+              let hit else { return nil }
+        let names = [kAXSubroleAttribute, kAXURLAttribute, kAXPositionAttribute, kAXSizeAttribute]
+        var rawValues: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(hit, names as CFArray, [], &rawValues) == .success,
+              let values = rawValues as? [AnyObject], values.count == names.count,
+              values[0] as? String == "AXApplicationDockItem", let url = values[1] as? URL,
+              CFGetTypeID(values[2]) == AXValueGetTypeID(), CFGetTypeID(values[3]) == AXValueGetTypeID() else { return nil }
+        var origin = CGPoint.zero, dimensions = CGSize.zero
+        guard AXValueGetValue(unsafeDowncast(values[2], to: AXValue.self), .cgPoint, &origin),
+              AXValueGetValue(unsafeDowncast(values[3], to: AXValue.self), .cgSize, &dimensions) else { return nil }
+        let rect = CGRect(origin: origin, size: dimensions)
         let app: NSRunningApplication?
         if let current = target?.app, !current.isTerminated,
            current.bundleURL?.standardizedFileURL == url.standardizedFileURL {
@@ -319,7 +328,7 @@ final class DockPreviewController {
                 ?? Bundle(url: url)?.bundleIdentifier.flatMap { id in apps.first { $0.bundleIdentifier == id } }
         }
         guard let app, !app.isTerminated, app.activationPolicy == .regular,
-              let rect = frame(of: hit), rect.width > 0, rect.height > 0 else { return nil }
+              rect.width > 0, rect.height > 0 else { return nil }
         let anchor = CGRect(x: rect.minX, y: primaryTop - rect.maxY, width: rect.width, height: rect.height)
         guard anchor.insetBy(dx: -2, dy: -2).contains(point) else { return nil }
         return Target(app: app, anchor: anchor)

@@ -84,3 +84,4 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lI
   Sources/OpenIsland/Features/Media/{NowPlaying,ScriptedPlayerSource}.swift \
   Tools/PerformanceChecks/ScriptedPlayerCheck.swift -o "$CHECK_DIR/scripted-player-check"
 "$CHECK_DIR/scripted-player-check"
+python3 Tools/PerformanceChecks/ResourceProbeCheck.py

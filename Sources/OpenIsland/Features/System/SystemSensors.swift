@@ -4,6 +4,17 @@ import IslandCore
 
 /// CPU, bellek ve GPU okumaları: mach/sysctl ve IORegistry; yalnızca ölçüm sırasında çağrılır, arka plan işi yok.
 enum SystemSensors {
+    struct Snapshot: Sendable {
+        var ticks: CPUTicks?
+        var gpu: Double?
+        var memory: MemoryBreakdown?
+        var pressure: MemoryRules.Pressure
+    }
+
+    static func snapshot() -> Snapshot {
+        Snapshot(ticks: cpuTicks(), gpu: gpuUtilization(), memory: memory(), pressure: memoryPressure())
+    }
+
     static func cpuTicks() -> CPUTicks? {
         // mach_host_self returns an owned send right on every call, including failed reads.
         let host = mach_host_self()
@@ -80,5 +91,25 @@ enum SystemSensors {
             service = IOIteratorNext(iterator)
         }
         return best
+    }
+}
+
+/// Serial on-demand reads: reopening a panel cannot fan out blocked IORegistry calls.
+/// Retaining this actor starts no task or timer.
+actor SystemSamplingWorker {
+    static let shared = SystemSamplingWorker()
+    private(set) var readCount = 0
+    private(set) var lastReadWasMainThread = false
+    func read() async -> SystemSensors.Snapshot {
+        guard !Task.isCancelled else {
+            return .init(ticks: nil, gpu: nil, memory: nil, pressure: .normal)
+        }
+        return readSnapshot()
+    }
+
+    private func readSnapshot() -> SystemSensors.Snapshot {
+        readCount &+= 1
+        lastReadWasMainThread = Thread.isMainThread
+        return SystemSensors.snapshot()
     }
 }

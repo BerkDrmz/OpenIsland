@@ -2,6 +2,7 @@ import AppKit
 import EventKit
 import IslandCore
 import SwiftUI
+import os
 
 /// Geometri tanılaması (yalnızca `OPENISLAND_DIAGNOSTICS=<dosya>` ortam değişkeniyle açılır; normal
 /// çalışmada hiçbir kod yolu etkin değildir).
@@ -30,6 +31,9 @@ final class IslandDiagnostics {
     private let output: URL
     private var lines: [String] = []
     private var lastRendered: CGRect?
+    private let signpostLog = OSLog(subsystem: "io.github.openisland.performance", category: .pointsOfInterest)
+    private var signpostIDs: [String: OSSignpostID] = [:]
+    private var emitsSignposts: Bool { ProcessInfo.processInfo.environment["OPENISLAND_SIGNPOSTS"] == "1" }
 
     private init(output: URL) {
         self.output = output
@@ -207,7 +211,13 @@ final class IslandDiagnostics {
 
     /// Explicit developer run only; no task is created in normal operation.
     func runPerformanceScript(on controller: NotchWindowController, environment: AppEnvironment) {
+        if let mode = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] {
+            runControlledBenchmark(mode: mode, controller: controller, environment: environment)
+            return
+        }
         let model = controller.model
+        let quick = ProcessInfo.processInfo.environment["OPENISLAND_PERFORMANCE_QUICK"] == "1"
+        let cycles = quick ? 20 : 40
         Task { @MainActor in
             let originalConfiguration = model.machine.configuration
             let originalDemoMode = model.machine.context.isDemoMode
@@ -235,7 +245,7 @@ final class IslandDiagnostics {
             model.send(.demoModeChanged(isOn: true))
             model.send(.selectTab(.nook))
             log("animated open-close start; epoch=\(Date().timeIntervalSince1970)")
-            for index in 0..<40 {
+            for index in 0..<cycles {
                 model.send(.tapped)
                 try? await Task.sleep(for: .seconds(0.4))
                 guard model.machine.isExpanded else {
@@ -252,16 +262,34 @@ final class IslandDiagnostics {
             }
             model.send(.escapePressed)
             model.cancelPendingEffects()
-            log("animated open-close finished; epoch=\(Date().timeIntervalSince1970); verified cycles=40; pending tasks=\(model.pendingEffectCount)")
+            log("animated open-close finished; epoch=\(Date().timeIntervalSince1970); verified cycles=\(cycles); pending tasks=\(model.pendingEffectCount)")
             model.send(.tapped)
             guard model.machine.isExpanded else { log("FAIL: static panel never expanded"); return }
             log("static expanded start; epoch=\(Date().timeIntervalSince1970)")
-            try? await Task.sleep(for: .seconds(30))
+            try? await Task.sleep(for: .seconds(quick ? 10 : 30))
             log("static expanded end; epoch=\(Date().timeIntervalSince1970)")
             model.send(.selectTab(.system))
             log("system panel start; epoch=\(Date().timeIntervalSince1970)")
-            try? await Task.sleep(for: .seconds(20))
+            try? await Task.sleep(for: .seconds(quick ? 12 : 20))
             log("system panel end; epoch=\(Date().timeIntervalSince1970); running=\(environment.system.isRunning)")
+            if ProcessInfo.processInfo.environment["OPENISLAND_PERFORMANCE_EXTENDED"] == "1" {
+                let tabs: [ExpandedTab] = [.media, .shelf, .clipboard, .notes, .nook, .system]
+                for (phase, delay, passes) in [("normal tabs", 0.65, 3), ("rapid tabs", 0.08, 5)] {
+                    log("\(phase) start; epoch=\(Date().timeIntervalSince1970)")
+                    for _ in 0..<passes {
+                        for tab in tabs {
+                            model.send(.selectTab(tab))
+                            try? await Task.sleep(for: .seconds(delay))
+                            guard model.presentation.expandedTab == tab else { log("FAIL: tab \(tab) did not activate"); return }
+                        }
+                    }
+                    log("\(phase) end; epoch=\(Date().timeIntervalSince1970)")
+                }
+                model.send(.selectTab(.media))
+                log("media start; epoch=\(Date().timeIntervalSince1970); playing=\(environment.media.isPlaying); title=\(environment.media.nowPlaying?.title ?? "none")")
+                try? await Task.sleep(for: .seconds(quick ? 12 : 20))
+                log("media end; epoch=\(Date().timeIntervalSince1970); playing=\(environment.media.isPlaying)")
+            }
             model.send(.escapePressed)
             model.cancelPendingEffects()
             if let value = ProcessInfo.processInfo.environment["OPENISLAND_PERFORMANCE_AUDIO_PID"], let pid = pid_t(value) {
@@ -273,15 +301,113 @@ final class IslandDiagnostics {
                     environment.audioMixer.setApplicationVolume(0.5, pid: pid)
                     try? await Task.sleep(for: .seconds(5))
                     log("audio route start; epoch=\(Date().timeIntervalSince1970); routes=\(environment.audioMixer.activeRouteCount); error=\(environment.audioMixer.error ?? "none")")
-                    try? await Task.sleep(for: .seconds(20))
+                    try? await Task.sleep(for: .seconds(quick ? 12 : 20))
                     log("audio route end; epoch=\(Date().timeIntervalSince1970); routes=\(environment.audioMixer.activeRouteCount); error=\(environment.audioMixer.error ?? "none")")
                 } else { log("SKIP: requested audio fixture is not playing") }
             }
             try? await Task.sleep(for: .seconds(2))
             log("idle start; epoch=\(Date().timeIntervalSince1970); system running=\(environment.system.isRunning); routes=\(environment.audioMixer.activeRouteCount); pending tasks=\(model.pendingEffectCount)")
-            try? await Task.sleep(for: .seconds(60))
+            try? await Task.sleep(for: .seconds(quick ? 40 : 60))
             log("performance finished; pending tasks=\(model.pendingEffectCount)")
         }
+    }
+
+    /// Repeatable developer-only workloads. No preferences, media controls or saved files are changed.
+    private func runControlledBenchmark(mode: String, controller: NotchWindowController, environment: AppEnvironment) {
+        let model = controller.model
+        let seconds = max(305, min(1800, Double(ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_SECONDS"] ?? "305") ?? 305))
+        Task { @MainActor in
+            let originalDemo = model.machine.context.isDemoMode
+            let originalTab = model.machine.context.lastTab
+            defer {
+                model.send(.escapePressed)
+                model.cancelPendingEffects()
+                model.send(.demoModeChanged(isOn: originalDemo))
+                model.send(.selectTab(originalTab))
+            }
+            model.send(.escapePressed)
+            model.cancelPendingEffects()
+            model.send(.demoModeChanged(isOn: true))
+            try? await Task.sleep(for: .seconds(2))
+            let tabs: [ExpandedTab] = [.media, .shelf, .clipboard, .notes, .nook, .system]
+            log("controlled start; mode=\(mode); playing=\(environment.media.isPlaying); title=\(environment.media.nowPlaying?.title ?? "none")")
+            if mode == "idle-compact" {
+                beginBenchmarkPhase("idle compact")
+                try? await Task.sleep(for: .seconds(seconds))
+                endBenchmarkPhase("idle compact")
+                guard !model.machine.isEngaged else { log("FAIL: compact idle became engaged"); return }
+            } else {
+                model.send(.selectTab(.nook))
+                model.send(.tapped)
+                try? await Task.sleep(for: .seconds(2))
+                guard model.machine.isExpanded else { log("FAIL: benchmark did not expand"); return }
+                if mode == "idle-expanded" {
+                    beginBenchmarkPhase("idle expanded")
+                    try? await Task.sleep(for: .seconds(seconds))
+                    endBenchmarkPhase("idle expanded")
+                    guard model.machine.isExpanded else { log("FAIL: expanded idle closed"); return }
+                } else if mode == "suite" || mode == "tabs" {
+                    // Equal warm-up for both binaries; first-open cost remains in the separate cycle test.
+                    for tab in tabs {
+                        model.send(.selectTab(tab))
+                        try? await Task.sleep(for: .milliseconds(350))
+                    }
+                    for round in 1...3 {
+                        for (name, delay, passes) in [("normal tabs", 0.65, 3), ("rapid tabs", 0.08, 5)] {
+                            let phase = "\(name) \(round)"
+                            beginBenchmarkPhase(phase)
+                            for _ in 0..<passes {
+                                for tab in tabs {
+                                    if emitsSignposts {
+                                        os_signpost(.event, log: signpostLog, name: "Tab selected", "%{public}@", String(describing: tab) as NSString)
+                                    }
+                                    model.send(.selectTab(tab))
+                                    try? await Task.sleep(for: .seconds(delay))
+                                    guard model.presentation.expandedTab == tab else { log("FAIL: \(tab) did not activate"); return }
+                                }
+                            }
+                            endBenchmarkPhase(phase)
+                        }
+                    }
+                    if mode == "suite" {
+                        for tab in [ExpandedTab.system, .media] {
+                            model.send(.selectTab(tab))
+                            let phase = "static \(tab)"
+                            beginBenchmarkPhase(phase)
+                            try? await Task.sleep(for: .seconds(30))
+                            endBenchmarkPhase(phase)
+                        }
+                        model.send(.escapePressed)
+                        model.send(.selectTab(.nook))
+                        beginBenchmarkPhase("open close")
+                        for _ in 0..<20 {
+                            model.send(.tapped)
+                            try? await Task.sleep(for: .milliseconds(400))
+                            guard model.machine.isExpanded else { log("FAIL: cycle did not expand"); return }
+                            model.send(.escapePressed)
+                            try? await Task.sleep(for: .milliseconds(400))
+                            guard !model.machine.isEngaged else { log("FAIL: cycle did not close"); return }
+                        }
+                        endBenchmarkPhase("open close")
+                    }
+                } else { log("FAIL: unknown benchmark mode \(mode)"); return }
+            }
+            log("controlled finished; mode=\(mode); playing=\(environment.media.isPlaying); system samples=\(environment.system.sampleCount); storage reads=\(environment.system.storageReadCount); pending tasks=\(model.pendingEffectCount)")
+        }
+    }
+
+    private func beginBenchmarkPhase(_ name: String) {
+        log("\(name) start; epoch=\(Date().timeIntervalSince1970)")
+        guard emitsSignposts else { return }
+        let id = OSSignpostID(log: signpostLog)
+        signpostIDs[name] = id
+        os_signpost(.begin, log: signpostLog, name: "Benchmark phase", signpostID: id, "%{public}@", name as NSString)
+    }
+
+    private func endBenchmarkPhase(_ name: String) {
+        log("\(name) end; epoch=\(Date().timeIntervalSince1970)")
+        guard let id = signpostIDs.removeValue(forKey: name) else { return }
+        os_signpost(.end, log: signpostLog, name: "Benchmark phase", signpostID: id, "%{public}@", name as NSString)
     }
 
     func runMixerScript(environment: AppEnvironment, pid: pid_t) {

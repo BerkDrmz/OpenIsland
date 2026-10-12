@@ -1,5 +1,11 @@
 # Performans incelemesi — 9–10 Ekim 2026
 
+> **11 Ekim 2026 ölçüm düzeltmesi:** Eski `resource-probe.py`, CPU sayaçlarını
+> nanosecond kabul ediyordu. Apple Silicon'da Mach timebase dönüşümü gerekiyor;
+> bu Mac'te katsayı 125/3. Aşağıdaki eski CPU yüzdeleri bu betikle üretildiyse
+> geçerli karşılaştırma sayısı değildir; doğrulanmadan kullanılmamalıdır.
+> Güncel yöntem ve sınırlar: [11 Ekim raporu](PERFORMANCE-OPTIMIZATION-2026-10-11.md).
+
 OpenIsland boşta sürekli veri taramadan çalışır. Bu incelemede kapalı ada, statik açık panel,
 gerçek aç/kapa geçişleri, görünür Sistem sekmesi ve aktif uygulama ses işleme yolu ayrı ölçüldü.
 Sonuçlar bu cihaz ve test koşulları içindir; tüm cihazlarda tepe CPU, GPU veya pil tüketimi için

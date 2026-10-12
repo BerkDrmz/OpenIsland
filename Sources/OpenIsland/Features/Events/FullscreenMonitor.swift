@@ -76,6 +76,13 @@ final class FullscreenMonitor {
                 try? await Task.sleep(for: .milliseconds(150))
                 guard !Task.isCancelled else { return }
                 self?.evaluate()
+                // An activation can replace a Space task after its first safe exit snapshot.
+                // Finish that existing confirmation rather than leaving stale fullscreen state.
+                while self?.exitConfirmation.needsConfirmation == true {
+                    do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+                    guard !Task.isCancelled else { return }
+                    self?.evaluate()
+                }
             }
         }
     }
