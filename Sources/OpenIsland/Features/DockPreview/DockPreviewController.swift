@@ -315,16 +315,18 @@ final class DockPreviewController {
         guard AXValueGetValue(unsafeDowncast(values[2], to: AXValue.self), .cgPoint, &origin),
               AXValueGetValue(unsafeDowncast(values[3], to: AXValue.self), .cgSize, &dimensions) else { return nil }
         let rect = CGRect(origin: origin, size: dimensions)
+        // Normalize the hit URL once, rather than once per running application.
+        let standardizedTargetURL = url.standardizedFileURL
         let app: NSRunningApplication?
         if let current = target?.app, !current.isTerminated,
-           current.bundleURL?.standardizedFileURL == url.standardizedFileURL {
+           current.bundleURL?.standardizedFileURL == standardizedTargetURL {
             // Pointer motion over the same Dock item needs fresh hit geometry, but
             // not another LaunchServices enumeration of every running application.
             app = current
         } else {
             applicationReadCount += 1
             let apps = NSWorkspace.shared.runningApplications
-            app = apps.first { $0.bundleURL?.standardizedFileURL == url.standardizedFileURL }
+            app = apps.first { $0.bundleURL?.standardizedFileURL == standardizedTargetURL }
                 ?? Bundle(url: url)?.bundleIdentifier.flatMap { id in apps.first { $0.bundleIdentifier == id } }
         }
         guard let app, !app.isTerminated, app.activationPolicy == .regular,

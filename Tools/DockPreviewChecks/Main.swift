@@ -82,9 +82,18 @@ import IslandCore
         }
         let expectedCount = singleWindow ? 1 : 3
         guard let anchor = dockAnchor(for: fixture) else { preconditionFailure("Fixture Dock icon missing") }
-        let hover = CGPoint(x: anchor.midX, y: anchor.midY)
+        var hover = CGPoint(x: anchor.midX, y: anchor.midY)
         let away = CGPoint(x: NSScreen.screens[0].frame.midX, y: NSScreen.screens[0].frame.midY)
         service.configure(enabled: true)
+        // Settle the fixture icon after Dock magnification changes its geometry.
+        // This bounded setup is test-only; production pointer handling is unchanged.
+        for _ in 0..<3 {
+            moveCursor(hover)
+            try await Task.sleep(for: .milliseconds(250))
+            if let stable = dockAnchor(for: fixture) {
+                hover = CGPoint(x: stable.midX, y: stable.midY)
+            }
+        }
         moveCursor(hover); service.pointerMoved(to: hover)
         for _ in 0..<20 {
             if service.previewedWindows.count == expectedCount && (deniedCapture || service.imageCount == expectedCount) { break }
