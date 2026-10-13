@@ -4,6 +4,14 @@ import UserNotifications
 enum AppPaths {
     /// ~/Library/Application Support/io.github.openisland
     static let support: URL = {
+        // Only an explicitly enabled developer run may redirect storage to a disposable fixture.
+        let environment = ProcessInfo.processInfo.environment
+        if environment["OPENISLAND_DIAGNOSTICS"] != nil,
+           let path = environment["OPENISLAND_TEST_SUPPORT"], path.hasPrefix("/") {
+            let url = URL(fileURLWithPath: path, isDirectory: true)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let url = base.appendingPathComponent("io.github.openisland", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

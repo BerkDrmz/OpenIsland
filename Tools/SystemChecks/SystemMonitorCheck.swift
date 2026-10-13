@@ -81,6 +81,24 @@ import IslandCore
         racing.stop()
         print("PASS: asynchronous sensor reads leave main actor responsive; stale close/settings results discarded")
 
+        let shared = SystemMonitor(readPublic: {
+            .init(ticks: nil, gpu: 0.25, memory: nil, pressure: .normal)
+        })
+        shared.privateEnabled = false
+        shared.panelDidAppear()
+        shared.panelDidAppear()
+        precondition(shared.isRunning && shared.storageObserverCount == 3)
+        shared.panelDidDisappear()
+        precondition(shared.isRunning && shared.storageObserverCount == 3,
+                     "Closing one display stopped another visible System panel")
+        shared.panelDidDisappear()
+        precondition(!shared.isRunning && shared.storageObserverCount == 0)
+        shared.panelDidDisappear()
+        shared.panelDidAppear()
+        precondition(shared.isRunning && shared.storageObserverCount == 3)
+        shared.panelDidDisappear()
+        print("PASS: shared System panel viewer ownership; one observer set; stop on last close")
+
         let monitor = SystemMonitor()
         precondition(!monitor.isRunning)
         monitor.start()

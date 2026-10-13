@@ -75,6 +75,7 @@ final class AppEnvironment {
         quitOnClose.stop()
         dockPreviews.stop()
         permissions.stop()
+        launcher.shutdown()
         notes.flush()
         focusTimer.shutdown()
         SpacePresentationController.shared.tearDown()

@@ -3,6 +3,7 @@ import EventKit
 import IslandCore
 import SwiftUI
 import os
+import CryptoKit
 
 /// Geometri tanılaması (yalnızca `OPENISLAND_DIAGNOSTICS=<dosya>` ortam değişkeniyle açılır; normal
 /// çalışmada hiçbir kod yolu etkin değildir).
@@ -321,6 +322,10 @@ final class IslandDiagnostics {
 
     /// Repeatable developer-only workloads. No preferences, media controls or saved files are changed.
     private func runControlledBenchmark(mode: String, controller: NotchWindowController, environment: AppEnvironment) {
+        if mode == "media-validation" || mode == "media-seek-validation" || mode == "media-quiet-validation" {
+            runMediaValidation(controller: controller, environment: environment)
+            return
+        }
         let model = controller.model
         let seconds = max(305, min(1800, Double(ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_SECONDS"] ?? "305") ?? 305))
         Task { @MainActor in
@@ -400,6 +405,106 @@ final class IslandDiagnostics {
                 } else { log("FAIL: unknown benchmark mode \(mode)"); return }
             }
             log("controlled finished; mode=\(mode); playing=\(environment.media.isPlaying); system samples=\(environment.system.sampleCount); storage reads=\(environment.system.storageReadCount); pending tasks=\(model.pendingEffectCount)")
+        }
+    }
+
+    /// Bounded, opt-in evidence only. Spotify commands belong to the external test driver.
+    /// No demo mode: the product's actual compact/session behaviour remains enabled.
+    private func runMediaValidation(controller: NotchWindowController, environment: AppEnvironment) {
+        Task { @MainActor in
+            let model = controller.model
+            let originalTab = model.machine.context.lastTab
+            let originalPin = model.isPinned
+            var events = 0
+            let observer = DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name("com.spotify.client.PlaybackStateChanged"), object: nil, queue: .main
+            ) { _ in MainActor.assumeIsolated { events += 1 } }
+            defer {
+                DistributedNotificationCenter.default().removeObserver(observer)
+                if model.isPinned != originalPin { model.send(.togglePin) }
+                model.send(.escapePressed)
+                model.send(.selectTab(originalTab))
+            }
+            @MainActor func snapshot(_ phase: String) {
+                @MainActor func descendants(_ view: NSView) -> [NSView] {
+                    [view] + view.subviews.flatMap(descendants)
+                }
+                let waves = controller.panel.contentView.map(descendants)?.compactMap { $0 as? WaveformLayerView } ?? []
+                let pulses = waves.flatMap { $0.layer?.sublayers ?? [] }.filter { $0.animation(forKey: "pulse") != nil }.count
+                let info = environment.media.nowPlaying
+                let row: [String: Any] = [
+                    "epoch": Date().timeIntervalSince1970, "phase": phase,
+                    "pid": ProcessInfo.processInfo.processIdentifier,
+                    "binary": Bundle.main.executablePath ?? "", "expanded": model.machine.isExpanded,
+                    "presentation": String(describing: model.presentation), "tab": String(describing: model.presentation.expandedTab),
+                    "title": info?.title ?? "", "artist": info?.artist ?? "", "album": info?.album ?? "",
+                    "source": environment.media.activeSourceID ?? "", "playing": environment.media.isPlaying,
+                    "duration": info?.duration ?? 0, "elapsed": info?.elapsed(at: Date()) ?? 0,
+                    "artworkBytes": info?.artworkData?.count ?? 0,
+                    "artworkSHA256": info?.artworkData.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "",
+                    "decodedArtwork": environment.media.artwork != nil,
+                    "waveformViews": waves.count, "pulseLayers": pulses, "spotifyEvents": events,
+                    "pendingEffects": model.pendingEffectCount,
+                    "cameraState": String(describing: environment.mirror.state),
+                    "mixerRoutes": environment.audioMixer.activeRouteCount
+                ]
+                if let data = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]),
+                   let text = String(data: data, encoding: .utf8) { log("media witness " + text) }
+            }
+            try? await Task.sleep(for: .seconds(3))
+            let seekOnly = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] == "media-seek-validation"
+            let quiet = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] == "media-quiet-validation"
+            let phases = quiet ? [("playing compact", false, 30), ("playing expanded", true, 30),
+                                  ("paused compact", false, 30), ("paused expanded", true, 30)]
+                : seekOnly ? [("track seek", true, 45)] : [
+                ("playing compact", false, 60), ("playing expanded", true, 45),
+                ("paused compact", false, 30), ("paused expanded", true, 30),
+                ("track seek", true, 45), ("sustained compact", false, 180)
+            ]
+            for (phase, expanded, seconds) in phases {
+                if model.isPinned { model.send(.togglePin) }
+                model.send(.escapePressed)
+                model.send(.selectTab(.media))
+                if expanded { model.send(.tapped); model.send(.togglePin) }
+                // Let the spring settle; no hover delay or product timing changes.
+                try? await Task.sleep(for: .seconds(1))
+                beginBenchmarkPhase("media " + phase)
+                if quiet {
+                    snapshot(phase)
+                    try? await Task.sleep(for: .seconds(seconds))
+                } else {
+                for tick in 0..<seconds {
+                    if phase == "track seek", tick == 32 || tick == 39 {
+                        let position: Double = tick == 32 ? 45 : 10
+                        environment.media.seek(to: position)
+                        log("media control seek=\(position); epoch=\(Date().timeIntervalSince1970)")
+                    }
+                    snapshot(phase)
+                    try? await Task.sleep(for: .seconds(1))
+                }
+                }
+                snapshot(phase)
+                endBenchmarkPhase("media " + phase)
+            }
+            if seekOnly || quiet { log("media validation finished; events=\(events)"); return }
+            model.send(.escapePressed)
+            model.send(.selectTab(.media))
+            model.send(.tapped)
+            try? await Task.sleep(for: .seconds(1))
+            // Focus UI is safe without starting its timer. Camera and mixer are intentionally excluded.
+            let tabs: [ExpandedTab] = [.nook, .media, .shelf, .clipboard, .focus, .notes, .system]
+            for (phase, delay) in [("media normal seven tabs", 0.65), ("media rapid seven tabs", 0.08)] {
+                beginBenchmarkPhase(phase)
+                for _ in 0..<3 {
+                    for tab in tabs {
+                        model.send(.selectTab(tab))
+                        try? await Task.sleep(for: .seconds(delay))
+                        guard model.presentation.expandedTab == tab else { log("FAIL: media tab did not activate"); return }
+                    }
+                }
+                endBenchmarkPhase(phase)
+            }
+            log("media validation finished; events=\(events)")
         }
     }
 

@@ -16,6 +16,10 @@ import IslandCore
             result = .list()
             let items: [NSAppleEventDescriptor] = [.init(string: "Track"), .init(string: "Artist"), .init(string: "Album"), .init(int32: 240000), .init(int32: 10), .init(string: "playing")]
             for (offset, item) in items.enumerated() { result.insert(item, at: offset + 1) }
+        } else if source == "coverDuration" {
+            result = .list()
+            result.insert(.init(string: ""), at: 1)
+            result.insert(.init(int32: 230000), at: 2)
         } else if source == "cover" {
             result = NSAppleEventDescriptor(descriptorType: typeData, data: Data([1, 2, 3]))!
         } else { result = .init(boolean: true) }
@@ -70,6 +74,20 @@ import IslandCore
         await settle()
         precondition(runner.calls.count == count, "Repeated start duplicated background queries")
         artwork.stop()
+        let metadataPlayer = ScriptedPlayerSource.Player(bundleID: "test.metadata", appName: "Test", notification: "OpenIsland.Metadata.\(UUID())", durationScale: 0.001, artwork: .urlWithDuration("coverDuration"))
+        let metadataSource = ScriptedPlayerSource(player: metadataPlayer, isRunning: { true })
+        metadataSource.onUpdate = { latest = $0 }
+        metadataSource.start()
+        await settle()
+        precondition(latest?.duration == 230, "Authoritative duration was discarded")
+        let metadataCalls = runner.calls.count
+        DistributedNotificationCenter.default().postNotificationName(Notification.Name(metadataPlayer.notification), object: nil, userInfo: ["Name": "Track", "Artist": "Artist", "Album": "Album", "Player State": "Paused", "Duration": 240000.0, "Playback Position": 10.0], deliverImmediately: true)
+        try? await Task.sleep(for: .milliseconds(100))
+        await settle()
+        precondition(latest?.duration == 230 && latest?.isPlaying == false, "Cached duration was overwritten by a notification")
+        precondition(runner.calls.count == metadataCalls, "Same-track event repeated the metadata query")
+        metadataSource.stop()
+        print("PASS Spotify metadata: combined cover/duration query, successful cache, pause events preserve duration without a new query")
         print("PASS ScriptedPlayer: explicit controls and seek recover from denial; failed artwork retries after grant; repeated start performs no extra work")
     }
 }

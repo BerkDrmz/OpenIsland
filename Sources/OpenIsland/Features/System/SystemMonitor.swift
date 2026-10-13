@@ -61,6 +61,19 @@ final class SystemMonitor {
         self.readPublic = readPublic
     }
 
+    @ObservationIgnored private var panelViewers = 0
+
+    func panelDidAppear() {
+        panelViewers += 1
+        if panelViewers == 1 { start() }
+    }
+
+    func panelDidDisappear() {
+        guard panelViewers > 0 else { return }
+        panelViewers -= 1
+        if panelViewers == 0 { stop() }
+    }
+
     func start() {
         guard task == nil else { return }
         generation &+= 1

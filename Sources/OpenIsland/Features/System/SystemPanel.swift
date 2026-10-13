@@ -20,8 +20,8 @@ struct SystemPanel: View {
             StorageSection(system: system).frame(height: IslandLayoutEngine.System.storageHeight, alignment: .top)
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .onAppear { system.start() }
-        .onDisappear { system.stop() }
+        .onAppear { system.panelDidAppear() }
+        .onDisappear { system.panelDidDisappear() }
     }
 }
 

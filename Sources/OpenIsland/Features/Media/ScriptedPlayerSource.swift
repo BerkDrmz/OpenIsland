@@ -21,6 +21,7 @@ final class ScriptedPlayerSource: MediaSource {
 
     enum ArtworkQuery: Sendable {
         case url(String)
+        case urlWithDuration(String)
         case rawData(String)
     }
 
@@ -29,7 +30,7 @@ final class ScriptedPlayerSource: MediaSource {
         appName: "Spotify",
         notification: "com.spotify.client.PlaybackStateChanged",
         durationScale: 0.001,
-        artwork: .url("tell application \"Spotify\" to artwork url of current track")
+        artwork: .urlWithDuration("tell application \"Spotify\" to return {artwork url of current track, duration of current track}")
     )
 
     static let music = Player(
@@ -52,7 +53,7 @@ final class ScriptedPlayerSource: MediaSource {
     private var current: NowPlayingInfo?
     /// Apple Event sağlığı: izin reddinde veya tekrarlayan hatada sınırlı geri çekilme.
     private var health = BackendHealth()
-    private var artworkCache: (key: String, data: Data?)?
+    private var artworkCache: (key: String, data: Data?, duration: TimeInterval?)?
 
     init(player: Player, isRunning: (() -> Bool)? = nil) {
         self.player = player
@@ -188,6 +189,7 @@ final class ScriptedPlayerSource: MediaSource {
         )
         if let cache = artworkCache, cache.key == info.trackKey {
             info.artworkData = cache.data
+            info.duration = cache.duration ?? info.duration
             current = info
             onUpdate?(info)
             return
@@ -200,6 +202,9 @@ final class ScriptedPlayerSource: MediaSource {
             guard !Task.isCancelled, self.observer != nil,
                   self.current?.trackKey == info.trackKey, var latest = self.current else { return }
             latest.artworkData = data
+            if let cache = self.artworkCache, cache.key == info.trackKey {
+                latest.duration = cache.duration ?? latest.duration
+            }
             self.artworkTask = nil
             self.current = latest
             self.onUpdate?(latest)
@@ -237,6 +242,9 @@ final class ScriptedPlayerSource: MediaSource {
         }
         info.bundleIdentifier = player.bundleID
         info.artworkData = await artwork(for: info.trackKey)
+        if let cache = artworkCache, cache.key == info.trackKey {
+            info.duration = cache.duration ?? info.duration
+        }
         guard !Task.isCancelled, observer != nil else { return }
         current = info
         onUpdate?(info)
@@ -245,6 +253,7 @@ final class ScriptedPlayerSource: MediaSource {
     private func artwork(for key: String) async -> Data? {
         if let cache = artworkCache, cache.key == key { return cache.data }
         let data: Data?
+        var verifiedDuration: TimeInterval?
         switch player.artwork {
         case .url(let source):
             let urlString = await script(source) { $0.stringValue }
@@ -253,11 +262,24 @@ final class ScriptedPlayerSource: MediaSource {
             } else {
                 data = nil
             }
+        case .urlWithDuration(let source):
+            // Spotify's distributed notification can include a different duration than its
+            // control API. Read both cover URL and duration in the existing single Apple Event.
+            let scale = player.durationScale
+            let metadata = await script(source) { descriptor -> (String, Double)? in
+                guard descriptor.numberOfItems >= 2,
+                      let url = descriptor.atIndex(1)?.stringValue else { return nil }
+                return (url, (descriptor.atIndex(2)?.doubleValue ?? 0) * scale)
+            }
+            if let metadata, metadata.1.isFinite, metadata.1 > 0 { verifiedDuration = metadata.1 }
+            if let metadata, let url = URL(string: metadata.0), ["http", "https"].contains(url.scheme ?? "") {
+                data = try? await URLSession.shared.data(from: url).0
+            } else { data = nil }
         case .rawData(let source):
             data = await script(source) { $0.data }
         }
         guard !Task.isCancelled else { return nil }
-        artworkCache = (key, data)
+        artworkCache = (key, data, verifiedDuration)
         return data
     }
 }

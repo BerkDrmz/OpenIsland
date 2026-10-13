@@ -68,12 +68,20 @@ final class LauncherStore {
     /// Dosya seçici / bağlantı penceresi açıkken adanın kapanmaması için.
     @ObservationIgnored var hold: IslandHold?
     @ObservationIgnored private var shortcutsLoadedAt: Date?
-    @ObservationIgnored private var inFlightFetch: Task<[String], Never>?
+    @ObservationIgnored private var inFlightFetch: Task<ShortcutsListResult, Never>?
+    @ObservationIgnored private var activeRequest: ShortcutsListRequest?
+    @ObservationIgnored private var fetchGeneration: UInt64 = 0
+    @ObservationIgnored private var failedAt: Date?
+    @ObservationIgnored private let fetchOverride: (@Sendable () async -> ShortcutsListResult)?
+    @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var iconCache: [UUID: NSImage] = [:]
 
     @ObservationIgnored private let storeURL = AppPaths.support.appendingPathComponent("launcher.json")
 
-    init() {
+    init(fetchShortcuts: (@Sendable () async -> ShortcutsListResult)? = nil,
+         now: @escaping () -> Date = Date.init) {
+        self.fetchOverride = fetchShortcuts
+        self.now = now
         load()
         if items.isEmpty {
             items = ["/System/Applications/Calendar.app", "/System/Applications/Notes.app", "/Applications/Safari.app", "/System/Applications/Utilities/Terminal.app"]
@@ -168,32 +176,50 @@ final class LauncherStore {
         save()
     }
 
-    /// `shortcuts list` bir alt süreç başlatır; sekme her açıldığında değil, en fazla 5 dakikada bir.
+    /// Cache successful results only. A real failure gets bounded, event-triggered backoff;
+    /// closing/reopening the panel keeps the same store-owned request alive.
     func refreshShortcutsIfNeeded() async {
-        if let loaded = shortcutsLoadedAt, Date().timeIntervalSince(loaded) < 300 { return }
-        if let inFlight = inFlightFetch {
-            let names = await inFlight.value
-            if names != availableShortcuts { availableShortcuts = names }
-            return
-        }
+        if let loaded = shortcutsLoadedAt, now().timeIntervalSince(loaded) < 300 { return }
+        if inFlightFetch == nil, let failedAt, now().timeIntervalSince(failedAt) < 10 { return }
         await refreshShortcuts()
     }
 
     func refreshShortcuts() async {
         if let inFlight = inFlightFetch {
-            let names = await inFlight.value
-            if names != availableShortcuts { availableShortcuts = names }
-            return
+            _ = await inFlight.value
+            return // The owner publishes once; joining callers never overwrite newer results.
         }
-        let request = ShortcutsListRequest()
-        let fetchTask = Task.detached(priority: .utility) {
-            request.run()
+        fetchGeneration &+= 1
+        let generation = fetchGeneration
+        let fetchTask: Task<ShortcutsListResult, Never>
+        if let fetchOverride {
+            fetchTask = Task { await fetchOverride() }
+        } else {
+            let request = ShortcutsListRequest()
+            activeRequest = request
+            fetchTask = Task.detached(priority: .utility) { request.run() }
         }
         inFlightFetch = fetchTask
-        let names = await fetchTask.value
+        let result = await fetchTask.value
+        guard generation == fetchGeneration else { return }
         inFlightFetch = nil
-        shortcutsLoadedAt = Date()
-        if names != availableShortcuts { availableShortcuts = names }
+        activeRequest = nil
+        switch result {
+        case .success(let names):
+            shortcutsLoadedAt = now()
+            failedAt = nil
+            if names != availableShortcuts { availableShortcuts = names }
+        case .failure:
+            failedAt = now() // Retain last good list; failure is not a successful empty listing.
+        }
+    }
+
+    func shutdown() {
+        fetchGeneration &+= 1
+        activeRequest?.cancel()
+        activeRequest = nil
+        inFlightFetch?.cancel()
+        inFlightFetch = nil
     }
 
     @discardableResult
@@ -223,31 +249,65 @@ final class LauncherStore {
     }
 }
 
-/// Only a user-opened panel requests a listing; closing it terminates its list process.
-private final class ShortcutsListRequest: @unchecked Sendable {
+enum ShortcutsListFailure: Error, Sendable, Equatable {
+    case launch, exit(Int32), cancelled, timedOut, decoding
+}
+typealias ShortcutsListResult = Result<[String], ShortcutsListFailure>
+
+/// Store-owned single flight survives tab changes. A one-shot deadline bounds a stalled CLI;
+/// shutdown invalidates its result and terminates only this listing subprocess.
+final class ShortcutsListRequest: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
     private var cancelled = false
-    func run() -> [String] {
+    private var timedOut = false
+    private let executable: URL
+    private let arguments: [String]
+    private let timeout: TimeInterval
+    init(executable: URL = URL(fileURLWithPath: "/usr/bin/shortcuts"),
+         arguments: [String] = ["list"], timeout: TimeInterval = 10) {
+        self.executable = executable
+        self.arguments = arguments
+        self.timeout = timeout
+    }
+    func run() -> ShortcutsListResult {
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
-        task.arguments = ["list"]
+        task.executableURL = executable
+        task.arguments = arguments
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
         lock.lock()
-        guard !cancelled else { lock.unlock(); return [] }
+        guard !cancelled else { lock.unlock(); return .failure(.cancelled) }
         process = task
-        do { try task.run() } catch { process = nil; lock.unlock(); return [] }
+        do { try task.run() } catch { process = nil; lock.unlock(); return .failure(.launch) }
         lock.unlock()
+        let deadline = DispatchWorkItem { [weak self] in self?.expire() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: deadline)
+        defer { deadline.cancel() }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         lock.lock()
         process = nil
         let wasCancelled = cancelled
+        let didTimeOut = timedOut
         lock.unlock()
-        guard !wasCancelled, task.terminationStatus == 0 else { return [] }
-        return String(data: data, encoding: .utf8)?.split(separator: "\n").map(String.init).filter { !$0.isEmpty } ?? []
+        if didTimeOut { return .failure(.timedOut) }
+        if wasCancelled { return .failure(.cancelled) }
+        guard task.terminationStatus == 0 else { return .failure(.exit(task.terminationStatus)) }
+        guard let text = String(data: data, encoding: .utf8) else { return .failure(.decoding) }
+        return .success(text.split(separator: "\n").map(String.init).filter { !$0.isEmpty })
+    }
+    private func expire() {
+        lock.lock()
+        guard let process, process.isRunning else { lock.unlock(); return }
+        timedOut = true
+        process.terminate()
+        lock.unlock()
+        // A bounded second action handles a CLI that ignores SIGTERM, never another application.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.25) {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
     }
     func cancel() {
         lock.lock()

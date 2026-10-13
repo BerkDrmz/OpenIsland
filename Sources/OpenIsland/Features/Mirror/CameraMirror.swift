@@ -138,6 +138,19 @@ final class CameraMirror {
     }
     var session: AVCaptureSession { box.session }
 
+    @ObservationIgnored private var panelViewers = 0
+
+    func panelDidAppear() {
+        panelViewers += 1
+        if panelViewers == 1 { start() }
+    }
+
+    func panelDidDisappear() {
+        guard panelViewers > 0 else { return }
+        panelViewers -= 1
+        if panelViewers == 0 { stop() }
+    }
+
     func start() {
         guard state != .running, state != .starting else { return }
         let generation = requests.advance()
@@ -357,8 +370,8 @@ struct MirrorPanel: View {
             .frame(maxWidth: IslandLayoutEngine.Mirror.captionWidth, alignment: .leading)
         }
         .animation(IslandMotion.expand, value: mirror.state)
-        .onAppear { mirror.start() }
-        .onDisappear { mirror.stop() }
+        .onAppear { mirror.panelDidAppear() }
+        .onDisappear { mirror.panelDidDisappear() }
     }
 
     private var caption: String {

@@ -91,3 +91,9 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lI
 python3 Tools/PerformanceChecks/ResourceProbeCheck.py
 
 python3 Tools/PerformanceChecks/TabBenchmarkReportCheck.py
+
+python3 Tools/PerformanceChecks/ProcessMatrixProbeCheck.py
+swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
+  Sources/OpenIsland/Features/Notes/NotesStore.swift Tools/PerformanceChecks/ShortcutsCheck.swift \
+  -o "$CHECK_DIR/shortcuts-check"
+"$CHECK_DIR/shortcuts-check"

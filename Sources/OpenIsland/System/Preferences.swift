@@ -85,7 +85,15 @@ final class Preferences {
         }
     }
 
-    init(defaults: UserDefaults = .standard,
+    private static var runtimeDefaults: UserDefaults {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["OPENISLAND_DIAGNOSTICS"] != nil,
+           let suite = environment["OPENISLAND_TEST_DEFAULTS"], !suite.isEmpty,
+           let defaults = UserDefaults(suiteName: suite) { return defaults }
+        return .standard
+    }
+
+    init(defaults: UserDefaults = Preferences.runtimeDefaults,
          loginStatus: @escaping () -> SMAppService.Status = { SMAppService.mainApp.status },
          setLoginRegistration: @escaping (Bool) throws -> Void = { enabled in
              if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
