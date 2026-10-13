@@ -22,12 +22,10 @@ struct MediaPanel: View {
                     HStack(alignment: .top, spacing: IslandSpacing.s) {
                         SourceAppButton(media: media) {
                             VStack(alignment: .leading, spacing: IslandSpacing.xxs) {
-                                MarqueeView(
-                                    text: info.title,
-                                    font: .systemFont(ofSize: 14, weight: .semibold),
-                                    color: .white,
-                                    isPaused: !info.isPlaying
-                                )
+                                Text(info.title)
+                                    .font(IslandType.title)
+                                    .foregroundStyle(IslandPalette.primary)
+                                    .lineLimit(1)
                                 Text(info.artist.isEmpty ? info.album : info.artist)
                                     .font(IslandType.body)
                                     .foregroundStyle(IslandPalette.secondary)
