@@ -9,6 +9,7 @@ import IslandCore
     var deniedCover = false
     var trackID = "spotify:track:A"
     var duration: Int32 = 230000
+    var refreshDuration: Int32 = 240000
     var position: Double = 10
     var state = "playing"
     var coverURL = ""
@@ -30,7 +31,7 @@ import IslandCore
         let result: NSAppleEventDescriptor
         if source.contains("return {name") {
             result = .list()
-            var items: [NSAppleEventDescriptor] = [.init(string: "Track"), .init(string: "Artist"), .init(string: "Album"), .init(int32: 240000), .init(double: position), .init(string: state)]
+            var items: [NSAppleEventDescriptor] = [.init(string: "Track"), .init(string: "Artist"), .init(string: "Album"), .init(int32: refreshDuration), .init(double: position), .init(string: state)]
             if includeRefreshID && source.contains("id of current track") { items.append(.init(string: trackID)) }
             for (offset, item) in items.enumerated() { result.insert(item, at: offset + 1) }
         } else if source == "coverDuration" {
@@ -154,7 +155,8 @@ import IslandCore
         event(metadataSource, id: runner.trackID)
         precondition(latest?.duration == 170 && metadataSource.pendingUpdate == nil)
 
-        // Source restart preserves the same ID cache even when refresh reports a different duration.
+        // A same-ID restart reuses artwork when the fresh control API duration is unchanged.
+        runner.refreshDuration = runner.duration
         metadataSource.stop()
         let restartCalls = runner.calls.count
         metadataSource.start()
@@ -169,10 +171,13 @@ import IslandCore
             precondition(runner.calls.count == before + 2 && runner.calls.last!.contains("return {name"))
             precondition(latest?.elapsed(at: latest!.timestamp.addingTimeInterval(1000)) == 170)
         }
+        runner.refreshDuration = 169000
+        let freshDurationSeek = await metadataSource.seek(to: 30)
+        precondition(freshDurationSeek && latest?.duration == 169, "Fresh same-ID control metadata lost to stale duration cache")
         let rapidCalls = runner.calls.count
         for index in 0..<100 {
             event(metadataSource, id: runner.trackID, state: index.isMultiple(of: 2) ? "Playing" : "Paused", position: Double(index))
-            precondition(latest?.duration == 170 && latest?.elapsed == Double(index))
+            precondition(latest?.duration == 169 && latest?.elapsed == Double(index))
         }
         precondition(latest?.isPlaying == false && runner.calls.count == rapidCalls && metadataSource.pendingUpdate == nil, "Rapid play/pause repeated queries")
         metadataSource.stop()
@@ -245,6 +250,7 @@ import IslandCore
         runner.trackID = "spotify:track:Restarted"
         runner.duration = 160000
         runner.coverURL = "https://artwork.invalid/restarted"
+        runner.refreshDuration = runner.duration
         gated.start()
         await gate.waitForDownloads(4)
         let restartedTask = gated.pendingUpdate!

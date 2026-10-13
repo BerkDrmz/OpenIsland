@@ -60,7 +60,7 @@ final class ScriptedPlayerSource: MediaSource {
     private struct ArtworkCache {
         let key: TrackIdentity
         var data: Data?
-        let duration: TimeInterval?
+        var duration: TimeInterval?
         let url: URL?
         var isComplete: Bool
     }
@@ -312,9 +312,16 @@ final class ScriptedPlayerSource: MediaSource {
         var info = snapshot.0
         info.bundleIdentifier = player.bundleID
         let key = identity(for: info, trackID: snapshot.1)
-        if let cache = artworkCache, cache.key == key {
+        if var cache = artworkCache, cache.key == key {
             info.artworkData = cache.data
-            info.duration = cache.duration ?? info.duration
+            // This is a fresh control-API reading, not a distributed notification.
+            // Same-ID metadata can change; cached duration must not override newer truth.
+            if usesSpotifyIdentity, info.duration.isFinite, info.duration > 0 {
+                if cache.duration != info.duration {
+                    cache.duration = info.duration
+                    artworkCache = cache
+                }
+            } else { info.duration = cache.duration ?? info.duration }
         }
         if usesSpotifyIdentity {
             currentIdentity = key
@@ -336,6 +343,8 @@ final class ScriptedPlayerSource: MediaSource {
             if cache.isComplete { return cache.data }
             let data = if let url = cache.url { await downloadArtwork(url) } else { nil as Data? }
             guard isActive(expectedGeneration) else { return nil }
+            // A concurrent explicit refresh may have corrected the same-ID duration.
+            if let latest = artworkCache, latest.key == key { cache.duration = latest.duration }
             cache.data = data
             cache.isComplete = true
             artworkCache = cache
