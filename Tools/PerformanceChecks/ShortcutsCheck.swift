@@ -34,6 +34,38 @@ private actor FetchGate {
     }
     @MainActor static func main() async {
         defer { try? FileManager.default.removeItem(at: AppPaths.support) }
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--shutdown-fixture" {
+            let path = CommandLine.arguments[2]
+            let request = ShortcutsListRequest(executable: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "trap '' TERM; echo $$ > \"$1\"; exec sleep 30", "fixture", path], timeout: 60)
+            _ = Task.detached { request.run() }
+            for _ in 0..<200 {
+                if FileManager.default.fileExists(atPath: path) {
+                    request.cancel(immediately: true)
+                    exit(0) // Deliberately do not await a future escalation closure.
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            request.cancel(immediately: true)
+            exit(2)
+        }
+        let pidFile = AppPaths.support.appendingPathComponent("shutdown-fixture.pid")
+        let host = Process()
+        host.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        host.arguments = ["--shutdown-fixture", pidFile.path]
+        try! host.run()
+        host.waitUntilExit()
+        precondition(host.terminationStatus == 0)
+        let fixturePID = Int32(try! String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))!
+        for _ in 0..<100 {
+            if kill(fixturePID, 0) != 0 { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        if kill(fixturePID, 0) == 0 {
+            kill(fixturePID, SIGKILL)
+            preconditionFailure("Listing survived immediate host shutdown")
+        }
+        print("PASS Shortcuts shutdown: TERM-ignoring owned listing does not survive host exit")
         func runCLI(_ path: String, _ arguments: [String], timeout: TimeInterval = 10) async -> ShortcutsListResult {
             let request = ShortcutsListRequest(executable: URL(fileURLWithPath: path), arguments: arguments, timeout: timeout)
             return await Task.detached { request.run() }.value
@@ -46,6 +78,31 @@ private actor FetchGate {
         if case .failure(.exit(1)) = await runCLI("/usr/bin/false", []) {} else { preconditionFailure("Failed exit was empty success") }
         if case .failure(.decoding) = await runCLI("/usr/bin/printf", ["\\377"]) {} else { preconditionFailure("Invalid UTF8 was empty success") }
         if case .failure(.timedOut) = await runCLI("/bin/sh", ["-c", "trap '' TERM; exec sleep 2"], timeout: 0.02) {} else { preconditionFailure("Stalled CLI was not bounded") }
+        let runningCancel = ShortcutsListRequest(executable: URL(fileURLWithPath: "/bin/sh"),
+                                                arguments: ["-c", "trap '' TERM; exec sleep 4"], timeout: 30)
+        let runningTask = Task.detached { runningCancel.run() }
+        try? await Task.sleep(for: .milliseconds(100))
+        let cancellationStarted = Date()
+        runningCancel.cancel()
+        if case .failure(.cancelled) = await runningTask.value {} else { preconditionFailure("Running cancellation lost") }
+        precondition(Date().timeIntervalSince(cancellationStarted) < 1, "Cancellation waited for deadline")
+        let eofStarted = Date()
+        if case .failure(.timedOut) = await runCLI("/bin/sh", ["-c", "sleep 1 & exit 0"], timeout: 0.05) {} else {
+            preconditionFailure("Inherited stdout EOF was not bounded")
+        }
+        precondition(Date().timeIntervalSince(eofStarted) < 0.8)
+        try? await Task.sleep(for: .seconds(1)) // The check's short-lived descendant has now finished.
+        let closedOutput = Date()
+        if case .failure(.timedOut) = await runCLI("/bin/sh", ["-c", "exec 1>&-; trap '' TERM; exec sleep 2"], timeout: 0.03) {} else {
+            preconditionFailure("Early stdout closure bypassed process deadline")
+        }
+        precondition(Date().timeIntervalSince(closedOutput) < 1)
+        let busyOutput = Date()
+        if case .failure(.timedOut) = await runCLI("/bin/sh", ["-c", "while :; do printf 'line\\n'; done"], timeout: 0.03) {} else {
+            preconditionFailure("Continuous output starved deadline")
+        }
+        precondition(Date().timeIntervalSince(busyOutput) < 1)
+        print("PASS Shortcuts process: cancellation, inherited/closed stdout, continuous-output deadline bounded")
         let cancelled = ShortcutsListRequest()
         cancelled.cancel()
         if case .failure(.cancelled) = cancelled.run() {} else { preconditionFailure("Cancelled request launched") }

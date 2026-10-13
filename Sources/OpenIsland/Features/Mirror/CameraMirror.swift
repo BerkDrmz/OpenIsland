@@ -142,7 +142,7 @@ final class CameraMirror {
 
     func panelDidAppear() {
         panelViewers += 1
-        if panelViewers == 1 { start() }
+        start() // Idempotent while running/starting; a newly visible panel may retry denial/unavailability.
     }
 
     func panelDidDisappear() {

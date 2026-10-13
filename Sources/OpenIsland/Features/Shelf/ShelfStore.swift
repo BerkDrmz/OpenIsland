@@ -46,16 +46,20 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
     static let acceptedTypes: [UTType] = [.fileURL, .image, .data, .url, .plainText]
     @ObservationIgnored private let storeURL: URL
     @ObservationIgnored private var thumbnailsRequested = false
+    @ObservationIgnored private var thumbnailRequests: [URL: (id: UUID, token: UUID)] = [:]
     @ObservationIgnored private let promiseQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.qualityOfService = .userInitiated
         return queue
     }()
 
+    @ObservationIgnored private let generateThumbnail: @MainActor (URL, CGFloat, @escaping @Sendable (CGImage?) -> Void) -> Void
     private let storage: URL
 
     /// Explicit paths allow integration checks without touching the user's shelf or bookmarks.
-    init(storage: URL? = nil, persistenceURL: URL? = nil) {
+    init(storage: URL? = nil, persistenceURL: URL? = nil,
+         generateThumbnail: @escaping @MainActor (URL, CGFloat, @escaping @Sendable (CGImage?) -> Void) -> Void = ShelfStore.generateThumbnail) {
+        self.generateThumbnail = generateThumbnail
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         self.storage = storage ?? base.appendingPathComponent("io.github.openisland/Shelf", isDirectory: true)
         self.storeURL = persistenceURL ?? AppPaths.support.appendingPathComponent("shelf.json")
@@ -240,7 +244,13 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
     func panelDidAppear() {
         for index in items.indices {
             let exists = FileManager.default.isReadableFile(atPath: items[index].url.path)
+            let recovered = items[index].isMissing && exists
             if items[index].isMissing == exists { items[index].isMissing = !exists }
+            if recovered && thumbnailsRequested { loadThumbnail(for: items[index].url) }
+            if !exists {
+                thumbnails[items[index].url] = nil
+                thumbnailRequests[items[index].url] = nil
+            }
         }
         if !thumbnailsRequested {
             thumbnailsRequested = true
@@ -258,6 +268,7 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
         let ids = Set(removed.map(\.id))
         for item in removed {
             thumbnails[item.url] = nil
+            thumbnailRequests[item.url] = nil
             if item.isTemporaryCopy {
                 // Only OpenIsland-owned cache files may be deleted by removing a shelf item.
                 let root = storage.resolvingSymlinksInPath().standardizedFileURL.path + "/"
@@ -464,17 +475,32 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
 
     // MARK: - Önizleme
 
-    private func loadThumbnail(for url: URL) {
-        thumbnails[url] = NSWorkspace.shared.icon(forFile: url.path) // anında yer tutucu
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
+    private static func generateThumbnail(_ url: URL, _ scale: CGFloat, completion: @escaping @Sendable (CGImage?) -> Void) {
         let request = QLThumbnailGenerator.Request(
             fileAt: url, size: CGSize(width: 64, height: 64), scale: scale, representationTypes: .thumbnail
         )
-        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { [weak self] representation, _ in
-            guard let cgImage = representation?.cgImage else { return }
-            let size = NSSize(width: CGFloat(cgImage.width) / scale, height: CGFloat(cgImage.height) / scale)
+        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { representation, _ in
+            completion(representation?.cgImage)
+        }
+    }
+
+    private func loadThumbnail(for url: URL) {
+        guard let item = items.first(where: { $0.url == url && !$0.isMissing }) else { return }
+        let id = item.id
+        let token = UUID()
+        thumbnailRequests[url] = (id, token)
+        thumbnails[url] = NSWorkspace.shared.icon(forFile: url.path) // anında yer tutucu
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        generateThumbnail(url, scale) { [weak self] cgImage in
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self?.thumbnails[url] = NSImage(cgImage: cgImage, size: size) }
+                MainActor.assumeIsolated {
+                    guard let self, self.thumbnailRequests[url]?.token == token,
+                          self.items.contains(where: { $0.id == id && $0.url == url && !$0.isMissing }) else { return }
+                    self.thumbnailRequests[url] = nil
+                    guard let cgImage else { return }
+                    let size = NSSize(width: CGFloat(cgImage.width) / scale, height: CGFloat(cgImage.height) / scale)
+                    self.thumbnails[url] = NSImage(cgImage: cgImage, size: size)
+                }
             }
         }
     }

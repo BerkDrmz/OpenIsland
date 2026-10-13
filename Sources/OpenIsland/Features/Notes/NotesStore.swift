@@ -216,7 +216,7 @@ final class LauncherStore {
 
     func shutdown() {
         fetchGeneration &+= 1
-        activeRequest?.cancel()
+        activeRequest?.cancel(immediately: true)
         activeRequest = nil
         inFlightFetch?.cancel()
         inFlightFetch = nil
@@ -250,17 +250,21 @@ final class LauncherStore {
 }
 
 enum ShortcutsListFailure: Error, Sendable, Equatable {
-    case launch, exit(Int32), cancelled, timedOut, decoding
+    case launch, exit(Int32), cancelled, timedOut, decoding, reading
 }
 typealias ShortcutsListResult = Result<[String], ShortcutsListFailure>
 
 /// Store-owned single flight survives tab changes. A one-shot deadline bounds a stalled CLI;
 /// shutdown invalidates its result and terminates only this listing subprocess.
 final class ShortcutsListRequest: @unchecked Sendable {
-    private let lock = NSLock()
+    private let lock = NSCondition()
     private var process: Process?
     private var cancelled = false
     private var timedOut = false
+    private var output = Data()
+    private var outputFinished = false
+    private var outputFailed = false
+    private var outputReader: DispatchSourceRead?
     private let executable: URL
     private let arguments: [String]
     private let timeout: TimeInterval
@@ -282,37 +286,85 @@ final class ShortcutsListRequest: @unchecked Sendable {
         process = task
         do { try task.run() } catch { process = nil; lock.unlock(); return .failure(.launch) }
         lock.unlock()
-        let deadline = DispatchWorkItem { [weak self] in self?.expire() }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: deadline)
-        defer { deadline.cancel() }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        try? pipe.fileHandleForWriting.close()
+        let handle = pipe.fileHandleForReading
+        let fd = handle.fileDescriptor
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        let queue = DispatchQueue(label: "OpenIsland.shortcuts.output", qos: .utility)
+        let reader = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        lock.lock(); outputReader = reader; lock.unlock()
+        reader.setEventHandler { [weak self] in self?.drain(fd) }
+        reader.setCancelHandler { try? handle.close() }
+        reader.resume()
+        let deadline = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        deadline.schedule(deadline: .now() + timeout)
+        deadline.setEventHandler { [weak self] in self?.expire() }
+        deadline.resume()
+        defer {
+            deadline.cancel(); reader.cancel()
+            lock.lock(); outputReader = nil; lock.unlock()
+        }
+        lock.lock()
+        while !outputFinished && !cancelled && !timedOut { lock.wait() }
+        lock.unlock()
         task.waitUntilExit()
         lock.lock()
         process = nil
-        let wasCancelled = cancelled
-        let didTimeOut = timedOut
+        let result: ShortcutsListResult
+        if cancelled { result = .failure(.cancelled) }
+        else if timedOut { result = .failure(.timedOut) }
+        else if outputFailed { result = .failure(.reading) }
+        else if task.terminationStatus != 0 { result = .failure(.exit(task.terminationStatus)) }
+        else if let text = String(data: output, encoding: .utf8) {
+            result = .success(text.split(separator: "\n").map(String.init).filter { !$0.isEmpty })
+        } else { result = .failure(.decoding) }
         lock.unlock()
-        if didTimeOut { return .failure(.timedOut) }
-        if wasCancelled { return .failure(.cancelled) }
-        guard task.terminationStatus == 0 else { return .failure(.exit(task.terminationStatus)) }
-        guard let text = String(data: data, encoding: .utf8) else { return .failure(.decoding) }
-        return .success(text.split(separator: "\n").map(String.init).filter { !$0.isEmpty })
+        return result
+    }
+    private func drain(_ fd: Int32) {
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            lock.lock()
+            let shouldStop = cancelled || timedOut
+            let readerToCancel = shouldStop ? outputReader : nil
+            lock.unlock()
+            if shouldStop { readerToCancel?.cancel(); return }
+            let count = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+            let error = errno
+            lock.lock()
+            if count > 0 { output.append(contentsOf: buffer.prefix(count)) }
+            else if count == 0 { outputFinished = true; lock.broadcast() }
+            else if error != EAGAIN && error != EINTR { outputFailed = true; outputFinished = true; lock.broadcast() }
+            let finishedReader = outputFinished ? outputReader : nil
+            lock.unlock()
+            finishedReader?.cancel() // EOF must not keep a ready source waking while the CLI exits.
+            if count <= 0 { return }
+        }
+    }
+    private static func terminateOwned(_ task: Process?) {
+        guard let task, task.isRunning else { return }
+        task.terminate()
+        // Bounded escalation applies to cancellation as well as timeout, only for this subprocess.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.25) {
+            if task.isRunning { kill(task.processIdentifier, SIGKILL) }
+        }
     }
     private func expire() {
         lock.lock()
-        guard let process, process.isRunning else { lock.unlock(); return }
-        timedOut = true
-        process.terminate()
+        timedOut = true // A descendant may keep stdout open even after the parent has exited.
+        let task = process
+        lock.broadcast()
         lock.unlock()
-        // A bounded second action handles a CLI that ignores SIGTERM, never another application.
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.25) {
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-        }
+        Self.terminateOwned(task)
     }
-    func cancel() {
+    func cancel(immediately: Bool = false) {
         lock.lock()
         cancelled = true
-        if let process, process.isRunning { process.terminate() }
+        let task = process
+        lock.broadcast()
         lock.unlock()
+        // At app shutdown no future dispatch closure is guaranteed to execute.
+        if immediately, let task, task.isRunning { kill(task.processIdentifier, SIGKILL) }
+        else { Self.terminateOwned(task) }
     }
 }

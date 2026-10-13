@@ -76,6 +76,20 @@ private final class FakeSession: CameraSessionBackend, @unchecked Sendable {
         pending.stop()
         precondition(factories == 0 && pending.state == .idle, "Permissionless selection created a session")
 
+        var viewerAuthorization: AVAuthorizationStatus = .denied
+        let retryBackend = FakeSession()
+        let retryVisible = CameraMirror(makeSession: { retryBackend }, readAuthorization: { viewerAuthorization })
+        retryVisible.panelDidAppear()
+        precondition(retryVisible.state == .denied)
+        viewerAuthorization = .authorized
+        retryVisible.panelDidAppear()
+        try await waitUntil { retryVisible.state == .running }
+        precondition(retryBackend.snapshot.1 == 1)
+        retryVisible.panelDidDisappear()
+        precondition(retryVisible.state == .running)
+        retryVisible.panelDidDisappear()
+        try await waitUntil { !retryBackend.snapshot.3 }
+
         let sharedBackend = FakeSession()
         let shared = CameraMirror(makeSession: { sharedBackend }, readAuthorization: { .authorized })
         shared.panelDidAppear()

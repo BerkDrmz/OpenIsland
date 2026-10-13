@@ -322,7 +322,7 @@ final class IslandDiagnostics {
 
     /// Repeatable developer-only workloads. No preferences, media controls or saved files are changed.
     private func runControlledBenchmark(mode: String, controller: NotchWindowController, environment: AppEnvironment) {
-        if mode == "media-validation" || mode == "media-seek-validation" || mode == "media-quiet-validation" {
+        if mode == "media-validation" || mode == "media-seek-validation" || mode == "media-quiet-validation" || mode == "media-pause-validation" {
             runMediaValidation(controller: controller, environment: environment)
             return
         }
@@ -358,6 +358,36 @@ final class IslandDiagnostics {
                     try? await Task.sleep(for: .seconds(seconds))
                     endBenchmarkPhase("idle expanded")
                     guard model.machine.isExpanded else { log("FAIL: expanded idle closed"); return }
+                } else if mode == "tab-speeds" || mode == "profile-rapid" {
+                    for tab in tabs {
+                        model.send(.selectTab(tab))
+                        try? await Task.sleep(for: .milliseconds(350))
+                    }
+                    let delays = mode == "profile-rapid" ? [80] : [650, 300, 150, 80, 50]
+                    let passes = mode == "profile-rapid" ? 80 : 9
+                    for delay in delays {
+                        let phase = "speed \(delay)ms"
+                        beginBenchmarkPhase(phase)
+                        var selected = 0
+                        var synchronousCPU: Double = 0
+                        for _ in 0..<passes {
+                            for tab in tabs {
+                                if emitsSignposts {
+                                    os_signpost(.event, log: signpostLog, name: "Tab selected", "%{public}@", String(describing: tab) as NSString)
+                                }
+                                let cpu = processCPUSeconds() ?? 0
+                                model.send(.selectTab(tab))
+                                synchronousCPU += (processCPUSeconds() ?? cpu) - cpu
+                                selected += 1
+                                try? await Task.sleep(for: .milliseconds(delay))
+                                guard model.presentation.expandedTab == tab, model.machine.isExpanded else {
+                                    log("FAIL: speed selection did not activate \(tab)"); return
+                                }
+                            }
+                        }
+                        endBenchmarkPhase(phase)
+                        log("speed selections=\(selected); delay_ms=\(delay); synchronous_cpu=\(synchronousCPU); pending=\(model.pendingEffectCount); system_running=\(environment.system.isRunning); camera=\(environment.mirror.state); routes=\(environment.audioMixer.activeRouteCount)")
+                    }
                 } else if mode == "suite" || mode == "tabs" {
                     // Equal warm-up for both binaries; first-open cost remains in the separate cycle test.
                     for tab in tabs {
@@ -418,7 +448,13 @@ final class IslandDiagnostics {
             var events = 0
             let observer = DistributedNotificationCenter.default().addObserver(
                 forName: Notification.Name("com.spotify.client.PlaybackStateChanged"), object: nil, queue: .main
-            ) { _ in MainActor.assumeIsolated { events += 1 } }
+            ) { _ in MainActor.assumeIsolated {
+                events += 1
+                self.log("media event; epoch=\(Date().timeIntervalSince1970); index=\(events)")
+                if self.emitsSignposts {
+                    os_signpost(.event, log: self.signpostLog, name: "Media notification")
+                }
+            } }
             defer {
                 DistributedNotificationCenter.default().removeObserver(observer)
                 if model.isPinned != originalPin { model.send(.togglePin) }
@@ -453,8 +489,11 @@ final class IslandDiagnostics {
             }
             try? await Task.sleep(for: .seconds(3))
             let seekOnly = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] == "media-seek-validation"
-            let quiet = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] == "media-quiet-validation"
-            let phases = quiet ? [("playing compact", false, 30), ("playing expanded", true, 30),
+            let pauseValidation = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] == "media-pause-validation"
+            let quiet = pauseValidation || ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] == "media-quiet-validation"
+            let phases = pauseValidation ? [("playing compact", false, 20), ("playing expanded", true, 20),
+                                             ("paused compact", false, 75), ("paused expanded", true, 60)]
+                : quiet ? [("playing compact", false, 30), ("playing expanded", true, 30),
                                   ("paused compact", false, 30), ("paused expanded", true, 30)]
                 : seekOnly ? [("track seek", true, 45)] : [
                 ("playing compact", false, 60), ("playing expanded", true, 45),

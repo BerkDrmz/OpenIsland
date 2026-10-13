@@ -29,6 +29,53 @@ extension CGRect { func containsInclusive(_ point: CGPoint) -> Bool { contains(p
             try bytes.write(to: url)
             return url
         }
+        // Deterministic QuickLook completion ordering, real store/removal and private fixtures.
+        var completions: [@Sendable (CGImage?) -> Void] = []
+        let delayed = ShelfStore(storage: root.appendingPathComponent("thumbnail-cache"),
+                                 persistenceURL: root.appendingPathComponent("thumbnail-shelf.json"),
+                                 generateThumbnail: { _, _, completion in completions.append(completion) })
+        let thumbBoard = NSPasteboard(name: .init("OpenIsland-thumbnail-" + UUID().uuidString))
+        defer { thumbBoard.releaseGlobally() }
+        thumbBoard.writeObjects([sources[0] as NSURL])
+        precondition(delayed.ingest(pasteboard: thumbBoard))
+        delayed.panelDidAppear()
+        let removed = delayed.items[0]
+        let context = CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8,
+                                bytesPerRow: 8, space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let imageA = context.makeImage()!
+        delayed.remove(removed)
+        completions[0](imageA)
+        try await Task.sleep(for: .milliseconds(30))
+        precondition(delayed.thumbnails[removed.url] == nil, "Removed thumbnail resurrected")
+        precondition(delayed.ingest(pasteboard: thumbBoard))
+        let replacement = delayed.items[0]
+        precondition(replacement.id != removed.id && completions.count == 2)
+        completions[1](imageA)
+        try await Task.sleep(for: .milliseconds(30))
+        let acceptedImage = delayed.thumbnails[replacement.url]!
+        completions[0](imageA)
+        try await Task.sleep(for: .milliseconds(30))
+        precondition(delayed.thumbnails[replacement.url] === acceptedImage, "Old identity overwrote replacement")
+        // Move a private fixture after requesting a new preview; opening marks it missing.
+        delayed.remove(replacement)
+        precondition(delayed.ingest(pasteboard: thumbBoard))
+        let moved = root.appendingPathComponent("moved-thumbnail-fixture.pdf")
+        try FileManager.default.moveItem(at: sources[0], to: moved)
+        delayed.panelDidAppear()
+        completions[2](imageA)
+        try await Task.sleep(for: .milliseconds(30))
+        precondition(delayed.items[0].isMissing && delayed.thumbnails[sources[0]] == nil)
+        try FileManager.default.moveItem(at: moved, to: sources[0])
+        delayed.panelDidAppear()
+        precondition(!delayed.items[0].isMissing && completions.count == 4)
+        completions[3](imageA)
+        try await Task.sleep(for: .milliseconds(30))
+        precondition(delayed.thumbnails[sources[0]] != nil)
+        delayed.removeAll()
+        let sourceBytesAfterPreview = try Data(contentsOf: sources[0])
+        precondition(sourceBytesAfterPreview == bytes && sources[0].lastPathComponent == names[0])
+        print("PASS Shelf thumbnail: delayed removal, same-URL replacement, moved/missing fixture reject stale callbacks; source bytes/names unchanged")
         let pasteboard = NSPasteboard(name: .init("OpenIsland-check-" + UUID().uuidString))
         defer { pasteboard.releaseGlobally() }
         pasteboard.writeObjects(sources.map { $0 as NSURL })
