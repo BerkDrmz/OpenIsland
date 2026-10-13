@@ -41,6 +41,10 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lI
   -o "$CHECK_DIR/waveform-check"
 "$CHECK_DIR/waveform-check"
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
+  Sources/OpenIsland/UI/MarqueeView.swift Tools/PerformanceChecks/MarqueeCheck.swift \
+  -o "$CHECK_DIR/marquee-check"
+"$CHECK_DIR/marquee-check"
+swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
   Sources/OpenIsland/UI/TimeProgressView.swift Tools/PerformanceChecks/TimeProgressCheck.swift \
   -o "$CHECK_DIR/time-progress-check"
 "$CHECK_DIR/time-progress-check"
