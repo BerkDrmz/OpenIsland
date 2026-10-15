@@ -320,6 +320,13 @@ final class IslandDiagnostics {
         }
     }
 
+    /// Developer-only: OPENISLAND_BENCHMARK_RAPID_MS sets the profile-rapid interval (20…1000 ms); otherwise the original 80 ms.
+    private static func benchmarkRapidDelay() -> Int {
+        guard let value = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_RAPID_MS"], let ms = Int(value),
+              (20...1000).contains(ms) else { return 80 }
+        return ms
+    }
+
     /// Benchmark sekme sırası. Ortam değişkeni yoksa veya geçersiz bir ad içeriyorsa varsayılan sıra kullanılır.
     private static func benchmarkTabs(default tabs: [ExpandedTab]) -> [ExpandedTab] {
         guard let value = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_TABS"], !value.isEmpty else { return tabs }
@@ -374,7 +381,7 @@ final class IslandDiagnostics {
                         model.send(.selectTab(tab))
                         try? await Task.sleep(for: .milliseconds(350))
                     }
-                    let delays = mode == "profile-rapid" ? [80] : [650, 300, 150, 80, 50]
+                    let delays = mode == "profile-rapid" ? [Self.benchmarkRapidDelay()] : [650, 300, 150, 80, 50]
                     let passes = mode == "profile-rapid" ? 80 : 9
                     for delay in delays {
                         let phase = "speed \(delay)ms"
