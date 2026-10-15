@@ -195,9 +195,9 @@ private struct TabIconTint: ViewModifier {
 }
 
 private extension ExpandedTab {
-    /// `Tools/PerformanceChecks/TabIconTintCheck.swift`: 2x piksel karşılaştırmasında yalnızca bu sembolün üst üste binen
-    /// alt yolları renk alfası ile katman opaklığı arasında fark üretti (≤16/255); diğerleri birebir aynı.
-    var tintsWithLayerOpacity: Bool { self != .mixer }
+    /// `Tools/PerformanceChecks/TabIconTintCheck.swift`: 2x piksel karşılaştırmasında üst üste binen alt yolları olan
+    /// mixer ve pano sembolleri renk alfası ile katman opaklığı arasında fark üretti (≤16/255); diğerleri ≤1/255 aynı.
+    var tintsWithLayerOpacity: Bool { self != .mixer && self != .clipboard }
 }
 
 /// Pin durumu kendi alt görünümünde okunur: pin değişimi tüm genişletilmiş içeriği yeniden çizdirmez.

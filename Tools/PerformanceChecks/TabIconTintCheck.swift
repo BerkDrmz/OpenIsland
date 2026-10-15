@@ -6,9 +6,9 @@
 import AppKit
 import SwiftUI
 
-let symbols = ["square.grid.2x2.fill", "music.note", "tray.and.arrow.down.fill", "doc.on.clipboard", "timer",
+let symbols = ["square.grid.2x2.fill", "music.note", "tray.and.arrow.down.fill", "timer",
                "note.text", "person.crop.circle", "cpu"]
-let colorPathSymbols = ["slider.horizontal.3"] // mixer: özgün renk animasyonu korunur
+let colorPathSymbols = ["slider.horizontal.3", "doc.on.clipboard"] // mixer, pano: özgün renk animasyonu korunur
 let tertiary = Color(nsColor: NSColor(name: nil) { _ in
     NSColor(srgbRed: 1, green: 1, blue: 1, alpha: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.7 : 0.48)
 })
