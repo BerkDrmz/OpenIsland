@@ -294,7 +294,7 @@ import IslandCore
         // Unnotified seeks (Spotify posts no distributed notification for its own scrubbing) are corrected by
         // bounded, event-driven position reads; never by a periodic loop.
         var fast = ScriptedPlayerSource.PositionSyncTiming()
-        fast.playbackStartDelay = 0.05; fast.frozenRetryDelay = 0.05; fast.endGrace = 0.05
+        fast.endGrace = 0.05
         fast.tolerance = 0.01; fast.visibleMinimumInterval = 0
         func positionReads() -> Int { runner.calls.filter { $0.contains("return {player position") }.count }
         // Waits until no Apple Event has been issued for 200 ms; a far predicted-end check stays scheduled.
@@ -343,19 +343,19 @@ import IslandCore
         await settle(sync)
         let forward = latest!.elapsed(at: Date())
         precondition(forward > 199 && forward < 201 && positionReads() >= panelReads + 1, "Panel sync missed a forward scrub")
-        // 3. Frozen start: position unchanged after "Playing" is retried a bounded number of times, then trusted.
+        // 3. A playing notification is fresh truth: no read at playback start, only the far predicted-end check.
         runner.syncPosition = 30
         event(sync, id: runner.trackID, state: "Playing", position: 30)
-        let frozenReads = positionReads()
+        let startReads = positionReads()
         await settle(sync)
-        precondition(positionReads() - frozenReads <= fast.startChecks + fast.endChecks,
-                     "Frozen start or end checks were not bounded")
+        precondition(positionReads() == startReads && sync.pendingPositionSync != nil,
+                     "Playback start issued a position read")
         // 4. A player stuck at its end produces at most `endChecks` idle reads, then nothing (no polling).
         runner.syncPosition = 240
         event(sync, id: runner.trackID, state: "Playing", position: 240)
         let endReads = positionReads()
         await settle(sync)
-        precondition(positionReads() - endReads <= fast.startChecks + fast.endChecks && sync.pendingPositionSync == nil,
+        precondition(positionReads() - endReads <= fast.endChecks && sync.pendingPositionSync == nil,
                      "Stuck end kept issuing position reads")
         // 5. Paused: nothing is scheduled and the panel does not read.
         event(sync, id: runner.trackID, state: "Paused", position: 50)
@@ -376,12 +376,13 @@ import IslandCore
         event(sync, id: runner.trackID, state: "Playing", position: 10)
         runner.denied = true
         let deniedReads = positionReads()
+        sync.synchronizePosition()
         await settle(sync)
         precondition(sync.pendingPositionSync == nil && positionReads() - deniedReads <= 1, "Denied read rescheduled")
         runner.denied = false
         sync.stop()
         precondition(sync.pendingPositionSync == nil)
-        print("PASS Spotify position: unnotified backward/forward scrub corrected; bounded start/end checks; paused/denied/mismatch safe")
+        print("PASS Spotify position: unnotified backward/forward scrub corrected; no read at playback start; bounded end checks; paused/denied/mismatch safe")
         print("PASS Spotify: distinct IDs/durations, initial identity, cached restart, boundary seek, rapid play/pause, denied events")
         print("PASS Spotify artwork: duration before gated download; pause/cancel/stop/restart reject stale publication and cache mutation")
         print("PASS ScriptedPlayer: explicit controls/seek recover from denial; Music raw artwork recovers; repeated start does no extra work")
