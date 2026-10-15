@@ -155,9 +155,8 @@ private struct TabButton: View, Equatable {
         Button(action: onSelect) {
             Image(systemName: item.symbol)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(IslandPalette.primary)
-                // Seçili: beyaz; değil: `tertiary` ile aynı beyaz × alfa. Geçiş renk yerine opaklıkla (aynı yay) canlanır.
-                .opacity(isSelected ? 1 : unselectedAlpha)
+                .modifier(TabIconTint(isSelected: isSelected, unselectedAlpha: unselectedAlpha,
+                                      usesLayerOpacity: item.tintsWithLayerOpacity))
                 .frame(width: IslandLayoutEngine.tabButtonSize.width, height: IslandLayoutEngine.tabButtonSize.height)
                 .background {
                     if isSelected {
@@ -173,6 +172,32 @@ private struct TabButton: View, Equatable {
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
+}
+
+/// Sekme ikonunun seçili/seçili değil tonu. Seçili: beyaz; değil: `IslandPalette.tertiary` ile aynı beyaz × alfa.
+/// Tek katmanlı sembollerde alfa katman opaklığı olarak canlanır (aynı piksel, ancak her yay karesinde renk çözümleme
+/// ve CPU'da yeniden çizim yok). Alt yolları üst üste binen sembollerde renk alfası her alt yola ayrı uygulandığı için
+/// sonuç farklıdır; bunlarda özgün renk animasyonu birebir korunur.
+private struct TabIconTint: ViewModifier {
+    let isSelected: Bool
+    let unselectedAlpha: Double
+    let usesLayerOpacity: Bool
+
+    func body(content: Content) -> some View {
+        if usesLayerOpacity {
+            content
+                .foregroundStyle(IslandPalette.primary)
+                .opacity(isSelected ? 1 : unselectedAlpha)
+        } else {
+            content.foregroundStyle(isSelected ? IslandPalette.primary : IslandPalette.tertiary)
+        }
+    }
+}
+
+private extension ExpandedTab {
+    /// `Tools/PerformanceChecks/TabIconTintCheck.swift`: 2x piksel karşılaştırmasında yalnızca bu sembolün üst üste binen
+    /// alt yolları renk alfası ile katman opaklığı arasında fark üretti (≤16/255); diğerleri birebir aynı.
+    var tintsWithLayerOpacity: Bool { self != .mixer }
 }
 
 /// Pin durumu kendi alt görünümünde okunur: pin değişimi tüm genişletilmiş içeriği yeniden çizdirmez.
