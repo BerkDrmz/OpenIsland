@@ -320,6 +320,16 @@ final class IslandDiagnostics {
         }
     }
 
+    /// Benchmark sekme sırası. Ortam değişkeni yoksa veya geçersiz bir ad içeriyorsa varsayılan sıra kullanılır.
+    private static func benchmarkTabs(default tabs: [ExpandedTab]) -> [ExpandedTab] {
+        guard let value = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_TABS"], !value.isEmpty else { return tabs }
+        let parsed = value.split(separator: ",").map { name in
+            ExpandedTab.allCases.first { String(describing: $0) == name.trimmingCharacters(in: .whitespaces) }
+        }
+        guard !parsed.isEmpty, parsed.allSatisfy({ $0 != nil }) else { return tabs }
+        return parsed.compactMap { $0 }
+    }
+
     /// Repeatable developer-only workloads. No preferences, media controls or saved files are changed.
     private func runControlledBenchmark(mode: String, controller: NotchWindowController, environment: AppEnvironment) {
         if mode == "media-validation" || mode == "media-seek-validation" || mode == "media-quiet-validation" || mode == "media-pause-validation" {
@@ -341,8 +351,9 @@ final class IslandDiagnostics {
             model.cancelPendingEffects()
             model.send(.demoModeChanged(isOn: true))
             try? await Task.sleep(for: .seconds(2))
-            let tabs: [ExpandedTab] = [.media, .shelf, .clipboard, .notes, .nook, .system]
-            log("controlled start; mode=\(mode); playing=\(environment.media.isPlaying); title=\(environment.media.nowPlaying?.title ?? "none")")
+            // Developer-only: OPENISLAND_BENCHMARK_TABS=media,shelf,... overrides the original six-tab order.
+            let tabs = Self.benchmarkTabs(default: [.media, .shelf, .clipboard, .notes, .nook, .system])
+            log("controlled start; mode=\(mode); tabs=\(tabs.map { String(describing: $0) }.joined(separator: ",")); playing=\(environment.media.isPlaying); title=\(environment.media.nowPlaying?.title ?? "none")")
             if mode == "idle-compact" {
                 beginBenchmarkPhase("idle compact")
                 try? await Task.sleep(for: .seconds(seconds))
