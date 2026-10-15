@@ -67,8 +67,21 @@ korunur — yalnızca modelin kendisi düzeltilir.
 | Oynat/duraklat düğmesi, artwork, süre | Duraklat/Oynat etiketi doğru; artwork (139 KB/205 KB) ve kontrol API süresi doğru yayınlandı |
 
 Sürükleme sırasında (Spotify konumu saniyeler içinde 25 → 241 → 0,7 → 262 → 124 sn) panel ile gerçek okuma ~100 ms arayla
-alındığı için anlık farklar görüldü; sürükleme bitince aday hemen eşitlendi. Denetim Merkezi'nden sarma ve Music: iki kayıt
-penceresinde gerçekleşmedi (Spotify konumu kesintisiz, Music hiç çalışmadı) → **NOT_TESTED**; deterministik testler kapsar.
+alındığı için anlık farklar görüldü; sürükleme bitince aday hemen eşitlendi.
+
+**Dış sarma (Denetim Merkezi / Connect benzeri; kullanıcı onayıyla AppleScript, oynatıcı penceresi öne gelmeden), `bb2c583`:**
+
+| Adım | Baseline | Aday |
+|---|---:|---:|
+| Spotify: dışarıdan ileri sarma (14 → 140 sn), panel açık | −126 sn | −126 sn (tetikleyici yok) |
+| Panel yeniden açıldı (Nook → Medya) | −126 sn | **−0,2 sn** |
+| Panel açıkken dışarıdan geri sarma (153 → 100 sn) | −70 sn | +54,6 sn |
+| Adayın modeli parça sonuna ulaştı (3:29, ~2 sn dolu çubuk) → parça sonu denetimi | −71 sn (kalıcı) | **−0,2 sn** |
+| Music: dışarıdan 19 → 120 sn sarma (Music de bildirim göndermiyor) | −100 sn (kalıcı) | −100 sn → panel yeniden açılınca **−0,1 sn** |
+
+Sınırlama: panel açık ve sabitliyken yapılan dış sarma, panel yeniden açılana ya da modelin öngördüğü parça sonuna kadar yanlış
+görünür (sürekli yoklama yapılmadığı için). "4:52 / −0:00'da kalma" en çok ~1,5–2 sn sürer. Test sonunda Music kapatıldı, Spotify
+önceki gibi çalmaya devam ettirildi.
 
 ## 5. K5 performansının korunması (Spotify duraklatılmış, önceki K5 ölçümleriyle aynı koşul)
 
@@ -113,9 +126,7 @@ kurulu uygulamayla aynı imza gereksinimi), kurulmadı.
 
 1. VoiceOver sesli gezinme ve klavye Tab/Shift-Tab elle doğrulaması (NOT_VERIFIED).
 2. Kontrastı Artır: Medya dışı paneller.
-3. Music uygulamasıyla canlı ilerleme testi; Spotify Connect / Denetim Merkezi'nden sarma (bu durumlarda düzeltme parça sonu
-   denetimi ve panel açılışıyla yakalar; canlı test edilmedi).
-4. Kurulu uygulamaya yükleme: ayrı onay, önce yedek.
+3. Kurulu uygulamaya yükleme: ayrı onay, önce yedek.
 
 Geri alma: `git revert bb2c583 dd34bb1` (Spotify düzeltmesi), `git revert f7a696a` (K5). `44d4e0a` yalnızca geliştirici benchmark aracıdır.
 
