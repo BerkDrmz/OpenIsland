@@ -58,6 +58,12 @@ final class MediaController {
         sources.forEach { $0.recover() }
     }
 
+    /// Süre çubuğu göründüğünde: etkin kaynak, bildirim gelmeden değişmiş konumu (oynatıcıda sarma) tek okumayla doğrular.
+    func synchronizePosition() {
+        guard nowPlaying?.isPlaying == true else { return }
+        activeSource?.synchronizePosition()
+    }
+
     /// A granted permission resets only the matching player's denial backoff, then reads once.
     func recoverAutomation(for bundleID: String) {
         sources.first(where: { $0.id == bundleID })?.recover()

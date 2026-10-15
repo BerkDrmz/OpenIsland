@@ -37,6 +37,7 @@ struct MediaPanel: View {
                     }
                     Spacer(minLength: 4)
                     ScrubberView(info: info, tint: media.accentNSColor, canSeek: media.canSeek, onSeek: media.seek)
+                        .onAppear { media.synchronizePosition() }
                     Spacer(minLength: 4)
                     TransportControls(isPlaying: info.isPlaying, media: media)
                 }

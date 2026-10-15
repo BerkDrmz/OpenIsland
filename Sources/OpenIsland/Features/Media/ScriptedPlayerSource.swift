@@ -41,6 +41,26 @@ final class ScriptedPlayerSource: MediaSource {
         artwork: .rawData("tell application \"Music\" to get raw data of artwork 1 of current track")
     )
 
+    /// Bildirim taşımayan konum değişikliklerinin olay güdümlü eşitlenmesi.
+    ///
+    /// Spotify (1.3.x) kendi arayüzünden yapılan sarmada dağıtık bildirim göndermez; "Playing" bildiriminden sonra
+    /// gerçek konum da birkaç saniye ilerlemez. Model yalnız bildirimden ekstrapole ettiği için geri sarmada süreye
+    /// erken ulaşıp (kırpılarak) "4:52 / −0:00, dolu çubuk" gösteriyordu. Sürekli yoklama yerine yalnızca şu anlarda
+    /// tek bir hafif okuma yapılır: çalma başladıktan kısa süre sonra (donuk başlangıçta sınırlı yeniden deneme),
+    /// öngörülen parça sonunda bildirim gelmediyse (sınırlı), kullanıcı oynatıcıdan ayrıldığında ve medya paneli
+    /// görünür olduğunda (çalarken, sınırlı sıklıkta).
+    struct PositionSyncTiming: Sendable {
+        var playbackStartDelay: TimeInterval = 6
+        var frozenRetryDelay: TimeInterval = 2
+        var endGrace: TimeInterval = 1.5
+        /// Bu kadar sapma yoksa yeniden yayınlanmaz (çubuk animasyonu boşuna yeniden kurulmaz).
+        var tolerance: TimeInterval = 0.75
+        var visibleMinimumInterval: TimeInterval = 10
+        var startChecks = 3
+        var endChecks = 3
+        static let standard = PositionSyncTiming()
+    }
+
     let player: Player
     var id: String { player.bundleID }
     let isSystemWide = false
@@ -69,15 +89,25 @@ final class ScriptedPlayerSource: MediaSource {
     /// Apple Event sağlığı: izin reddinde veya tekrarlayan hatada sınırlı geri çekilme.
     private var health = BackendHealth()
     private var artworkCache: ArtworkCache?
+    private let positionTiming: PositionSyncTiming
+    private var positionTask: Task<Void, Never>?
+    private var deactivationObserver: NSObjectProtocol?
+    private var lastPositionSync = Date.distantPast
+    private var startChecksLeft = 0
+    private var endChecksLeft = 0
 
     /// Await the existing event-driven task in checks; never starts or polls for work.
     var pendingUpdate: Task<Void, Never>? { artworkTask ?? refreshTask }
+    /// Planlanmış veya süren konum eşitlemesi (yalnız denetimler için; yeni iş başlatmaz).
+    var pendingPositionSync: Task<Void, Never>? { positionTask }
 
     init(player: Player, isRunning: (() -> Bool)? = nil,
+         positionTiming: PositionSyncTiming = .standard,
          downloadArtwork: @escaping @MainActor (URL) async -> Data? = { url in
              try? await URLSession.shared.data(from: url).0
          }) {
         self.player = player
+        self.positionTiming = positionTiming
         self.downloadArtwork = downloadArtwork
         runningCheck = isRunning ?? {
             NSRunningApplication.runningApplications(withBundleIdentifier: player.bundleID).contains { !$0.isTerminated }
@@ -97,13 +127,31 @@ final class ScriptedPlayerSource: MediaSource {
                 self.handle(snapshot)
             }
         }
+        // Sarma oynatıcının kendi penceresinde yapılır: kullanıcı oradan ayrılınca konum bir kez okunur.
+        deactivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let bundleID = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            MainActor.assumeIsolated {
+                guard let self, bundleID == self.player.bundleID else { return }
+                self.requestPositionSync(minimumInterval: 0)
+            }
+        }
         if isRunning { requestRefresh() }
     }
 
     func stop() {
         if let observer { DistributedNotificationCenter.default().removeObserver(observer) }
         observer = nil
+        if let deactivationObserver { NSWorkspace.shared.notificationCenter.removeObserver(deactivationObserver) }
+        deactivationObserver = nil
         cancelPendingWork()
+    }
+
+    /// Medya paneli göründüğünde (yalnız çalarken, sınırlı sıklıkta): bildirimsiz sarmayı yakalar.
+    func synchronizePosition() {
+        guard current?.isPlaying == true else { return }
+        requestPositionSync(minimumInterval: positionTiming.visibleMinimumInterval)
     }
 
     func recover() {
@@ -221,6 +269,7 @@ final class ScriptedPlayerSource: MediaSource {
         generation &+= 1
         refreshTask?.cancel(); refreshTask = nil
         artworkTask?.cancel(); artworkTask = nil
+        positionTask?.cancel(); positionTask = nil
     }
 
     private func isActive(_ expectedGeneration: UInt64) -> Bool {
@@ -260,6 +309,10 @@ final class ScriptedPlayerSource: MediaSource {
         }
         current = info
         onUpdate?(info) // metin anında; kapak geldiğinde ikinci güncelleme
+        // Bildirimdeki konum, çalma gerçekten başlamadan önceki andır: kısa süre sonra bir kez doğrulanır.
+        startChecksLeft = isPlaying ? positionTiming.startChecks : 0
+        endChecksLeft = positionTiming.endChecks
+        schedulePositionCheck(isPlaying ? .playbackStart : .predictedEnd)
         guard artworkCache?.key != key || artworkCache?.isComplete != true else { return }
         let expectedGeneration = generation
         artworkTask = Task { [weak self] in
@@ -307,6 +360,7 @@ final class ScriptedPlayerSource: MediaSource {
             current = nil
             currentIdentity = nil
             onUpdate?(nil)
+            schedulePositionCheck(.predictedEnd)
             return
         }
         var info = snapshot.0
@@ -335,6 +389,96 @@ final class ScriptedPlayerSource: MediaSource {
         if !usesSpotifyIdentity { currentIdentity = key }
         current = info
         onUpdate?(info)
+        // Kontrol API'sinden taze okuma: yalnızca öngörülen parça sonunun doğrulaması planlanır.
+        startChecksLeft = 0
+        endChecksLeft = positionTiming.endChecks
+        schedulePositionCheck(.predictedEnd)
+    }
+
+    // MARK: - Konum eşitleme
+
+    private enum PositionCheck { case playbackStart, predictedEnd, external }
+
+    /// En fazla bir bekleyen görev; her yeni bildirim/okuma onu iptal eder. Çalmıyorsa hiçbir şey planlanmaz.
+    private func schedulePositionCheck(_ kind: PositionCheck, delay override: TimeInterval? = nil) {
+        positionTask?.cancel(); positionTask = nil
+        guard observer != nil, let info = current, info.isPlaying else { return }
+        let delay: TimeInterval
+        switch kind {
+        case .playbackStart:
+            guard startChecksLeft > 0 else { return schedulePositionCheck(.predictedEnd) }
+            delay = override ?? positionTiming.playbackStartDelay
+        case .predictedEnd:
+            guard info.duration > 0, endChecksLeft > 0 else { return }
+            delay = max(info.duration - info.elapsed(at: Date()), 0) + positionTiming.endGrace
+        case .external:
+            delay = 0
+        }
+        let expectedGeneration = generation
+        positionTask = Task { [weak self] in
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            guard let self, self.isActive(expectedGeneration) else { return }
+            await self.synchronizePosition(kind, generation: expectedGeneration)
+        }
+    }
+
+    private func requestPositionSync(minimumInterval: TimeInterval) {
+        guard observer != nil, refreshTask == nil, current != nil, isRunning,
+              Date().timeIntervalSince(lastPositionSync) >= minimumInterval else { return }
+        positionTask?.cancel(); positionTask = nil
+        let expectedGeneration = generation
+        positionTask = Task { [weak self] in
+            guard let self, self.isActive(expectedGeneration) else { return }
+            await self.synchronizePosition(.external, generation: expectedGeneration)
+        }
+    }
+
+    /// Tek Apple Event: {konum, durum, kimlik}. Aynı parçada sapma eşiği aşılırsa konum, okuma anına göre
+    /// yeniden yayınlanır; parça farklıysa mevcut tam yenileme kullanılır. Kapak ve süre bu yoldan değişmez.
+    private func synchronizePosition(_ kind: PositionCheck, generation expectedGeneration: UInt64) async {
+        guard isRunning, current != nil else { return }
+        let identityField = usesSpotifyIdentity ? "id of current track" : "name of current track"
+        let source = """
+        tell application "\(player.appName)"
+            if player state is stopped then return {}
+            return {player position, (player state as string), \(identityField)}
+        end tell
+        """
+        let sent = Date()
+        let reading = await script(source) { descriptor -> (Double, String, String)? in
+            guard descriptor.numberOfItems >= 3, let position = descriptor.atIndex(1)?.doubleValue else { return nil }
+            return (position, descriptor.atIndex(2)?.stringValue ?? "", descriptor.atIndex(3)?.stringValue ?? "")
+        }
+        let received = Date()
+        guard isActive(expectedGeneration), var info = current else { return }
+        positionTask = nil
+        lastPositionSync = received
+        // Okunamadı: mevcut sağlık/geri çekilme kuralı geçerli, yeniden planlama yok.
+        guard let reading, reading.0.isFinite, reading.0 >= 0 else { return }
+        let sameTrack = usesSpotifyIdentity ? currentIdentity == .spotify(reading.2) : info.title == reading.2
+        guard sameTrack else { requestRefresh(); return }
+        let isPlaying = reading.1 == "playing"
+        let instant = sent.addingTimeInterval(received.timeIntervalSince(sent) / 2)
+        // Başlangıçta konum hâlâ bildirimdekiyle aynıysa oynatıcı henüz başlamamıştır.
+        let frozen = kind == .playbackStart && isPlaying && abs(reading.0 - info.elapsed) < 0.05
+        if isPlaying != info.isPlaying || abs(info.elapsed(at: instant) - reading.0) > positionTiming.tolerance {
+            info.elapsed = reading.0
+            info.timestamp = instant
+            info.isPlaying = isPlaying
+            info.playbackRate = isPlaying ? 1 : 0
+            current = info
+            onUpdate?(info)
+            endChecksLeft = positionTiming.endChecks
+        } else if kind == .predictedEnd {
+            endChecksLeft -= 1
+        }
+        if frozen, startChecksLeft > 1 {
+            startChecksLeft -= 1
+            schedulePositionCheck(.playbackStart, delay: positionTiming.frozenRetryDelay)
+        } else {
+            startChecksLeft = 0
+            schedulePositionCheck(.predictedEnd)
+        }
     }
 
     private func artwork(for key: TrackIdentity, generation expectedGeneration: UInt64) async -> Data? {

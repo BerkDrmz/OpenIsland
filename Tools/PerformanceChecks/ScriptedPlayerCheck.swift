@@ -14,6 +14,10 @@ import IslandCore
     var state = "playing"
     var coverURL = ""
     var includeRefreshID = true
+    /// Konum eşitleme okuması ({player position, state, id}).
+    var syncPosition: Double = 0
+    var syncState = "playing"
+    var syncID = "spotify:track:A"
     var calls: [String] = []
     private var callWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
@@ -29,7 +33,12 @@ import IslandCore
         for (_, waiter) in ready { waiter.resume() }
         if denied || (deniedCover && source == "cover") { return .init(value: nil, errorCode: -1743) }
         let result: NSAppleEventDescriptor
-        if source.contains("return {name") {
+        if source.contains("return {player position") {
+            result = .list()
+            result.insert(.init(double: syncPosition), at: 1)
+            result.insert(.init(string: syncState), at: 2)
+            result.insert(.init(string: syncID), at: 3)
+        } else if source.contains("return {name") {
             result = .list()
             var items: [NSAppleEventDescriptor] = [.init(string: "Track"), .init(string: "Artist"), .init(string: "Album"), .init(int32: refreshDuration), .init(double: position), .init(string: state)]
             if includeRefreshID && source.contains("id of current track") { items.append(.init(string: trackID)) }
@@ -282,6 +291,97 @@ import IslandCore
         precondition(runner.calls.count == deniedCalls && latest?.isPlaying == false, "Denied events repeated Apple Events or lost state")
         denied.stop()
 
+        // Unnotified seeks (Spotify posts no distributed notification for its own scrubbing) are corrected by
+        // bounded, event-driven position reads; never by a periodic loop.
+        var fast = ScriptedPlayerSource.PositionSyncTiming()
+        fast.playbackStartDelay = 0.05; fast.frozenRetryDelay = 0.05; fast.endGrace = 0.05
+        fast.tolerance = 0.01; fast.visibleMinimumInterval = 0
+        func positionReads() -> Int { runner.calls.filter { $0.contains("return {player position") }.count }
+        // Waits until no Apple Event has been issued for 200 ms; a far predicted-end check stays scheduled.
+        func settle(_ source: ScriptedPlayerSource) async {
+            var last = -1, stable = 0
+            for _ in 0..<500 {
+                try? await Task.sleep(for: .milliseconds(10))
+                if runner.calls.count == last { stable += 1; if stable >= 20 { return } } else { stable = 0; last = runner.calls.count }
+            }
+        }
+        runner.denied = false
+        runner.trackID = "spotify:track:Sync"
+        runner.duration = 240000
+        runner.refreshDuration = 240000
+        runner.coverURL = ""
+        runner.syncID = runner.trackID
+        let sync = ScriptedPlayerSource(player: metadataPlayer, isRunning: { true }, positionTiming: fast,
+                                        downloadArtwork: { _ in nil })
+        sync.onUpdate = { latest = $0 }
+        sync.start()
+        await sync.pendingUpdate?.value
+        // 1. Backward scrub without a notification: the model ran to the end and clamped (4:00 / -0:00).
+        runner.state = "playing"
+        runner.syncState = "playing"
+        runner.syncPosition = 100
+        event(sync, id: runner.trackID, state: "Playing", position: 239.95)
+        let readsBefore = positionReads()
+        await settle(sync)
+        let corrected = latest!.elapsed(at: Date())
+        precondition(corrected > 99 && corrected < 102 && latest!.isPlaying && latest!.duration == 240,
+                     "Backward scrub left the model clamped at the end: \(corrected)")
+        precondition(positionReads() > readsBefore, "No position read after the predicted end")
+        // 1b. The reported case: the model is in sync near the end, then the user scrubs back in the player
+        // (no notification). Without the predicted-end read the model would stay at "4:00 / -0:00".
+        runner.syncPosition = 239.05
+        event(sync, id: runner.trackID, state: "Playing", position: 239.0)
+        await settle(sync)
+        runner.syncPosition = 100
+        for _ in 0..<300 where latest!.elapsed(at: Date()) > 150 { try? await Task.sleep(for: .milliseconds(10)) }
+        let rewound = latest!.elapsed(at: Date())
+        precondition(rewound > 99 && rewound < 103, "Predicted-end read did not catch an unnotified backward scrub: \(rewound)")
+        // 2. Visible panel catches a forward scrub immediately (one read).
+        runner.syncPosition = 200
+        let panelReads = positionReads()
+        sync.synchronizePosition()
+        await settle(sync)
+        let forward = latest!.elapsed(at: Date())
+        precondition(forward > 199 && forward < 201 && positionReads() >= panelReads + 1, "Panel sync missed a forward scrub")
+        // 3. Frozen start: position unchanged after "Playing" is retried a bounded number of times, then trusted.
+        runner.syncPosition = 30
+        event(sync, id: runner.trackID, state: "Playing", position: 30)
+        let frozenReads = positionReads()
+        await settle(sync)
+        precondition(positionReads() - frozenReads <= fast.startChecks + fast.endChecks,
+                     "Frozen start or end checks were not bounded")
+        // 4. A player stuck at its end produces at most `endChecks` idle reads, then nothing (no polling).
+        runner.syncPosition = 240
+        event(sync, id: runner.trackID, state: "Playing", position: 240)
+        let endReads = positionReads()
+        await settle(sync)
+        precondition(positionReads() - endReads <= fast.startChecks + fast.endChecks && sync.pendingPositionSync == nil,
+                     "Stuck end kept issuing position reads")
+        // 5. Paused: nothing is scheduled and the panel does not read.
+        event(sync, id: runner.trackID, state: "Paused", position: 50)
+        let pausedReads = positionReads()
+        sync.synchronizePosition()
+        precondition(sync.pendingPositionSync == nil && positionReads() == pausedReads, "Paused source scheduled position work")
+        // 6. A different track at the read point uses the existing full refresh instead of mixing metadata.
+        runner.syncPosition = 5
+        runner.syncID = "spotify:track:Other"
+        event(sync, id: runner.trackID, state: "Playing", position: 10)
+        sync.synchronizePosition()
+        await settle(sync)
+        await sync.pendingUpdate?.value
+        precondition(runner.calls.last(where: { !$0.contains("return {player position") })?.contains("return {name") == true,
+                     "Track mismatch did not fall back to the full refresh")
+        // 7. Denied position read: no publication change and no rescheduling loop.
+        runner.syncID = runner.trackID
+        event(sync, id: runner.trackID, state: "Playing", position: 10)
+        runner.denied = true
+        let deniedReads = positionReads()
+        await settle(sync)
+        precondition(sync.pendingPositionSync == nil && positionReads() - deniedReads <= 1, "Denied read rescheduled")
+        runner.denied = false
+        sync.stop()
+        precondition(sync.pendingPositionSync == nil)
+        print("PASS Spotify position: unnotified backward/forward scrub corrected; bounded start/end checks; paused/denied/mismatch safe")
         print("PASS Spotify: distinct IDs/durations, initial identity, cached restart, boundary seek, rapid play/pause, denied events")
         print("PASS Spotify artwork: duration before gated download; pause/cancel/stop/restart reject stale publication and cache mutation")
         print("PASS ScriptedPlayer: explicit controls/seek recover from denial; Music raw artwork recovers; repeated start does no extra work")
