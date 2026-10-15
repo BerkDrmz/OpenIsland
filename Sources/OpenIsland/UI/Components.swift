@@ -57,12 +57,15 @@ struct IslandIconButton: View {
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Dairesel düğmenin çapı (sembol boyutunun 2,1 katı). Başlık satırı genişliği de bundan türetilir.
+    static func diameter(for size: CGFloat) -> CGFloat { size * 2.1 }
+
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: size, weight: .semibold))
                 .foregroundStyle(isProminent ? IslandPalette.primary : IslandPalette.primary.opacity(0.85))
-                .frame(width: size * 2.1, height: size * 2.1)
+                .frame(width: Self.diameter(for: size), height: Self.diameter(for: size))
                 .background(Circle().fill(isHovering ? IslandPalette.fillHover : (isProminent ? IslandPalette.fill : .clear)))
                 .scaleEffect(isHovering && !reduceMotion ? 1.06 : 1)
                 .contentTransition(.symbolEffect(.replace))

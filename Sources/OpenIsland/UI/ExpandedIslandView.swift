@@ -47,36 +47,89 @@ struct ExpandedIslandView: View {
         let metrics = model.metrics
         let layout = IslandLayoutEngine.layout(for: .expanded(tab), metrics: metrics)
         let side = IslandLayoutEngine.contentSideInset(for: layout, style: metrics.style, size: metrics.expandedSurfaceSize)
+        let visible = environment.preferences.visibleTabs
+        let headerPadding = IslandLayoutEngine.headerSidePadding(style: metrics.style, size: metrics.expandedSurfaceSize)
+        // Görünüm tuval genişliğinde sabit kalır ve tuvalde ortalanır; gövde (içerik + HUD) ortada morph eder.
+        let frameWidth = max(IslandLayoutEngine.canvasSize(for: metrics).width, layout.size.width)
+        let headerPlacement = HeaderPlacement(bodyWidth: layout.size.width, boxWidth: frameWidth, padding: headerPadding,
+                                              metrics: metrics, visible: visible)
 
         ZStack(alignment: .top) {
-            header(metrics: metrics)
-                .padding(.horizontal, IslandLayoutEngine.headerSidePadding(style: metrics.style, size: metrics.expandedSurfaceSize))
-                .frame(height: metrics.notchSize.height)
+            // Başlık satırı gövdenin morph eden çerçevesinin dışında, sabit kutuda: sekme geçişinde düğmelerin
+            // yerleşimi değişmez (her yay karesinde satır, odak döngüsü, izleme alanları yeniden kurulmaz).
+            // Dar gövdelerde özgün yığının ürettiği kayma, aynı transaction'da canlanan ofsetle birebir üretilir.
+            header(metrics: metrics, visible: visible)
+                .padding(.horizontal, headerPadding)
+                .frame(width: headerPlacement.boxWidth, height: metrics.notchSize.height)
+                .offset(x: headerPlacement.shift)
 
-            content(metrics: metrics)
-                .id(tab)
-                .transition(.islandReveal(motionStyle, expanded: true))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(EdgeInsets(
-                    top: metrics.notchSize.height + IslandLayoutEngine.headerGap,
-                    leading: side,
-                    bottom: IslandLayoutEngine.expandedBottomInset(for: metrics),
-                    trailing: side
-                ))
+            ZStack(alignment: .top) {
+                // Görünmez, etkileşimsiz iskelet: özgün yapıda başlık bu yığının içindeydi ve dar gövdelerde gövdeden
+                // geniş ölçülerek içeriğin önerilen genişliğini belirliyordu. İskelet aynı yerleşimi korur.
+                HeaderSkeleton(visible: visible, gap: Self.headerCenterGap(metrics))
+                    .padding(.horizontal, headerPadding)
+                    .frame(height: metrics.notchSize.height)
+                    .hidden()
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
 
-            HUDBannerHost(model: model)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-                .padding(.bottom, IslandSpacing.s)
+                content(metrics: metrics)
+                    .id(tab)
+                    .transition(.islandReveal(motionStyle, expanded: true))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(EdgeInsets(
+                        top: metrics.notchSize.height + IslandLayoutEngine.headerGap,
+                        leading: side,
+                        bottom: IslandLayoutEngine.expandedBottomInset(for: metrics),
+                        trailing: side
+                    ))
+
+                HUDBannerHost(model: model)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, IslandSpacing.s)
+            }
+            .frame(width: layout.size.width, height: layout.size.height, alignment: .top)
         }
-        .frame(width: layout.size.width, height: layout.size.height, alignment: .top)
+        .frame(width: frameWidth, height: layout.size.height, alignment: .top)
         .foregroundStyle(IslandPalette.primary)
         .compositingGroup()
     }
 
+    /// Başlık satırının kutusu ve kayması. Hızlı yol: kutu sabit (simetrik satır) + `headerRowShift`. Kayma piksel
+    /// düzeyinde garanti edilemiyorsa (ör. 1× ekran) özgün yerleşim: kutu gövde genişliğinde, kayma yok.
+    private struct HeaderPlacement {
+        let boxWidth: CGFloat
+        let shift: CGFloat
+
+        init(bodyWidth: CGFloat, boxWidth: CGFloat, padding: CGFloat, metrics: NotchMetrics, visible: [ExpandedTab]) {
+            let tab = IslandLayoutEngine.tabButtonSize.width
+            let spacing = IslandLayoutEngine.tabSpacing
+            let leading = CGFloat(IslandLayoutEngine.leadingTabOrder.filter(visible.contains).count)
+            let trailing = CGFloat(IslandLayoutEngine.trailingTabOrder.filter(visible.contains).count)
+            let leadingRow = leading > 0 ? leading * tab + (leading - 1) * spacing : 0
+            let trailingRow = trailing * (tab + spacing) + IslandIconButton.diameter(for: PinButton.iconSize)
+            let gap = ExpandedIslandView.headerCenterGap(metrics)
+            func shift(_ width: CGFloat) -> CGFloat? {
+                IslandLayoutEngine.headerRowShift(bodyWidth: width, sidePadding: padding, centerGap: gap,
+                                                  leadingRowWidth: leadingRow, trailingRowWidth: trailingRow, scale: metrics.scale)
+            }
+            if let bodyShift = shift(bodyWidth), shift(boxWidth) == 0 {
+                self.boxWidth = boxWidth
+                self.shift = bodyShift
+            } else {
+                self.boxWidth = bodyWidth
+                self.shift = 0
+            }
+        }
+    }
+
+    fileprivate static func headerCenterGap(_ metrics: NotchMetrics) -> CGFloat {
+        metrics.style == .notch ? metrics.notchSize.width : IslandSpacing.m
+    }
+
     /// Tüm sekmeler her zaman doğrudan tıklanabilir ve her görünümde aynı yerde durur (çentiğe yaslı):
     /// solda Müzik, Nook, Raf, Pano, Ses Mikseri; sağda Odak, Notlar, Ayna, Sistem ve iğne. Kapalı modüllerin sekmesi gösterilmez.
-    private func header(metrics: NotchMetrics) -> some View {
-        let visible = environment.preferences.visibleTabs
+    private func header(metrics: NotchMetrics, visible: [ExpandedTab]) -> some View {
         let spacing = IslandLayoutEngine.tabSpacing
         let leadingTabs = IslandLayoutEngine.leadingTabOrder.filter(visible.contains)
         let trailingTabs = IslandLayoutEngine.trailingTabOrder.filter(visible.contains)
@@ -91,7 +144,7 @@ struct ExpandedIslandView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
-            Color.clear.frame(width: metrics.style == .notch ? metrics.notchSize.width : IslandSpacing.m)
+            Color.clear.frame(width: Self.headerCenterGap(metrics))
             HStack(spacing: spacing) {
                 ForEach(trailingTabs, id: \.self) { item in
                     TabButton(item: item, isSelected: item == tab, namespace: tabSelection) {
@@ -127,6 +180,33 @@ struct ExpandedIslandView: View {
             AudioMixerPanel(mixer: environment.audioMixer, settings: environment.openSettings)
         case .system:
             SystemPanel(system: environment.system)
+        }
+    }
+}
+
+/// Başlık satırının yalnızca yerleşimi: aynı yığın, aynı ölçüler, düğme yerine boş kutular (çizim, odak, izleme yok).
+private struct HeaderSkeleton: View {
+    let visible: [ExpandedTab]
+    let gap: CGFloat
+
+    var body: some View {
+        let size = IslandLayoutEngine.tabButtonSize
+        let pin = IslandIconButton.diameter(for: PinButton.iconSize)
+        HStack(spacing: 0) {
+            HStack(spacing: IslandLayoutEngine.tabSpacing) {
+                ForEach(IslandLayoutEngine.leadingTabOrder.filter(visible.contains), id: \.self) { _ in
+                    Color.clear.frame(width: size.width, height: size.height)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            Color.clear.frame(width: gap)
+            HStack(spacing: IslandLayoutEngine.tabSpacing) {
+                ForEach(IslandLayoutEngine.trailingTabOrder.filter(visible.contains), id: \.self) { _ in
+                    Color.clear.frame(width: size.width, height: size.height)
+                }
+                Color.clear.frame(width: pin, height: pin)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -203,12 +283,13 @@ private extension ExpandedTab {
 /// Pin durumu kendi alt görünümünde okunur: pin değişimi tüm genişletilmiş içeriği yeniden çizdirmez.
 private struct PinButton: View {
     let model: IslandViewModel
+    static let iconSize: CGFloat = 9.5 // 20 pt'lik sekme yuvasına sığar
 
     var body: some View {
         IslandIconButton(
             systemName: model.isPinned ? "pin.fill" : "pin",
             label: model.isPinned ? "Sabitlemeyi kaldır" : "Adayı açık tut",
-            size: 9.5 // 20 pt'lik sekme yuvasına sığar
+            size: Self.iconSize
         ) {
             model.send(.togglePin)
         }

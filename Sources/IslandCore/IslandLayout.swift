@@ -320,6 +320,40 @@ public enum IslandLayoutEngine {
         style == .notch ? (size == .compact ? 8 : expandedTopRadius + 2) : 8
     }
 
+    /// Başlık satırının, gövde genişliğine bağlı yatay kayması (`ExpandedIslandView` başlığı).
+    ///
+    /// Satır bir `HStack`'tir: ortada `centerGap` genişliğinde sabit boşluk, iki yanında esnek yarılar (solda
+    /// sağa, sağda sola yaslı düğme satırları). Yığın, artan genişliği esnek yarılara eşit dağıtır; payı kendi
+    /// satırından küçük kalan yarı satırının genişliğini alır, ikisi birden sığmıyorsa açık iki yarıya eşit
+    /// bölünür. İki satır eşit değilse bu, dar gövdelerde tüm satırın en çok |sol − sağ| / 2 kadar yana
+    /// kaymasına yol açar; geniş gövdelerde boşluk tam ortadadır ve kayma sıfırdır.
+    ///
+    /// Satır gövdeden bağımsız, sabit genişlikte (hep simetrik) yerleştirilip bu kayma uygulandığında her düğme,
+    /// gövdeye yerleştirilmiş satırdakiyle aynı piksele düşer. Yığın her düğmeyi tam piksele yuvarlar; bu yüzden
+    /// kayma da piksele yuvarlanır. Simetrik konumlar tam piksel değilse (ör. 1× ekranda 2,5 pt aralık) ya da
+    /// yuvarlama tam yarıya denk gelirse aynı sonuç garanti edilemez: `nil` döner, çağıran özgün yerleşimi kullanır.
+    public static func headerRowShift(bodyWidth: CGFloat, sidePadding: CGFloat, centerGap: CGFloat,
+                                      leadingRowWidth: CGFloat, trailingRowWidth: CGFloat, scale: CGFloat) -> CGFloat? {
+        let scale = max(scale, 1)
+        func isPixelAligned(_ value: CGFloat) -> Bool { (value * scale).rounded() == value * scale }
+        guard bodyWidth.isFinite, centerGap.isFinite, leadingRowWidth.isFinite, trailingRowWidth.isFinite,
+              isPixelAligned(centerGap / 2), isPixelAligned(tabButtonSize.width), isPixelAligned(tabSpacing),
+              isPixelAligned(leadingRowWidth) else { return nil }
+        let rest = bodyWidth - 2 * sidePadding - centerGap
+        let leading = leadingRowWidth, trailing = trailingRowWidth
+        let leadingShare: CGFloat
+        if rest >= 2 * max(leading, trailing) {
+            leadingShare = rest / 2
+        } else if rest >= leading + trailing {
+            leadingShare = leading >= trailing ? leading : rest - trailing
+        } else {
+            leadingShare = leading - (leading + trailing - rest) / 2
+        }
+        let pixels = (leadingShare - rest / 2) * scale
+        guard abs(abs(pixels - pixels.rounded(.towardZero)) - 0.5) > 1e-6 else { return nil }
+        return pixels.rounded() / scale
+    }
+
     /// Genişletilmiş gövdenin yan boşluğu (notch'ta içbükey kulak + içerik boşluğu).
     public static func expandedSideInset(style: IslandStyle, size: ExpandedSurfaceSize = .standard) -> CGFloat {
         if style == .notch, size == .compact { return 8 + 8 }
