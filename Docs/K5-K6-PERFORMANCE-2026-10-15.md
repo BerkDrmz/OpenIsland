@@ -130,6 +130,28 @@ K5'te 35 öğenin rol, etiket, seçili trait, yardım metni, çerçeve ve sıras
 ~185 örnekle, altı sekmenin (dar gövdeli Raf/Pano/Not dahil) oturmuş başlık düğmelerinin AX çerçeveleri ve trait'leri
 BASE ile aynı. Döküm kullanıcının gerçek takvim/anımsatıcı metinlerini içerdiği için yalnızca yerel kanıt klasöründedir.
 
+
+## 7a. Animation Hitches (A/B/B/A, kare zamanlaması)
+
+`Evidence/…/tools/hitchabba.sh`: `xctrace` Animation Hitches, attach, 10 sn kayıt, test uygulamasının (pid) güncellemeleri
+`hitches-updates` süreç sütunuyla süzüldü; kare ömrü swap etiketiyle eşlendi; hitch'ler süreç sütunuyla süzüldü
+(`tools/hitchan.py`). Disk güvenliği: `$TMPDIR` artışı 6 GiB'ı aşınca kendi kaydı durdurulur (kayıtlar ~10,8–11,3 sn
+tamamlandı), her kayıttan sonra yalnızca kendi ktrace artığı silinir; ölçüm boyunca `$TMPDIR` ~0,5 GB, boş alan 82–88 GB.
+(Bu turun önceki Time Profiler kayıtlarından kalan 16 ktrace artığı, 5,3 GiB, aynı yöntemle temizlendi.)
+
+| | 80 ms, BASE (n=6) | 80 ms, K5 (n=6) | 650 ms, BASE (n=4) | 650 ms, K5 (n=4) |
+|---|---:|---:|---:|---:|
+| Kare/sn (uygulama) | 54,0 [37,9–71,2] | 58,5 [55,0–61,6] | 53,9 [50,8–58,0] | 52,8 [50,9–55,2] |
+| Kare ömrü p50 | 50,3 ms | 49,3 ms | 48,1 ms | 49,4 ms |
+| Kare ömrü p95 | 80,8 ms [62–111] | 71,8 ms [64–93] | 53,0 ms [49–65] | 54,8 ms [49–72] |
+| Hitch/sn | 8,2 [3,3–12,2] | 6,9 [3,2–9,9] | 1,8 [1,0–2,4] | 1,9 [0,7–3,4] |
+| Toplam hitch / 10 sn | 2,90 sn [0,73–7,28] | 1,80 sn [0,62–3,53] | 0,58 sn | 0,62 sn |
+| En uzun hitch | 86 ms | 47 ms | 63 ms | 67 ms |
+
+**Sonuç:** K5'te hitch/kare zamanlaması regresyonu görülmedi. 80 ms'de ortalamalar K5 lehine, fakat BASE koşuları arası
+dağılım çok geniş (sistem yükü: `ApplicationsStorageExtension`, `qpdf`, Chrome) → iyileşme iddia edilmez. 650 ms'de fark
+gürültü düzeyinde. Kayıt aracının kendisi yük bindirir; değerler mutlak değil göreli karşılaştırmadır.
+
 ## 8. Eksik doğrulamalar (NOT_TESTED)
 
 - Spotify **çalarken** compact/expanded: kullanıcının hesabında ses başlatacak komut gönderilmedi. Spotify açık/duraklatılmış
@@ -138,8 +160,6 @@ BASE ile aynı. Döküm kullanıcının gerçek takvim/anımsatıcı metinlerini
   ile kod/piksel düzeyinde kapsanıyor; K5 renk/kontrastla ilgili kod değiştirmedi.
 - VoiceOver ile sesli gezinme ve klavye (Tab / Tam Klavye Erişimi) odağı elle denenmedi; AX ağacı yapısı ve çerçeveleri
   karşılaştırıldı (bkz. §7). İskelet `hidden` + `accessibilityHidden` + `allowsHitTesting(false)`; AX ağacında görünmüyor.
-- Animation Hitches (çoklu eşleşmiş koşu): önceki turda `xctrace` takılması ve disk dolması yaşandığı için bu turda
-  çalıştırılmadı; ara kare eşdeğerliği konum düzeyinde ölçüldü, kare zamanlaması ölçülmedi.
 - Süreç başına GPU yüzdesi ve watt: N/A. WindowServer CPU'su toplamdır, yalnızca OpenIsland'a ait değildir.
 - 1× ekran: hızlı yol devre dışı kalır (özgün yerleşim); 1× ekranda koşu yapılmadı.
 
