@@ -105,15 +105,16 @@ Animasyon, #000000 yüzey, hover ve `matchedGeometryEffect` koduna dokunulmadı.
 20 kayıt = **5 A/B/B/A bloğu** = **10 K4–K5 çifti**: 80 ms'de 3 blok (6 K4 + 6 K5 kayıt), 650 ms'de 2 blok (4 K4 + 4 K5).
 "20 eşleşmiş çift" değildir. Sonuç: regresyon görülmedi; iyileşme iddia edilmez (bkz. K5/K6 raporu §7a).
 
-## 7. VoiceOver / klavye / kontrast
+## 7. VoiceOver / klavye / kontrast (canlı, kullanıcı ayarları açtı)
 
 | Kontrol | Durum |
 |---|---|
 | AX ağacı (rol, etiket, seçili trait, yardım, çerçeve) K4 ↔ K5 | Aynı (yapı karşılaştırması) |
 | Medya panelinde AX "geçen / toplam" değeri | Gerçek konumla tutarlı (düzeltmeden sonra) |
-| VoiceOver ile sesli gezinme | **NOT_VERIFIED**: VoiceOver kapalı; açmak sistem ayarı değişikliğidir, yapılmadı (etiketlerin bulunması PASS sayılmaz) |
-| Klavye odağı, Tab / Shift-Tab | **NOT_VERIFIED**: Tam Klavye Erişimi kapalı (`AppleKeyboardUIMode` tanımsız); bu ayar olmadan düğmeler Tab ile odaklanmaz, ayar değiştirilmedi |
-| Kontrastı Artır canlı | 15 Ekim canlı testinde yalnızca Medya paneli geçti (bu oturumda tekrarlanmadı); diğer paneller NOT_TESTED |
+| **Kontrastı Artır**, altı sekme (Medya, Nook, Raf, Pano, Notlar, Sistem), PREK4 ↔ aday | Başlık bölgesi: aynı sürümde iki kare birebir aynı; sürümler arası fark **en çok 1/255** (240–550 piksel, K4 ikon opaklığının ölçülmüş toleransı). Panel içi farklar yalnızca canlı veri (sıcaklık, bellek, süre) |
+| **Tam Klavye Erişimi**, Tab / Shift-Tab (kurulu uygulama onayla ~5 dk kapatıldı, sonra aynı binary ile yeniden açıldı) | Odak ilerlediğinde sıra iki sürümde aynı: Medya → Nook → Raf → Pano → Ses Mikseri → Odak → Notlar → Ayna → Sistem → iğne → panel denetimleri; Shift-Tab tersi. Adayda tam dizi iki koşuda gözlendi, baseline'da kısmi dizi aynı sırada |
+| Klavyeyle açılan adada odak kaybı | İki sürümde de rastgele adımda odak pencereye dönüyor (6 koşunun 4'ünde); K5 regresyonu değil, nedeni doğrulanmadı (olası: klavyeyle açılan ada işaretçi olaylarıyla kapanıyor) → ayrıca incelenmeli |
+| VoiceOver ile sesli gezinme | **NOT_VERIFIED** (kullanıcı dinleyerek doğrulamayı tercih etmedi; etiketlerin bulunması PASS sayılmaz) |
 
 ## 8. Testler
 
@@ -124,8 +125,8 @@ kurulu uygulamayla aynı imza gereksinimi), kurulmadı.
 
 ## 9. Üretime geçişte kalan engeller
 
-1. VoiceOver sesli gezinme ve klavye Tab/Shift-Tab elle doğrulaması (NOT_VERIFIED).
-2. Kontrastı Artır: Medya dışı paneller.
+1. VoiceOver sesli gezinme (NOT_VERIFIED).
+2. Klavyeyle açılan adada odağın rastgele kaybolması (baseline'da da var) incelenmeli.
 3. Kurulu uygulamaya yükleme: ayrı onay, önce yedek.
 
 Geri alma: `git revert bb2c583 dd34bb1` (Spotify düzeltmesi), `git revert f7a696a` (K5). `44d4e0a` yalnızca geliştirici benchmark aracıdır.
