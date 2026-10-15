@@ -13,7 +13,14 @@ enum IslandPalette {
     /// #9E9E9E eşdeğeri; siyah üzerinde ~7,5:1 kontrast. "Kontrastı Artır"da ~12:1.
     static let secondary = white(0.62, increased: 0.8)
     /// Yardımcı metin; siyah üzerinde ~4,8:1 (WCAG AA). "Kontrastı Artır"da ~9:1.
-    static let tertiary = white(0.48, increased: 0.7)
+    static let tertiary = white(tertiaryAlpha.standard, increased: tertiaryAlpha.increased)
+    /// `tertiary`'nin (beyaz) alfa değerleri. Sekme ikonları bu alfayı renk yerine katman opaklığı olarak canlandırır:
+    /// sonuç aynı beyaz × alfadır, fakat geçişin her karesinde renk çözümlenip ikon CPU'da yeniden çizilmez.
+    static let tertiaryAlpha = (standard: 0.48, increased: 0.7)
+    /// `tertiary` ile aynı kaynaktan (Kontrastı Artır) okunan güncel alfa.
+    static var currentTertiaryAlpha: Double {
+        NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? tertiaryAlpha.increased : tertiaryAlpha.standard
+    }
     static let fill = white(0.07, increased: 0.14)
     static let fillHover = white(0.12, increased: 0.22)
     static let separator = white(0.12, increased: 0.32)

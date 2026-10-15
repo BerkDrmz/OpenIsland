@@ -138,16 +138,26 @@ private struct TabButton: View, Equatable {
     let isSelected: Bool
     let namespace: Namespace.ID
     let onSelect: () -> Void
+    /// Yalnızca geçersiz kılma tetikleyicisi: Kontrastı Artır değişince gövde yeniden değerlendirilir ve alfa,
+    /// `IslandPalette.tertiary` ile aynı kaynaktan yeniden okunur.
+    @Environment(\.colorSchemeContrast) private var contrast
 
     nonisolated static func == (lhs: TabButton, rhs: TabButton) -> Bool {
         lhs.item == rhs.item && lhs.isSelected == rhs.isSelected
+    }
+
+    private var unselectedAlpha: Double {
+        _ = contrast
+        return IslandPalette.currentTertiaryAlpha
     }
 
     var body: some View {
         Button(action: onSelect) {
             Image(systemName: item.symbol)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(isSelected ? IslandPalette.primary : IslandPalette.tertiary)
+                .foregroundStyle(IslandPalette.primary)
+                // Seçili: beyaz; değil: `tertiary` ile aynı beyaz × alfa. Geçiş renk yerine opaklıkla (aynı yay) canlanır.
+                .opacity(isSelected ? 1 : unselectedAlpha)
                 .frame(width: IslandLayoutEngine.tabButtonSize.width, height: IslandLayoutEngine.tabButtonSize.height)
                 .background {
                     if isSelected {
