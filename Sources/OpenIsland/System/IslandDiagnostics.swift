@@ -327,6 +327,13 @@ final class IslandDiagnostics {
         return ms
     }
 
+    /// Yalnızca geliştirici: `profile-rapid` tur sayısı (uzun süreli bellek ölçümü için). Geçersizse özgün 80.
+    private static func benchmarkRapidPasses() -> Int {
+        guard let value = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_PASSES"], let passes = Int(value),
+              (1...5000).contains(passes) else { return 80 }
+        return passes
+    }
+
     /// Benchmark sekme sırası. Ortam değişkeni yoksa veya geçersiz bir ad içeriyorsa varsayılan sıra kullanılır.
     private static func benchmarkTabs(default tabs: [ExpandedTab]) -> [ExpandedTab] {
         guard let value = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_TABS"], !value.isEmpty else { return tabs }
@@ -382,7 +389,7 @@ final class IslandDiagnostics {
                         try? await Task.sleep(for: .milliseconds(350))
                     }
                     let delays = mode == "profile-rapid" ? [Self.benchmarkRapidDelay()] : [650, 300, 150, 80, 50]
-                    let passes = mode == "profile-rapid" ? 80 : 9
+                    let passes = mode == "profile-rapid" ? Self.benchmarkRapidPasses() : 9
                     for delay in delays {
                         let phase = "speed \(delay)ms"
                         beginBenchmarkPhase(phase)
