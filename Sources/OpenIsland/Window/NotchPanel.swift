@@ -48,7 +48,11 @@ final class NotchPanel: NSPanel {
         panel.worksWhenModal = true
     }
 
-    override var canBecomeKey: Bool { true }
+    /// Yalnızca ada genişken key olabilir (kontrolcü faz değişiminde ayarlar). Kapanırken key bırakıldıktan sonra
+    /// AppKit uygulamanın sıradaki key adayını seçer; panel aday kalırsa kapanmış ada odağı, kullanıcının tıkladığı
+    /// uygulamadan geri alıyordu (klavyeyle açılıp dışarı tıklanınca ölçüldü).
+    var acceptsKeyFocus = false
+    override var canBecomeKey: Bool { acceptsKeyFocus }
     override var canBecomeMain: Bool { false }
 
     override func cancelOperation(_ sender: Any?) {
@@ -58,6 +62,8 @@ final class NotchPanel: NSPanel {
     /// Ada kapanırken klavye odağını, önceki uygulamaya geri verir.
     func relinquishKeyFocus() {
         guard isKeyWindow, !QuickLookController.shared.isPreviewing else { return }
+        // Kaldırılan içerikteki (ör. metin alanı) bayat first responder'ı bırakma.
+        makeFirstResponder(nil)
         orderOut(nil)
         orderFrontRegardless()
     }

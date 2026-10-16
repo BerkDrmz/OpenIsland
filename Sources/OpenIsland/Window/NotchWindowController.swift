@@ -270,6 +270,7 @@ final class NotchWindowController {
 
     private func phaseDidChange(from old: IslandPhase, to new: IslandPhase) {
         let wasExpanded = if case .expanded = old { true } else { false }
+        panel.acceptsKeyFocus = model.machine.isExpanded
         if wasExpanded, !model.machine.isExpanded { panel.relinquishKeyFocus() }
         if !wasExpanded, model.machine.isExpanded { onExpanded?() }
         if !model.machine.isEngaged, sensor.frame != restHitRect { sensor.setFrame(restHitRect, display: false) }
