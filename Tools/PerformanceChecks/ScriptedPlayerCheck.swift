@@ -18,6 +18,8 @@ import IslandCore
     var syncPosition: Double = 0
     var syncState = "playing"
     var syncID = "spotify:track:A"
+    /// Konum okumasındaki süre (oynatıcının birimiyle); nil ise liste 3 öğe döner.
+    var syncDuration: Double?
     var calls: [String] = []
     private var callWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
@@ -38,6 +40,7 @@ import IslandCore
             result.insert(.init(double: syncPosition), at: 1)
             result.insert(.init(string: syncState), at: 2)
             result.insert(.init(string: syncID), at: 3)
+            if let syncDuration { result.insert(.init(double: syncDuration), at: 4) }
         } else if source.contains("return {name") {
             result = .list()
             var items: [NSAppleEventDescriptor] = [.init(string: "Track"), .init(string: "Artist"), .init(string: "Album"), .init(int32: refreshDuration), .init(double: position), .init(string: state)]
@@ -296,6 +299,7 @@ import IslandCore
         var fast = ScriptedPlayerSource.PositionSyncTiming()
         fast.endGrace = 0.05
         fast.tolerance = 0.01; fast.visibleMinimumInterval = 0
+        fast.trackSettle = 0.05; fast.commandSettle = 0.05
         func positionReads() -> Int { runner.calls.filter { $0.contains("return {player position") }.count }
         // Waits until no Apple Event has been issued for 200 ms; a far predicted-end check stays scheduled.
         func settle(_ source: ScriptedPlayerSource) async {
@@ -508,6 +512,49 @@ import IslandCore
                      "Music title mismatch did not refresh")
         music.stop()
         precondition(!music.isWatchingPlayerClicks && music.pendingPositionSync == nil)
+        // 10. Spotify corrects a new track's duration ≈0.5 s after the notification without notifying. One delayed
+        // read per new playing track publishes the corrected duration and updates the same-ID cache.
+        let settleSource = ScriptedPlayerSource(player: metadataPlayer, isRunning: { true }, positionTiming: clickTiming,
+                                                isFrontmost: { true }, downloadArtwork: { _ in nil })
+        settleSource.onUpdate = { latest = $0 }
+        settleSource.start()
+        await settleSource.pendingUpdate?.value
+        await settle(settleSource)
+        runner.trackID = "spotify:track:Settle"
+        runner.duration = 240000      // artwork query right after the change still reports the notification value
+        runner.syncID = runner.trackID
+        runner.syncPosition = 2
+        runner.syncState = "playing"
+        runner.syncDuration = 233714  // ms, the value Spotify settles on
+        let settleReads = positionReads()
+        event(settleSource, id: runner.trackID, state: "Playing", position: 0)
+        await settleSource.pendingUpdate?.value
+        precondition(latest?.duration == 240, "Notification duration should show first")
+        for _ in 0..<300 where latest!.duration != 233.714 { try? await Task.sleep(for: .milliseconds(10)) }
+        precondition(latest?.duration == 233.714 && positionReads() == settleReads + 1, "Settled duration not published with one read")
+        event(settleSource, id: runner.trackID, state: "Playing", position: 5) // same ID: cache keeps the settled value
+        precondition(latest?.duration == 233.714, "Same-ID notification restored the stale duration")
+        await settle(settleSource)
+        let sameTrackReads = positionReads()
+        event(settleSource, id: runner.trackID, state: "Paused", position: 5)
+        event(settleSource, id: runner.trackID, state: "Playing", position: 5)
+        await settle(settleSource)
+        precondition(positionReads() == sameTrackReads, "Same-track play/pause scheduled a settle read")
+        // 11. App command without a notification (previous track restarts the song): one read after the command.
+        runner.syncPosition = 0.4
+        let commandReads = positionReads()
+        settleSource.perform(.previousTrack)
+        await settle(settleSource)
+        precondition(positionReads() == commandReads + 1 && latest!.elapsed(at: Date()) < 2, "Restart via app command not resynced")
+        // A command answered by a notification issues no extra read.
+        let notifiedReads = positionReads()
+        settleSource.perform(.pause)
+        event(settleSource, id: runner.trackID, state: "Paused", position: 1)
+        await settle(settleSource)
+        precondition(positionReads() == notifiedReads, "Notified command still issued a read")
+        settleSource.stop()
+        runner.syncDuration = nil
+        print("PASS Spotify settle: late duration correction published once per new track; app-command restart resynced; notified commands read nothing")
         print("PASS Media matrix: same-track restart, delayed metadata, stopped, quit, wake recovery; Music position read, click resync and title mismatch")
         print("PASS Spotify position: unnotified backward/forward scrub corrected; no read at playback start; bounded end checks; paused/denied/mismatch safe")
         print("PASS Spotify: distinct IDs/durations, initial identity, cached restart, boundary seek, rapid play/pause, denied events")

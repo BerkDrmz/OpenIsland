@@ -58,6 +58,11 @@ final class ScriptedPlayerSource: MediaSource {
         var endChecks = 3
         /// Oynatıcıda fare bırakıldıktan sonra okuma: sarmanın uygulanmasına ve çift tıklamaya pay.
         var clickSettle: TimeInterval = 0.35
+        /// Spotify yeni parçada önce bildirimdeki süreyi verir, ≈0,5 sn sonra gerçek süreyi bildirimsiz düzeltir
+        /// (canlı ölçüm: 3/3 parçada 6,29 sn fark). Yeni parça çalarken bu kadar sonra tek doğrulama okuması.
+        var trackSettle: TimeInterval = 1.5
+        /// Uygulamanın kendi komutundan (ör. "önceki parça" = baştan başlat) sonra bildirim gelmezse tek okuma.
+        var commandSettle: TimeInterval = 0.5
         static let standard = PositionSyncTiming()
     }
 
@@ -225,10 +230,16 @@ final class ScriptedPlayerSource: MediaSource {
     }
 
     private func fire(_ source: String) {
+        // Oynatıcı bazı komutlarda (çalarken "önceki parça" parçayı baştan başlatır) bildirim göndermez.
+        // Komuttan sonra bildirim gelirse `handle` kuşağı ilerletir ve aşağıdaki okuma yapılmaz.
+        let expectedGeneration = generation
         Task { [weak self] in
             guard let self, !Task.isCancelled else { return }
             self.prepareUserRetry()
             _ = await self.script(source) { _ in true }
+            try? await Task.sleep(for: .seconds(self.positionTiming.commandSettle))
+            guard self.generation == expectedGeneration else { return }
+            self.requestPositionSync(minimumInterval: 0)
         }
     }
 
@@ -338,6 +349,7 @@ final class ScriptedPlayerSource: MediaSource {
             artworkData: nil, bundleIdentifier: player.bundleID
         )
         let key = identity(for: info, trackID: snapshot.trackID)
+        let isNewTrack = currentIdentity != key
         currentIdentity = key
         if let cache = artworkCache, cache.key == key {
             info.artworkData = cache.data
@@ -347,7 +359,7 @@ final class ScriptedPlayerSource: MediaSource {
         onUpdate?(info) // metin anında; kapak geldiğinde ikinci güncelleme
         // Bildirim taze konumdur; yalnızca öngörülen parça sonunun doğrulaması planlanır.
         endChecksLeft = positionTiming.endChecks
-        schedulePositionCheck(.predictedEnd)
+        schedulePositionCheck(isNewTrack && usesSpotifyIdentity ? .trackSettle : .predictedEnd)
         guard artworkCache?.key != key || artworkCache?.isComplete != true else { return }
         let expectedGeneration = generation
         artworkTask = Task { [weak self] in
@@ -431,7 +443,7 @@ final class ScriptedPlayerSource: MediaSource {
 
     // MARK: - Konum eşitleme
 
-    private enum PositionCheck { case predictedEnd, external }
+    private enum PositionCheck { case predictedEnd, trackSettle, external }
 
     /// En fazla bir bekleyen görev; her yeni bildirim/okuma onu iptal eder. Çalmıyorsa hiçbir şey planlanmaz.
     private func schedulePositionCheck(_ kind: PositionCheck) {
@@ -442,6 +454,8 @@ final class ScriptedPlayerSource: MediaSource {
         case .predictedEnd:
             guard info.duration > 0, endChecksLeft > 0 else { return }
             delay = max(info.duration - info.elapsed(at: Date()), 0) + positionTiming.endGrace
+        case .trackSettle:
+            delay = positionTiming.trackSettle
         case .external:
             delay = 0
         }
@@ -473,13 +487,15 @@ final class ScriptedPlayerSource: MediaSource {
         let source = """
         tell application "\(player.appName)"
             if player state is stopped then return {}
-            return {player position, (player state as string), \(identityField)}
+            return {player position, (player state as string), \(identityField), duration of current track}
         end tell
         """
+        let scale = player.durationScale
         let sent = Date()
-        let reading = await script(source) { descriptor -> (Double, String, String)? in
+        let reading = await script(source) { descriptor -> (Double, String, String, Double?)? in
             guard descriptor.numberOfItems >= 3, let position = descriptor.atIndex(1)?.doubleValue else { return nil }
-            return (position, descriptor.atIndex(2)?.stringValue ?? "", descriptor.atIndex(3)?.stringValue ?? "")
+            let duration = descriptor.numberOfItems >= 4 ? descriptor.atIndex(4).map { $0.doubleValue * scale } : nil
+            return (position, descriptor.atIndex(2)?.stringValue ?? "", descriptor.atIndex(3)?.stringValue ?? "", duration)
         }
         let received = Date()
         guard isActive(expectedGeneration), var info = current else { return }
@@ -491,7 +507,17 @@ final class ScriptedPlayerSource: MediaSource {
         guard sameTrack else { requestRefresh(); return }
         let isPlaying = reading.1 == "playing"
         let instant = sent.addingTimeInterval(received.timeIntervalSince(sent) / 2)
-        if isPlaying != info.isPlaying || abs(info.elapsed(at: instant) - reading.0) > positionTiming.tolerance {
+        // Oynatıcının sonradan düzelttiği süre (yeni Spotify parçası): önbellek ve yayın aynı kimlikte güncellenir.
+        var durationChanged = false
+        if let duration = reading.3, duration.isFinite, duration > 0, abs(duration - info.duration) > 0.5 {
+            info.duration = duration
+            durationChanged = true
+            if var cache = artworkCache, cache.key == currentIdentity {
+                cache.duration = duration
+                artworkCache = cache
+            }
+        }
+        if durationChanged || isPlaying != info.isPlaying || abs(info.elapsed(at: instant) - reading.0) > positionTiming.tolerance {
             info.elapsed = reading.0
             info.timestamp = instant
             info.isPlaying = isPlaying
