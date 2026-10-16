@@ -50,7 +50,7 @@ struct NotesPanel: View {
                                              count: IslandLayoutEngine.Notes.launcherColumns),
                               spacing: IslandLayoutEngine.Notes.launcherSpacing) {
                         ForEach(launcher.items) { item in
-                            LauncherTile(item: item, icon: launcher.icon(for: item)) {
+                            LauncherTile(item: item, title: launcher.title(for: item), icon: launcher.icon(for: item)) {
                                 launcher.launch(item)
                             } onRemove: {
                                 launcher.remove(item)
@@ -69,6 +69,7 @@ struct NotesPanel: View {
 
 private struct LauncherTile: View {
     let item: LauncherItem
+    let title: String
     let icon: NSImage
     let onLaunch: () -> Void
     let onRemove: () -> Void
@@ -84,8 +85,8 @@ private struct LauncherTile: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in withAnimation(IslandMotion.control) { isHovering = hovering } }
-        .help(item.title)
-        .accessibilityLabel(item.title)
+        .help(title)
+        .accessibilityLabel(title)
         .contextMenu { Button("Kaldır", role: .destructive, action: onRemove) }
     }
 }

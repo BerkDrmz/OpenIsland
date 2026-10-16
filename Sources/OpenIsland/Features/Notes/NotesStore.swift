@@ -75,6 +75,9 @@ final class LauncherStore {
     @ObservationIgnored private let fetchOverride: (@Sendable () async -> ShortcutsListResult)?
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var iconCache: [UUID: NSImage] = [:]
+    /// Uygulama öğesinin başlığı dosya sistemi/LaunchServices sorgusudur (`displayName`); her Notlar açılışında kutucuk
+    /// başına iki kez (ipucu + erişilebilirlik) yeniden hesaplanıyordu. Simge önbelleğiyle aynı ömür: öğe kaldırılınca silinir.
+    @ObservationIgnored private var titleCache: [UUID: String] = [:]
 
     @ObservationIgnored private let storeURL = AppPaths.support.appendingPathComponent("launcher.json")
 
@@ -106,6 +109,13 @@ final class LauncherStore {
         }
         iconCache[item.id] = image
         return image
+    }
+
+    func title(for item: LauncherItem) -> String {
+        if let cached = titleCache[item.id] { return cached }
+        let title = item.title
+        titleCache[item.id] = title
+        return title
     }
 
     func launch(_ item: LauncherItem) {
@@ -173,6 +183,7 @@ final class LauncherStore {
     func remove(_ item: LauncherItem) {
         items.removeAll { $0.id == item.id }
         iconCache[item.id] = nil
+        titleCache[item.id] = nil
         save()
     }
 
