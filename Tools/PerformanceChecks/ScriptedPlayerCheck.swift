@@ -382,6 +382,55 @@ import IslandCore
         runner.denied = false
         sync.stop()
         precondition(sync.pendingPositionSync == nil)
+        // 8. Visible panel + playing: a mouse-up in the frontmost player triggers one debounced read; the click
+        // watcher exists only while the scrubber is visible and the source is playing.
+        var clickTiming = fast
+        clickTiming.clickSettle = 0.02
+        var playerIsFront = true
+        let clicks = ScriptedPlayerSource(player: metadataPlayer, isRunning: { true }, positionTiming: clickTiming,
+                                          isFrontmost: { playerIsFront }, downloadArtwork: { _ in nil })
+        clicks.onUpdate = { latest = $0 }
+        clicks.start()
+        await clicks.pendingUpdate?.value
+        event(clicks, id: runner.trackID, state: "Paused", position: 20)
+        clicks.setPositionWatch(true)
+        precondition(!clicks.isWatchingPlayerClicks, "Click watcher installed while paused")
+        runner.syncState = "playing"
+        runner.syncPosition = 20
+        event(clicks, id: runner.trackID, state: "Playing", position: 20)
+        precondition(clicks.isWatchingPlayerClicks, "Click watcher missing while visible and playing")
+        await settle(clicks)
+        runner.syncPosition = 150
+        let clickReads = positionReads()
+        clicks.receivePlayerClick()
+        await settle(clicks)
+        let clicked = latest!.elapsed(at: Date())
+        precondition(clicked > 149 && clicked < 152 && positionReads() == clickReads + 1, "Player click did not resync: \(clicked)")
+        playerIsFront = false
+        let backgroundReads = positionReads()
+        clicks.receivePlayerClick()
+        await settle(clicks)
+        precondition(positionReads() == backgroundReads, "Click outside the player issued a read")
+        playerIsFront = true
+        let burstReads = positionReads()
+        for _ in 0..<5 { clicks.receivePlayerClick() }
+        await settle(clicks)
+        precondition(positionReads() == burstReads + 1, "Click burst was not coalesced into one read")
+        clicks.setPositionWatch(false)
+        precondition(!clicks.isWatchingPlayerClicks, "Click watcher survived the hidden panel")
+        let hiddenReads = positionReads()
+        clicks.receivePlayerClick()
+        await settle(clicks)
+        precondition(positionReads() == hiddenReads, "Hidden panel click issued a read")
+        clicks.setPositionWatch(true)
+        precondition(clicks.isWatchingPlayerClicks)
+        event(clicks, id: runner.trackID, state: "Paused", position: 30)
+        precondition(!clicks.isWatchingPlayerClicks, "Click watcher survived pause")
+        event(clicks, id: runner.trackID, state: "Playing", position: 30)
+        precondition(clicks.isWatchingPlayerClicks)
+        clicks.stop()
+        precondition(!clicks.isWatchingPlayerClicks && clicks.pendingPositionSync == nil, "Click watcher survived stop")
+        print("PASS Spotify position: player click resync only while visible+playing+frontmost; bursts coalesced; watcher removed on hide/pause/stop")
         print("PASS Spotify position: unnotified backward/forward scrub corrected; no read at playback start; bounded end checks; paused/denied/mismatch safe")
         print("PASS Spotify: distinct IDs/durations, initial identity, cached restart, boundary seek, rapid play/pause, denied events")
         print("PASS Spotify artwork: duration before gated download; pause/cancel/stop/restart reject stale publication and cache mutation")

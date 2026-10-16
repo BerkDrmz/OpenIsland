@@ -29,6 +29,8 @@ final class MediaController {
     @ObservationIgnored private var artworkData: Data?
     @ObservationIgnored private var cachedApplicationID: String?
     @ObservationIgnored private var cachedApplication: NSRunningApplication?
+    /// Görünür süre çubuğu sayısı (her ekranın kendi adası olabilir).
+    @ObservationIgnored private var positionWatchers = 0
 
     var isPlaying: Bool { nowPlaying?.isPlaying ?? false }
 
@@ -62,6 +64,14 @@ final class MediaController {
     func synchronizePosition() {
         guard nowPlaying?.isPlaying == true else { return }
         activeSource?.synchronizePosition()
+    }
+
+    /// Süre çubuğu göründü/kayboldu: kaynaklar yalnızca görünürken oynatıcıdaki sarmayı olayla izler.
+    func setPositionWatch(_ active: Bool) {
+        let wasWatched = positionWatchers > 0
+        positionWatchers = max(positionWatchers + (active ? 1 : -1), 0)
+        guard wasWatched != (positionWatchers > 0) else { return }
+        sources.forEach { $0.setPositionWatch(positionWatchers > 0) }
     }
 
     /// A granted permission resets only the matching player's denial backoff, then reads once.

@@ -48,13 +48,16 @@ final class ScriptedPlayerSource: MediaSource {
     /// Bildirimler arasında model, oynatıcının konumuyla ±0,1 sn içinde kalır; bu yüzden çalma başlangıcında okuma
     /// yapılmaz. Sürekli yoklama yerine yalnızca şu anlarda tek bir hafif okuma yapılır: öngörülen parça sonunda
     /// bildirim gelmediyse (sınırlı), kullanıcı oynatıcıdan ayrıldığında ve medya paneli görünür olduğunda (çalarken,
-    /// sınırlı sıklıkta).
+    /// sınırlı sıklıkta). Panel görünür ve çalarken oynatıcının kendi penceresindeki sarma da (oynatıcı öndeyken
+    /// fare bırakılınca) tek okumayla yakalanır; bu izleyici yalnızca o durumda kuruludur.
     struct PositionSyncTiming: Sendable {
         var endGrace: TimeInterval = 1.5
         /// Bu kadar sapma yoksa yeniden yayınlanmaz (çubuk animasyonu boşuna yeniden kurulmaz).
         var tolerance: TimeInterval = 0.75
         var visibleMinimumInterval: TimeInterval = 10
         var endChecks = 3
+        /// Oynatıcıda fare bırakıldıktan sonra okuma: sarmanın uygulanmasına ve çift tıklamaya pay.
+        var clickSettle: TimeInterval = 0.35
         static let standard = PositionSyncTiming()
     }
 
@@ -64,11 +67,14 @@ final class ScriptedPlayerSource: MediaSource {
     var onUpdate: ((NowPlayingInfo?) -> Void)?
 
     private let runningCheck: () -> Bool
+    private let frontmostCheck: () -> Bool
     private let downloadArtwork: @MainActor (URL) async -> Data?
     private var observer: NSObjectProtocol?
     private var refreshTask: Task<Void, Never>?
     private var artworkTask: Task<Void, Never>?
-    private var current: NowPlayingInfo?
+    private var current: NowPlayingInfo? {
+        didSet { if oldValue?.isPlaying != current?.isPlaying { updateClickMonitor() } }
+    }
     // Spotify identity stays source-local; NowPlayingInfo.trackKey remains unchanged for other users.
     private enum TrackIdentity: Equatable {
         case spotify(String)
@@ -91,14 +97,20 @@ final class ScriptedPlayerSource: MediaSource {
     private var deactivationObserver: NSObjectProtocol?
     private var lastPositionSync = Date.distantPast
     private var endChecksLeft = 0
+    /// Süre çubuğu görünür mü (MediaController bildirir). Tıklama izleyicisi yalnızca görünür + çalarken kurulur.
+    private var isPositionWatched = false
+    private var clickMonitor: Any?
 
     /// Await the existing event-driven task in checks; never starts or polls for work.
     var pendingUpdate: Task<Void, Never>? { artworkTask ?? refreshTask }
     /// Planlanmış veya süren konum eşitlemesi (yalnız denetimler için; yeni iş başlatmaz).
     var pendingPositionSync: Task<Void, Never>? { positionTask }
+    /// Denetimler için: oynatıcı tıklama izleyicisi kurulu mu.
+    var isWatchingPlayerClicks: Bool { clickMonitor != nil }
 
     init(player: Player, isRunning: (() -> Bool)? = nil,
          positionTiming: PositionSyncTiming = .standard,
+         isFrontmost: (() -> Bool)? = nil,
          downloadArtwork: @escaping @MainActor (URL) async -> Data? = { url in
              try? await URLSession.shared.data(from: url).0
          }) {
@@ -108,6 +120,7 @@ final class ScriptedPlayerSource: MediaSource {
         runningCheck = isRunning ?? {
             NSRunningApplication.runningApplications(withBundleIdentifier: player.bundleID).contains { !$0.isTerminated }
         }
+        frontmostCheck = isFrontmost ?? { NSWorkspace.shared.frontmostApplication?.bundleIdentifier == player.bundleID }
     }
 
     private var isRunning: Bool { runningCheck() }
@@ -142,12 +155,39 @@ final class ScriptedPlayerSource: MediaSource {
         if let deactivationObserver { NSWorkspace.shared.notificationCenter.removeObserver(deactivationObserver) }
         deactivationObserver = nil
         cancelPendingWork()
+        updateClickMonitor()
     }
 
     /// Medya paneli göründüğünde (yalnız çalarken, sınırlı sıklıkta): bildirimsiz sarmayı yakalar.
     func synchronizePosition() {
         guard current?.isPlaying == true else { return }
         requestPositionSync(minimumInterval: positionTiming.visibleMinimumInterval)
+    }
+
+    /// Süre çubuğu göründü/kayboldu. Görünür ve çalarken oynatıcıdaki fare bırakması tek konum okuması tetikler;
+    /// sistem geneli izleyici yalnızca tıklamada uyanır, fare hareketini veya tuşları dinlemez.
+    func setPositionWatch(_ active: Bool) {
+        guard active != isPositionWatched else { return }
+        isPositionWatched = active
+        updateClickMonitor()
+    }
+
+    /// Oynatıcıda fare bırakıldı (izleyici ve denetimler aynı yolu kullanır).
+    func receivePlayerClick() {
+        guard clickMonitor != nil, frontmostCheck() else { return }
+        requestPositionSync(minimumInterval: 0, after: positionTiming.clickSettle)
+    }
+
+    private func updateClickMonitor() {
+        let wanted = isPositionWatched && observer != nil && current?.isPlaying == true
+        if wanted, clickMonitor == nil {
+            clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in
+                MainActor.assumeIsolated { self?.receivePlayerClick() }
+            }
+        } else if !wanted, let monitor = clickMonitor {
+            NSEvent.removeMonitor(monitor)
+            clickMonitor = nil
+        }
     }
 
     func recover() {
@@ -413,12 +453,13 @@ final class ScriptedPlayerSource: MediaSource {
         }
     }
 
-    private func requestPositionSync(minimumInterval: TimeInterval) {
+    private func requestPositionSync(minimumInterval: TimeInterval, after delay: TimeInterval = 0) {
         guard observer != nil, refreshTask == nil, current != nil, isRunning,
               Date().timeIntervalSince(lastPositionSync) >= minimumInterval else { return }
         positionTask?.cancel(); positionTask = nil
         let expectedGeneration = generation
         positionTask = Task { [weak self] in
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
             guard let self, self.isActive(expectedGeneration) else { return }
             await self.synchronizePosition(.external, generation: expectedGeneration)
         }
