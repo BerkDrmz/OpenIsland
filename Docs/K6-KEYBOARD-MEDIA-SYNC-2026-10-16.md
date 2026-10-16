@@ -186,6 +186,7 @@ Uygulamanın kendi kontrollü benchmark'ı (`profile-rapid`, 480 seçim; `idle-c
 | `check-performance.sh` (ScriptedPlayer 8 senaryo + matris, MediaController kaynak değişimi dahil) | PASS |
 | `check-controls`, `check-dock-previews`, `check-feedback`, `check-maintenance`, `check-space-presentation`, `check-system` | PASS |
 | K5Checks (başlık kayması + animasyonlu eşdeğerlik, 2188 örnek, 0 uyuşmazlık) | PASS |
+| TabIconTintCheck (K4; 70 durum, en kötü 1/255; Mikser/Pano özgün renk yolu korunuyor) | PASS |
 
 ## 7. PASS / FAIL / NOT_TESTED
 
