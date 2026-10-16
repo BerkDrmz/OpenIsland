@@ -8,7 +8,11 @@ import SwiftUI
     var isSystemWide: Bool { false }
     var onUpdate: ((NowPlayingInfo?) -> Void)?
     var commands: [MediaCommand] = []
+    var watched = false
+    var positionSyncs = 0
     init(id: String) { self.id = id }
+    func setPositionWatch(_ active: Bool) { watched = active }
+    func synchronizePosition() { positionSyncs += 1 }
     func start() {}
     func stop() {}
     func perform(_ command: MediaCommand) { commands.append(command) }
@@ -120,7 +124,37 @@ import SwiftUI
         precondition(controller.artwork == nil && controller.nowPlaying == nil && sessionEnds == 1)
         source.onUpdate?(info("new session", data: red))
         precondition(controller.artwork != nil, "cleared session must rebuild its artwork")
+        // Source switch: visibility reaches every source (each decides by its own playback); position reads
+        // go only to the active source; two visible scrubbers (two screens) need two hides.
+        let spotify = ScriptedPlayerSource.instances[0], music = ScriptedPlayerSource.instances[1]
+        spotify.onUpdate?(info("spotify", data: red))
+        var musicPaused = info("music", data: blue)
+        musicPaused.isPlaying = false
+        music.onUpdate?(musicPaused)
+        controller.setPositionWatch(true)
+        controller.setPositionWatch(true)
+        precondition(spotify.watched && music.watched)
+        controller.synchronizePosition()
+        precondition(spotify.positionSyncs == 1 && music.positionSyncs == 0, "Position read went to an inactive source")
+        var spotifyPaused = info("spotify", data: red)
+        spotifyPaused.isPlaying = false
+        spotify.onUpdate?(spotifyPaused)
+        music.onUpdate?(info("music", data: blue))
+        controller.synchronizePosition()
+        precondition(controller.activeSourceID == music.id && music.positionSyncs == 1 && spotify.positionSyncs == 1, "Source switch did not move position reads")
+        controller.setPositionWatch(false)
+        precondition(spotify.watched && music.watched, "One hidden scrubber of two removed the watch")
+        controller.setPositionWatch(false)
+        controller.setPositionWatch(false) // dengesiz ek gizleme sayaç altına düşmez
+        precondition(!spotify.watched && !music.watched)
+        controller.setPositionWatch(true)
+        precondition(spotify.watched && music.watched, "Watch count went negative")
+        controller.setPositionWatch(false)
+        music.onUpdate?(musicPaused)
+        controller.synchronizePosition()
+        precondition(music.positionSyncs == 1, "Paused source was asked to read")
         controller.stop()
+        print("PASS: MediaController source switch: watch fan-out, active-only position reads, two-screen watch count, paused no-read")
         print("PASS: real MediaController reuses identical cover + colors across 500 tracks; equal-length replacement, independent equal bytes, pause, controls, missing/invalid artwork, recovery, session clear, and track notifications preserved")
     }
 }

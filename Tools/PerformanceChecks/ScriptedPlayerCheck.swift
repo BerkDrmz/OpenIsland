@@ -431,6 +431,84 @@ import IslandCore
         clicks.stop()
         precondition(!clicks.isWatchingPlayerClicks && clicks.pendingPositionSync == nil, "Click watcher survived stop")
         print("PASS Spotify position: player click resync only while visible+playing+frontmost; bursts coalesced; watcher removed on hide/pause/stop")
+
+        // 9. Scenario matrix: restart same track, delayed metadata, Music (no position in notification),
+        // stopped player, player quit, wake recovery. Each step bounds the Apple Events it may issue.
+        var running = true
+        let matrix = ScriptedPlayerSource(player: metadataPlayer, isRunning: { running }, positionTiming: clickTiming,
+                                          isFrontmost: { true }, downloadArtwork: { _ in nil })
+        matrix.onUpdate = { latest = $0 }
+        matrix.start()
+        await matrix.pendingUpdate?.value
+        await settle(matrix)
+        matrix.setPositionWatch(true)
+        // Restart the same track: the notification is fresh truth (no read), elapsed jumps back to 0.
+        event(matrix, id: runner.trackID, state: "Playing", position: 200)
+        let restartReads = runner.calls.count
+        event(matrix, id: runner.trackID, state: "Playing", position: 0)
+        precondition(latest!.elapsed == 0 && latest!.isPlaying && runner.calls.count == restartReads, "Same-track restart issued reads or kept the old position")
+        // Delayed metadata: a notification without a title falls back to one full refresh.
+        runner.position = 12
+        runner.state = "playing"
+        let delayedCalls = runner.calls.count
+        matrix.receivePlayerNotification(["Player State": "Playing", "Track ID": runner.trackID])
+        await matrix.pendingUpdate?.value
+        precondition(runner.calls[delayedCalls...].contains { $0.contains("return {name") } && abs(latest!.elapsed(at: latest!.timestamp) - 12) < 0.01,
+                     "Metadata-less notification did not refresh once")
+        // Stopped: model cleared, watcher removed, nothing scheduled.
+        event(matrix, id: runner.trackID, state: "Stopped", position: 0)
+        precondition(latest == nil && !matrix.isWatchingPlayerClicks && matrix.pendingPositionSync == nil, "Stopped player kept work")
+        // Player quit: the next notification publishes nil without Apple Events.
+        event(matrix, id: runner.trackID, state: "Playing", position: 5)
+        precondition(matrix.isWatchingPlayerClicks)
+        running = false
+        let quitCalls = runner.calls.count
+        event(matrix, id: runner.trackID, state: "Playing", position: 6)
+        precondition(latest == nil && runner.calls.count == quitCalls && !matrix.isWatchingPlayerClicks, "Quit player was queried or kept the watcher")
+        // Wake: a denial backoff is reset by recover() and the running player is read once.
+        running = true
+        runner.denied = true
+        matrix.recover()
+        await matrix.pendingUpdate?.value
+        runner.denied = false
+        let wakeCalls = runner.calls.count
+        matrix.recover()
+        await matrix.pendingUpdate?.value
+        precondition(latest?.title == "Track" && runner.calls.count > wakeCalls, "Wake recovery did not read the player")
+        matrix.stop()
+        precondition(!matrix.isWatchingPlayerClicks && matrix.pendingPositionSync == nil)
+
+        // Music: notifications carry no position, so playing state is read once; the click resync uses the title.
+        let musicPlayer = ScriptedPlayerSource.Player(bundleID: "test.music", appName: "Test", notification: "OpenIsland.Music.\(UUID())", durationScale: 1, artwork: .rawData("cover"))
+        runner.refreshDuration = 300
+        runner.position = 40
+        let music = ScriptedPlayerSource(player: musicPlayer, isRunning: { true }, positionTiming: clickTiming,
+                                         isFrontmost: { true }, downloadArtwork: { _ in nil })
+        music.onUpdate = { latest = $0 }
+        music.start()
+        await music.pendingUpdate?.value
+        precondition(latest?.duration == 300 && latest!.isPlaying, "Music refresh did not publish playing state")
+        let musicCalls = runner.calls.count
+        music.receivePlayerNotification(["Player State": "Playing", "Name": "Track", "Artist": "Artist", "Total Time": 300000.0])
+        await music.pendingUpdate?.value
+        precondition(runner.calls.count == musicCalls + 1 && runner.calls.last!.contains("return {name"), "Music notification did not read position once")
+        music.setPositionWatch(true)
+        precondition(music.isWatchingPlayerClicks)
+        await settle(music)
+        runner.syncID = "Track"
+        runner.syncPosition = 250
+        music.receivePlayerClick()
+        await settle(music)
+        precondition(abs(latest!.elapsed(at: Date()) - 250) < 2, "Music click resync failed")
+        runner.syncID = "Other Song"
+        music.receivePlayerClick()
+        await settle(music)
+        await music.pendingUpdate?.value
+        precondition(runner.calls.last(where: { !$0.contains("return {player position") })?.contains("return {name") == true,
+                     "Music title mismatch did not refresh")
+        music.stop()
+        precondition(!music.isWatchingPlayerClicks && music.pendingPositionSync == nil)
+        print("PASS Media matrix: same-track restart, delayed metadata, stopped, quit, wake recovery; Music position read, click resync and title mismatch")
         print("PASS Spotify position: unnotified backward/forward scrub corrected; no read at playback start; bounded end checks; paused/denied/mismatch safe")
         print("PASS Spotify: distinct IDs/durations, initial identity, cached restart, boundary seek, rapid play/pause, denied events")
         print("PASS Spotify artwork: duration before gated download; pause/cancel/stop/restart reject stale publication and cache mutation")
