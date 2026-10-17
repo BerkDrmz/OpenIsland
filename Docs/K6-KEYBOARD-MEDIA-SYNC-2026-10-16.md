@@ -1,4 +1,4 @@
-# OpenIsland — Klavye odağı ve medya konum eşitlemesi (2026-10-16)
+# OpenIsland — Klavye odağı ve medya konum eşitlemesi (2026-10-16, 2. tur 2026-10-17)
 
 Dal: `local/k5k6-perf-20261015` (yerel; `main`, uzak depo, kurulu `/Applications/OpenIsland.app` ve v0.1.0 değişmedi).
 Taban: K5 (`bb2c583` + rapor commit'leri, aday K5F). Yeni aday: `69c44fe` (K6C).
@@ -8,14 +8,16 @@ Taban: K5 (`bb2c583` + rapor commit'leri, aday K5F). Yeni aday: `69c44fe` (K6C).
 | Konu | Sonuç |
 |---|---|
 | Klavyeyle açılan adanın odak kaybı | Kök neden kanıtlandı, **düzeltildi** (`f62923c`) |
-| Spotify/Music: panel açık + iğneliyken oynatıcıda sarma | Olay güdümlü düzeltme (`69c44fe`); otomatik denetim PASS, **canlı sarma NOT_TESTED** |
+| Spotify/Music: panel açık + iğneliyken oynatıcıda sarma | Olay güdümlü düzeltme (`69c44fe`); **canlı PASS** (Spotify çubuğuna gerçek tıklama, 0,72–0,76 sn) |
+| Canlı testte bulunan 2 yeni Spotify hatası | Yanlış toplam süre (parça değişiminde 6,3 sn) ve uygulama düğmesiyle baştan başlatma — **düzeltildi** (`4df4507`), canlı PASS |
+| Hızlı sekme CPU | Profil: maliyet SwiftUI/AppKit yerleşim-çizim-odak işinde; görsel eşdeğer tek gerçek tekrar eden iş (LaunchServices başlık sorgusu) kaldırıldı (`dfac1bd`, −%0,6…−%0,9) |
 | 1/2/5 sn görünür doğrulama (yoklama) | Ölçüldü, **ürüne alınmadı** |
 | Medya senaryo matrisi | 14 senaryo deterministik PASS; canlı pasif parça geçişi PASS |
 | Ek hipotezler | 4 hipotez ölçüldü; hiçbiri ürüne alınacak kazanç vermedi (§5) |
 | Performans (80 ms / 650 ms / kompakt boşta) | K5 ile eşdeğer (§5) |
 
-Karar: **READY_FOR_REVIEW** — iki ürün düzeltmesi kanıtlı ve regresyonsuz; kullanıcı elle canlı sarma ve fareyle Notlar
-testleri NOT_TESTED (§7).
+Karar: **READY_FOR_REVIEW** — dört ürün düzeltmesi kanıtlı ve regresyonsuz. 80 ms için %25 CPU hedefi görsel/animasyon
+değiştirmeden **ulaşılamadı** (§9). Açık kalanlar §7.
 
 ## 2. Klavye odağı
 
@@ -200,10 +202,12 @@ Uygulamanın kendi kontrollü benchmark'ı (`profile-rapid`, 480 seçim; `idle-c
 | Fareyle Notlar'a tıklayıp yazma (canlı) | NOT_TESTED (kod yolu değişmedi) |
 | VoiceOver sesli gezinme | NOT_TESTED |
 | Spotify: panel açık + iğneli + oynatıcı önde sarma (deterministik) | PASS |
-| Spotify: aynı senaryo, kullanıcının elle sarmasıyla canlı | NOT_TESTED |
+| Spotify: aynı senaryo, Spotify çubuğuna gerçek tıklamayla canlı (2. tur) | PASS (0,72 / 0,76 sn) |
+| Spotify canlı: oynat/duraklat, baştan başlatma (uygulama düğmesi), parça değişimi + toplam süre, kompakt sarma + açılış, ayrılınca düzelme | PASS (§9) |
+| Spotify canlı: başka bir araçla (AppleScript) sarma/baştan başlatma, Spotify önde, tıklama yok | Bilinen sınır: sıfır sorguyla algılanamıyor; ayrılma/açılış/parça sonunda düzelir |
 | Medya senaryo matrisi (14 satır, §3) | PASS |
 | Canlı pasif parça geçişi ve doğruluk | PASS |
-| Music canlı (bu tur) | NOT_TESTED (önceki tur PASS) |
+| Music canlı (bu tur) | NOT_TESTED — Music kütüphanesinde çalınacak parça yok (önceki tur PASS) |
 | Uyku/uyanma canlı | NOT_TESTED (deterministik PASS) |
 | 1/2/5 sn yoklama deneyi | Ölçüldü, ürüne alınmadı |
 | H2 birleşik zaman çizelgesi | Ölçüldü, kazanç yok, ürüne alınmadı |
@@ -211,7 +215,9 @@ Uygulamanın kendi kontrollü benchmark'ı (`profile-rapid`, 480 seçim; `idle-c
 | Kompakt boşta | PASS (eşdeğer, iki modlu gürültü) |
 | `swift test` 179/28, tüm `check-*.sh`, K5Checks | PASS |
 | K4 (sekme ikon tonu, Mikser/Pano renk istisnaları) ve K5 (sabit başlık, `headerRowShift`, iskelet, aynı yay) | PASS — dokunulmadı; K5Checks ve TabIconTintCheck geçti |
-| GPU sayaçları / Animation Hitches (bu tur) | NOT_TESTED |
+| Animation Hitches K5F ↔ K6C (3 tur, n=6/6) | PASS (eşdeğer, §9) |
+| GPU sayaçları | NOT_TESTED (süreç başına GPU yüzdesi yok) |
+| Uzun süreli RAM (3 koşu, 10–20 dk) | PASS — sızıntı yok; tek birikim SwiftUI `TextField` gözlemcileri (~60 B/Nook açılışı) |
 | Kurulu uygulama, `main`, uzak depo, v0.1.0 | Değişmedi |
 
 ## 8. Commit'ler ve geri alma
@@ -221,6 +227,66 @@ Uygulamanın kendi kontrollü benchmark'ı (`profile-rapid`, 480 seçim; `idle-c
 | `f62923c` | Kapanmış ada key odağını geri almaz | `git revert f62923c` |
 | `69c44fe` | Görünür panelde oynatıcı tıklamasından sonra konum eşitlemesi | `git revert 69c44fe` |
 | `a799df0` | Medya senaryo matrisi denetimleri (yalnızca denetim kodu) | `git revert a799df0` |
+| `4df4507` | Spotify'ın sonradan düzelttiği süre + uygulama komutundan sonra tek okuma | `git revert 4df4507` |
+| `dfac1bd` | Başlatıcı başlıklarını simgelerle aynı ömürde önbelleğe alma | `git revert dfac1bd` |
+| `df8d552` | Yalnızca geliştirici: `OPENISLAND_BENCHMARK_PASSES` | `git revert df8d552` |
 
 Kanıtlar özel klasörde (`OpenIsland-Evidence/20261015-k5k6/{kbtrace,pollexp,runs}`); kişisel medya/takvim metni içerir,
 paylaşılmaz.
+
+## 9. İkinci tur (17 Ekim): canlı testler, CPU ve RAM
+
+### Canlı Spotify (kullanıcı izniyle AppleScript + Spotify çubuğuna gerçek tıklama; başlangıç durumu geri yüklendi)
+
+| Senaryo | Önce (K6C) | Sonra (`4df4507`) |
+|---|---|---|
+| Panel açık + iğneli, Spotify çubuğuna tıklama (%25 / %70) | 0,70 / 0,71 sn | 0,72 / 0,76 sn |
+| Oynat/duraklat (düğme) | 0,37 / 0,09 sn | 0,37 / 0,13 sn; duraklatınca süre donuk |
+| Adanın "Önceki parça" düğmesiyle baştan başlatma | — | **0,73 sn** (önce düzelmiyordu: bildirim yok) |
+| Parça değişimi ve geri dönüş (geçen + toplam süre) | **Toplam süre 6–7 sn yanlış kalıyordu** | 1,81 / 1,23 sn |
+| Kompakt sarma, 12 sn sonra panel açılışı | — | 0,25 sn |
+| AppleScript ile sarma/baştan başlatma, Spotify önde değil, tıklama yok | 15 sn içinde düzelmedi | Aynı (bilinen sınır); Spotify'dan ayrılınca 0,25 sn |
+
+Kök neden (yeni süre hatası): Spotify yeni parçada önce bildirimdeki süreyi verir, ≈0,45–0,5 sn sonra gerçek süreyi
+bildirimsiz düzeltir (3/3 parçada tam 6,286 sn fark; kontrol API'si de ilk anda eski değeri döndürür). Düzeltme: yeni ve
+çalan Spotify parçasında 1,5 sn sonra tek okuma; konum + süre aynı Apple Event'te. Uygulamanın kendi medya komutlarından
+sonra bildirim gelmezse tek okuma (kuşak komuttan önce eşzamanlı yakalanır; denetim bir yarışı yakaladı ve düzeltildi).
+Parça başına 1, komut başına en çok 1 Apple Event; yoklama yok. Music: kütüphanede parça olmadığı için bu turda canlı
+denenemedi.
+
+### Animation Hitches (80 ms, 10 sn, A/B/B/A × 3, kirli koşu yok)
+
+| | Kare/sn | Kare ömrü p50 | p95 | Hitch/sn | En uzun hitch |
+|---|---|---|---|---|---|
+| K5F | 57,87 [57,2–59,2] | 45,99 ms | 61,27 ms | 3,52 [3,04–3,90] | 25,0 ms |
+| K6C | 57,25 [56,8–57,8] | 45,94 ms | 61,69 ms | 3,78 [3,44–4,46] | 30,5 ms |
+
+Aralıklar örtüşüyor; eşdeğer.
+
+### Hızlı sekme CPU: profil ve denemeler
+
+Güncel aday profili (80 ms, 6 sekme): seçim başına ana thread →Notlar 44,5, →Pano 40,2, →Nook 34,9, →Raf 32,6, →Sistem
+32,2, →Medya 23,8 ms. Bizim kodumuzun payı her biri %1'in altında; maliyet SwiftUI yerleşimi, CA commit ve odak işinde.
+
+| Deney | Sonuç | Karar |
+|---|---|---|
+| Başlatıcı başlığı önbelleği (Notlar'da LaunchServices `displayName` %3,2) | notes↔nook −%0,94, 6 sekme −%0,62 talimat/seçim (n=4/4, aralıklar kısmen örtüşüyor) | **Kabul** (`dfac1bd`), görünüm/ipucu/AX etiketi aynı |
+| X1: içerik çerçevesinin yerleşim animasyonunu kapatma (FocusBridge üst sınırı, yalnız tanı) | Talimat +%3,1 (daha kötü), görsel değişir | Ret — FocusBridge %10,6 bu yolla düşmüyor |
+| Pano: 40 öğe × ortalama 10 KB metnin tek satırlık ölçümü (%28–30) | Önizleme kısaltma önceki turda 26 piksel fark verdi; sabit satır yüksekliği yedek fontlarda değişir | Tekrarlanmadı |
+| ColorSync / RenderBox yol çizimi (%2–4), `.help` ipuçları (%2–3), `NSSlider` yerleşimi (%1,7) | Çerçeve içi veya özellik | Değiştirilmedi |
+
+80 ms'de %25 altı CPU hedefi bu turda da **ulaşılmadı**. Kalan büyük kalemler (FocusBridge, metin dizgileme, yerleşim
+animasyonu) görünümü veya animasyonu değiştirmeden azaltılamıyor; bu istemin yasakladığı bir ödünleşim.
+
+### Uzun süreli RAM
+
+| Koşu | Süre / seçim | Ayak izi |
+|---|---|---|
+| AX ile sürülen, K5F ve aday paralel | 20 dk / ~3500 | Her ikisinde doğrusal artış: 51,8 → 57,7 ve 51,7 → 59,2 MiB |
+| Uygulama içi döngü (AX yok), 150 ms | 11 dk / 4200 | 50,4 → 55,0 MiB; malloc toplamı −1,6 MB (artış malloc dışı) |
+| Uygulama içi döngü + `vmmap`, 150 ms | 7,5 dk / 3000 | **Kararlı**: 49,2 → 51,0 → 49,5 MiB |
+
+`heap` + `MallocStackLogging` ile tek doğrulanmış birikim: SwiftUI'nin Nook'taki "Yeni anımsatıcı" `TextField`'ı pencereye
+her takıldığında eklediği `NSNotificationCenter` gözlemcileri (`AppKitTextField.viewDidMoveToWindow →
+AppKitTextInputSource.updateObservation`); metin alanı nesneleri birikmiyor. Boyut ≈60 bayt/Nook açılışı (4200 seçimde
+≈0,25 MB); çerçeve davranışı. Ayak izindeki artış her koşuda görülmüyor ve tabanda da var; sızıntı olarak doğrulanmadı.
