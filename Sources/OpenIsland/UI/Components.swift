@@ -70,12 +70,38 @@ struct IslandIconButton: View {
                 .scaleEffect(isHovering && !reduceMotion ? 1.06 : 1)
                 .contentTransition(.symbolEffect(.replace))
                 .contentShape(Circle())
+                .restoringLayoutAnimation()
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .help(label)
         .onHover { hovering in
             withAnimation(IslandMotion.control) { isHovering = hovering }
+        }
+    }
+}
+
+/// `layoutWithoutAnimation()` ile ertelenen animasyon (yalnız o transaction'da dolu).
+private struct DeferredLayoutAnimation: TransactionKey {
+    static let defaultValue: Animation? = nil
+}
+
+extension View {
+    /// Bu görünümün (ve içindekilerin) yerleşim değişimini animasyonsuz uygular; transaction'ın animasyonu
+    /// `restoringLayoutAnimation()` ile işaretli alt görünümlerde sürer. Böylece görünen hareket aynı eğriyle canlanırken
+    /// odak, erişilebilirlik ve isabet geometrisi son konuma tek adımda geçer (SwiftUI odak köprüsü her karede yeniden
+    /// kurulmaz).
+    func layoutWithoutAnimation() -> some View {
+        transaction { transaction in
+            transaction[DeferredLayoutAnimation.self] = transaction.animation
+            transaction.animation = nil
+        }
+    }
+
+    /// `layoutWithoutAnimation()` altında ertelenen animasyonu geri yükler; başka transaction'larda etkisizdir.
+    func restoringLayoutAnimation() -> some View {
+        transaction { transaction in
+            if let animation = transaction[DeferredLayoutAnimation.self] { transaction.animation = animation }
         }
     }
 }

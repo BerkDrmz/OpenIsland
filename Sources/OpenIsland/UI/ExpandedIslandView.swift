@@ -58,10 +58,14 @@ struct ExpandedIslandView: View {
             // Başlık satırı gövdenin morph eden çerçevesinin dışında, sabit kutuda: sekme geçişinde düğmelerin
             // yerleşimi değişmez (her yay karesinde satır, odak döngüsü, izleme alanları yeniden kurulmaz).
             // Dar gövdelerde özgün yığının ürettiği kayma, aynı transaction'da canlanan ofsetle birebir üretilir.
+            // Kaymanın yerleşimi (odak, erişilebilirlik, isabet) tek adımda geçer; düğme etiketleri aynı animasyonla
+            // kayar (`layoutWithoutAnimation`). Ölçüldü: canlanan yerleşim, odaklanabilir düğmeleri her yay karesinde
+            // taşıdığı için SwiftUI her karede bütün key-view döngüsünü ve odak vekillerini yeniden kuruyordu.
             header(metrics: metrics, visible: visible)
                 .padding(.horizontal, headerPadding)
                 .frame(width: headerPlacement.boxWidth, height: metrics.notchSize.height)
                 .offset(x: headerPlacement.shift)
+                .layoutWithoutAnimation()
 
             ZStack(alignment: .top) {
                 // Görünmez, etkileşimsiz iskelet: özgün yapıda başlık bu yığının içindeydi ve dar gövdelerde gövdeden
@@ -246,6 +250,7 @@ private struct TabButton: View, Equatable {
                     }
                 }
                 .contentShape(Capsule())
+                .restoringLayoutAnimation()
         }
         .buttonStyle(.plain)
         .help(item.title)
