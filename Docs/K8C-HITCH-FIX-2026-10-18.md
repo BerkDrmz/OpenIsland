@@ -5,10 +5,9 @@ Dal: `local/k8-focus-churn-20261018` (worktree `OpenIsland-k8-dev`), başlangı�
 şimdi K8c durumunda). Kanıt: `OpenIsland-Evidence/20261017-k7` (`h9/`, `prof/*-h9*`, `runs/*-h9*`, `vis/*-h9*`,
 `kb/*-h9*`). `/Applications/OpenIsland.app`, `main`, uzak depo, v0.1.0 ve kullanıcı verileri değişmedi; push yok.
 
-**Karar: K8c → READY_FOR_REVIEW (bir açık test dışında).** 80 ms'de hitch tabana göre **−%91** (57,3 → 5,0), K8b'ye
-göre −%95; talimat ve süreç enerji tahmini K8'den de düşük. AX (12/12), klavye (Klavyeyle gezinme kapalı), testler ve
-7 `check-*.sh` PASS. Açık: tam klavye erişimi **açıkken** klavye testi (ayar değişikliği kullanıcı onayı gerektiriyor,
-NOT_TESTED) ve iki küçük ödünleşim (§6).
+**Karar: K8c → READY_FOR_REVIEW.** 80 ms'de hitch tabana göre **−%91** (57,3 → 5,0), K8b'ye göre −%95; talimat ve
+süreç enerji tahmini K8'den de düşük. AX (12/12), klavye (tam klavye erişimi kapalı ve açık, 145/145), `swift test` ve
+`check-*.sh` PASS (`check-controls` için §7 notu). Kalan ödünleşimler §5–6.
 
 ## 1. Hipotezin sınanması: hitch nerede ve neden
 
@@ -55,6 +54,8 @@ BASE 56, 62, 54, 48 / **K7D 5, 6, 3, 7** hitch (−%90). K7-P'nin önceki engell
 | `PanelHostingView` | `isAccessibilityElement = false`, `acceptsFirstMouse = true`, safe-area sıfır | Ara grup yok; kök host'la aynı tıklama/safe-area davranışı |
 | `PanelAXOrder` | Sütunlara azalan `accessibilitySortPriority` (Pano, Notlar, Nook medya, Sistem) | Ayrı host en üst düzeyi konuma göre sıralıyor; öncelik ağaç sırasını geri getiriyor |
 | Tembel key-view döngüsü | Sekme değişiminde yalnız "bayat" işareti; Tab/Shift-Tab pencereye ulaşmadan ve panel key olmadan hemen önce bir kez `recalculateKeyViewLoop()` | Yeniden hesaplama artık ilk kareyi geciktirmiyor; hızlı geçişte hiç koşmuyor |
+| Tab sırası (§3) | Kök host halkaya önce platform görünümlerini (panel sahnesi), sonra başlık vekillerini koyuyor; sahne bölümü Tab'dan hemen önce halkanın sonuna taşınır (`nextKeyView`) | Tabandaki sıra: başlık → panel |
+| AX odağı (§3) | İlk yanıtlayıcı panel host'unun SwiftUI odak vekiliyse `NotchPanel.accessibilityFocusedUIElement` host'un odaklı öğesini döndürür | AX'te görünmeyen host yüzünden odak kök kapsayıcıya düşüyordu |
 
 Denenen AX yolları: kök `.contain` (fazladan grup), `.contain` + host'ta çocukları düzleştirme (ağaç aynı, ama
 öğelerin `AXParent`'ı görünmeyen kapsayıcı: tabanda 0, burada 3–17 uyuşmazlık → VoiceOver riski, reddedildi), yalnız
@@ -67,7 +68,7 @@ host'u gizleme (Medya/Raf aynı, sütunlu panellerde sıra farklı). Seçilen yo
 | AX ağacı (rol, etiket, yardım, seçili, sıra; 6 sekme × soğuk/dönüş) | **12/12 birebir aynı** |
 | AX ebeveyn zinciri ve isabet testi (`harness10/axparent`) | 6 sekmede tabanla aynı (0 uyuşmazlık; Pano'daki 2 isabet dışı satır tabanda da aynı) |
 | Klavye, tam klavye erişimi kapalı (⌃⌥⌘J, 5 sekme × 14 Tab + 14 Shift-Tab) | PASS: 145 adım beklenen referansla (önceki FBc-kl) aynı; Nook alanına ve Notlar düzenleyicisine Tab ile giriliyor. Not: bu turda tanı tabanı FBc iki panelde metin alanına giremedi (K8 raporu §7.2'deki zamanlama açığı tabanda da var) |
-| Klavye, tam klavye erişimi açık | **NOT_TESTED** — "Klavyeyle gezinme" ayarı kapalı; değiştirmek kullanıcı onayı gerektiriyor. K7Z'de bu kipte odak "OpenIsland" grubunda kalmıştı; K8c'de host AX'te görünmez ve döngü Tab'dan hemen önce kuruluyor, ama doğrulanmadı |
+| Klavye, tam klavye erişimi açık (kullanıcı ayarı açtı; `fka=true`) | İlk K8c'de **FAIL**: (1) ilk Tab başlık yerine panele gidiyordu (halka aynı, giriş noktası farklı); (2) panelin üst düzey öğeleri odaktayken AX odaklı öğe `AXGroup|OpenIsland` bildiriyordu (öğenin `AXFocused`'ı doğruyken; K7Z'deki belirti). Düzeltmeden sonra **3 turun 3'ünde FBc ve K8c 145/145 adım referansla (`kb/FBc-fka`) birebir aynı**: başlık, Medya, Nook medya/takvim/anımsatıcılar, Notlar menüsü ve düzenleyici, Pano renkleri. Denenen ve reddedilen: host'un AX alt ağacında `AXFocused` araması (SwiftUI `AccessibilityNode` Swift'te `NSAccessibilityProtocol`'e dönüşmüyor; yeniden girişte özyineleme çökmesi), her durumda host'un odaklı öğesini döndürmek (açılır düğmede etiketsiz ham görünüm) |
 | Pencere görüntüsü (6 sekme × soğuk/dönüş) | Medya/Raf/Pano/Nook **0 piksel**; Sistem yalnız canlı CPU/bellek çubukları (taban–taban koşularında da aynı bölge); **Notlar 122 piksel, ≤3/255** başlatıcı simgelerinin içinde dağınık (kayma değil, gözle görülmez). Elenen nedenler: sekme sırası, `scaleEffect`, `compositingGroup`, `wantsLayer`; kök neden belirlenmedi |
 | Başlık animasyonu | Değişmedi (K8 kare eşdeğerliği geçerli); K5Checks PASS (2.216 ara kare, 0 uyuşmazlık), TabIconTint ≤1/255 |
 | Panel geçişi | `PanelStageCheck` (gerçek pencere) PASS: ilk gösterim opak ve son dikdörtgende, eski host donuk söner ve çıkar, yeniden kullanımda `onAppear`, sönme sırasında dönüş, isabet testi, söküm, yeniden açılış taze. Saydamlık eğrisi/süresi SwiftUI geçişiyle aynı (easeOut 0,12/0,15/0,10 s, easeIn 0,08/0,10/0,06 s) |
@@ -130,7 +131,9 @@ artırıyor (650 ms'de CPU süresi +%16; K7V'de talimat +%31); eşdeğer olmadı
 
 ## 6. Kalan riskler
 
-1. Tam klavye erişimi açıkken klavye zinciri doğrulanmadı (ayar değişikliği için onay gerekiyor).
+1. Tab sırası düzeltmesi SwiftUI'nin kurduğu `nextKeyView` bağlarını yeniden düzenler (public API); SwiftUI halkayı yeniden
+   kurarsa bir sonraki Tab'da yeniden uygulanır. Tam klavye erişimi kapalıyken son derlemeyle klavye testi tekrar edilmedi
+   (bu turda ayar açıktı); önceki K8c derlemesinde PASS.
 2. WindowServer CPU'su hızlı geçişte +3–6 puan (§5); normal hızda (650 ms) fark yok. Sistem düzeyi net enerji etkisi
    yönetici izni olmadan ölçülemedi.
 3. Notlar başlatıcı simgelerinde 122 piksel ≤3/255 fark (kök neden bulunamadı; gözle görülmez).
@@ -143,7 +146,7 @@ artırıyor (650 ms'de CPU süresi +%16; K7V'de talimat +%31); eşdeğer olmadı
 | Kapsam | Sonuç |
 |---|---|
 | `swift test` | 179 test / 28 suite PASS |
-| `check-*.sh` (7; `check-controls` ekran açık, gerçek pencere + HID) | 7/7 PASS (`PanelStageCheck` dahil) |
+| `check-*.sh` (7; `check-controls` ekran açık, gerçek pencere + HID) | 7/7 PASS (`df99809`, tam klavye erişimi kapalıyken; `PanelStageCheck` dahil). Son durumda 6/6 PASS; `check-controls` tam klavye erişimi **açıkken** hem K8c'de hem tabanda (`08a3d53`) aynı yerde duruyor (test uygulamasının kırmızı kapatma düğmesine HID tıklaması); derlediği kaynaklar K8c'de değişmedi → ortam kaynaklı, ayar kapatılınca tekrar edilmeli |
 | K5Checks, TabIconTintCheck | PASS |
 | AX, piksel, klavye | §3 |
 
@@ -152,7 +155,9 @@ artırıyor (650 ms'de CPU süresi +%16; K7V'de talimat +%31); eşdeğer olmadı
 | Commit | İçerik |
 |---|---|
 | `df99809` | K8c: kalıcı panel host'ları, ağaç sıralı erişilebilirlik, tembel key-view döngüsü (10 dosya) |
-| (bu commit) | Bu rapor |
+| `3774a40` | Bu rapor (ilk sürüm) |
+| `9424041` | Tam klavye erişimi: Tab sırası ve AX odağı düzeltmesi, `check-performance` derleme satırı |
+| (bu commit) | Rapor güncellemesi |
 
-Geri alma: `git revert df99809` (K8b'ye döner). Reddedilen deneyler yalnız kanıt klasöründe: `h9/H4-clip-lazy.diff`
+Geri alma: `git revert 9424041 df99809` (K8b'ye döner; `9424041` tek başına geri alınabilir, `df99809` tek başına alınmamalı). Reddedilen deneyler yalnız kanıt klasöründe: `h9/H4-clip-lazy.diff`
 (Pano önizleme öneki + `ClipPreviewCheck`), tanı derlemeleri `HX`, `HNS`/`BNS`, `H7b`.
