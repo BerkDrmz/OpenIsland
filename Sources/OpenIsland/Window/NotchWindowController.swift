@@ -27,6 +27,7 @@ final class NotchWindowController {
     private(set) var screen: NotchScreen
     let model: IslandViewModel
     let panel = NotchPanel()
+    private var keyViewLoopRefreshPending = false
     let sensor = NotchSensorPanel()
     /// Ada genişlediğinde (ör. pano geçmişini tazelemek için).
     var onExpanded: (() -> Void)?
@@ -66,6 +67,7 @@ final class NotchWindowController {
         contextMenu.onClose = { [weak self] in self?.reconcilePointerExit() }
         model.onPhaseChange = { [weak self] old, new in self?.phaseDidChange(from: old, to: new) }
         model.onLayoutChange = { [weak self] layout in self?.layoutDidChange(to: layout) }
+        model.onTabChange = { [weak self] in self?.scheduleKeyViewLoopRefresh() }
 
         placeWindows()
         panel.orderFrontRegardless()
@@ -204,6 +206,20 @@ final class NotchWindowController {
     }
 
     // MARK: - Yerleşim değişimleri (pencere boyutu değişmez)
+
+    /// Sekme değişiminde yeni panelin platform görünümleri (metin alanları, metin düzenleyici) aynı güncellemede
+    /// pencereye takılır; SwiftUI key-view döngüsünü ise seçim karesinde, onlar takılmadan önce kurar. Döngü bir
+    /// sonraki run-loop turunda bir kez yeniden hesaplanır (AppKit'in belgelenmiş yolu; SwiftUI odak köprüsünü
+    /// `_recursiveSetDefaultKeyViewLoop` ile günceller). Odak taşınmaz, girdi yönlendirilmez. Hızlı geçişlerde birleşir.
+    private func scheduleKeyViewLoopRefresh() {
+        guard !keyViewLoopRefreshPending else { return }
+        keyViewLoopRefreshPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.keyViewLoopRefreshPending = false
+            self.panel.recalculateKeyViewLoop()
+        }
+    }
 
     private func layoutDidChange(to layout: IslandLayout) {
         targetLayout = layout

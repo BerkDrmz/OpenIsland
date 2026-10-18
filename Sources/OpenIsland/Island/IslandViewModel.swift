@@ -37,6 +37,8 @@ final class IslandViewModel {
     @ObservationIgnored var onPhaseChange: ((_ old: IslandPhase, _ new: IslandPhase) -> Void)?
     /// Hedef yerleşim değiştiğinde (girdi sensörü ve hover bölgesi güncellenir).
     @ObservationIgnored var onLayoutChange: ((_ new: IslandLayout) -> Void)?
+    /// Genişletilmiş adada sekme değişti (yeni panel içeriği bu güncellemede kurulur).
+    @ObservationIgnored var onTabChange: (() -> Void)?
     /// Yalnızca tanılama modunda: SwiftUI'nin adayı çizdiği dikdörtgen (hosting view koordinatları).
     @ObservationIgnored var onRenderedFrame: ((CGRect) -> Void)?
 
@@ -114,6 +116,7 @@ final class IslandViewModel {
         let layoutChanged = newLayout != layout
         if layoutChanged || newPresentation != presentation || next.hud != hud || next.notice != notice || next.context.isPinned != isPinned {
             let isTabSwitch = presentation.isExpanded && newPresentation.isExpanded
+            let tabChanged = isTabSwitch && newPresentation.expandedTab != presentation.expandedTab
             let animation: Animation? = isTabSwitch
                 ? (layoutChanged ? IslandMotion.resize(style: style) : nil)
                 : IslandMotion.morph(from: presentation, to: newPresentation, style: style)
@@ -130,6 +133,7 @@ final class IslandViewModel {
                 apply()
             }
             if layoutChanged { onLayoutChange?(newLayout) }
+            if tabChanged { onTabChange?() }
         }
 
         if next.isRelaxing != isRelaxing {
