@@ -4,6 +4,8 @@ Dal: `local/k8-focus-churn-20261018` (worktree `OpenIsland-k8-dev`), başlangı�
 `OpenIsland-k7-exp` (tanı), `OpenIsland-k7d-exp` (K7-P + K8). Kurulu `/Applications/OpenIsland.app`, `main`, uzak depo,
 v0.1.0 ve kullanıcı verileri değişmedi; push yok.
 
+**Güncelleme:** 80 ms hitch regresyonu K8c (`df99809`) ile giderildi; bkz. `Docs/K8C-HITCH-FIX-2026-10-18.md`.
+
 **Karar: K8 → NEEDS_FIXES.** Talimat −%12–16, enerji tahmini −%15–28, piksel/AX/klavye tabanla birebir aynı,
 bütün testler PASS; ancak 80 ms hızlı geçişte Animation Hitches **+%11,6** (650 ms'de fark yok), "80/50 ms'de
 kötüleşme yok" ölçütünü karşılamıyor (§7.1). **K7-P (K7D) → EXPERIMENTAL_ONLY** (ilk kare gecikmesini yarıya
