@@ -4,9 +4,10 @@ Dal: `local/k8-focus-churn-20261018` (worktree `OpenIsland-k8-dev`), başlangı�
 `OpenIsland-k7-exp` (tanı), `OpenIsland-k7d-exp` (K7-P + K8). Kurulu `/Applications/OpenIsland.app`, `main`, uzak depo,
 v0.1.0 ve kullanıcı verileri değişmedi; push yok.
 
-**Karar: K8 → READY_FOR_REVIEW (ekran açıkken AX/klavye/ekran görüntüsü/hitch doğrulaması bekliyor, §7).
-K7-P (K7D) → EXPERIMENTAL_ONLY** (ilk kare gecikmesini yarıya indiriyor, ama AX sırası ve klavye doğrulanmadı;
-80/50 ms'de CPU süresi +%11–12).
+**Karar: K8 → NEEDS_FIXES.** Talimat −%12–16, enerji tahmini −%15–28, piksel/AX/klavye tabanla birebir aynı,
+bütün testler PASS; ancak 80 ms hızlı geçişte Animation Hitches **+%11,6** (650 ms'de fark yok), "80/50 ms'de
+kötüleşme yok" ölçütünü karşılamıyor (§7.1). **K7-P (K7D) → EXPERIMENTAL_ONLY** (ilk kare gecikmesini yarıya
+indiriyor; AX sırası açık; 80/50 ms'de CPU süresi +%11–12).
 
 ## 1. Talimat azalması neden CPU süresine yansımıyor
 
@@ -190,10 +191,45 @@ lisanssız/GPL kaynaklardan yalnız mekanizma öğrenildi.
 | K4 TabIconTintCheck | PASS (≤1/255) |
 | Başlık animasyonu kare eşdeğerliği | PASS (gürültü tabanı içinde, §3) |
 | KeyViewProxy churn | Bütün çiftlerde vekil başına 1 |
-| Pencere düzeyi ekran görüntüsü + AX ağacı (6 sekme) | **BEKLİYOR** (ekran kilitli; AX bu durumda pencereleri döndürmüyor) |
-| Klavye Tab/Shift-Tab | **BEKLİYOR** ("Klavyeyle gezinme" açık + ekran kilidi açık gerekli) |
-| Animation Hitches (ekran açık) | **BEKLİYOR** |
+| Pencere düzeyi ekran görüntüsü (6 sekme × soğuk/dönüş, BASE/K8) | PASS: 10/12 0 piksel; Sistem'deki 2 fark yalnız canlı CPU/bellek değerleri (satır ≥ 121, başlık bölgesi aynı) |
+| AX ağacı (rol, etiket, yardım, seçili, sıra; 12 döküm) | PASS: 12/12 birebir aynı |
+| Klavye, tam klavye erişimi açık (⌃⌥⌘J ile açılış, 5 sekme × 14 Tab + 14 Shift-Tab) | PASS: 145 adımın tamamı tabanla aynı |
+| Klavye, tam klavye erişimi kapalı (Tab ile metin alanına giriş) | İlk K8'de **FAIL** (Nook alanı ve Notes düzenleyiciye girilemiyordu) → `2a8d5cf` ile PASS (§7.2) |
+| `check-controls` (ekran açık) | PASS (taban ve K8; boşta %0,028–0,029) |
+| Animation Hitches (ekran açık) | 650 ms eşdeğer; **80 ms +%11,6** (§7.1) |
 | Spotify/Music | K8 medya koduna dokunmuyor; K6 sonuçları geçerli |
+
+### 7.1 Animation Hitches (ekran açık, 10 s kayıt, A/B/B/A)
+
+| Karşılaştırma (80 ms) | Hitch sayısı | Ortalama | Hitch süresi toplamı | Kare/s |
+|---|---|---|---|---|
+| BASE / K8 (n=4/4) | 60, 51, 54, 59 / 70, 54, 61, 65 | 56,0 / 62,5 (**+%11,6**) | 946 / 1125 ms | 57,2 / 56,4 |
+| K8 / K8b (n=4/4) | 66, 73, 71, 68 / 64, 73, 69, 64 | 69,5 / 67,5 | 1238 / 1217 ms | 56,5 / 56,3 |
+| BASE / K8b, 650 ms (n=2/2) | 14, 11 / 13, 13 | 12,5 / 13,0 | 408 / 383 ms | 50,7 / 50,8 |
+
+Aralıklar örtüşüyor, ama K8 dört eşleşmenin dördünde de tabanın üstünde. Key-view düzeltmesi hitch'e etki etmiyor.
+İlk kare sayaçlarıyla tutarlı açıklama: toplam iş azalınca seçim anındaki kurulum patlaması daha sık düşük frekansta
+veya E-çekirdekte yürüyor ve bazen kare süresini kaçırıyor (hitch en çok 33,3 ms = 2 kare). Uygulama düzeyinde
+çekirdek seçimi zorlanamaz; yol, patlamanın kendisini küçültmek (K7-P ilk kare talimatını %50–77 azaltıyor).
+
+### 7.2 Klavye regresyonu ve düzeltmesi
+
+İlk K8'de tam klavye erişimi kapalıyken (varsayılan) Tab, Nook'taki metin alanına ve Notes düzenleyicisine
+giremiyordu. Tanı derlemesindeki key-view zinciri dökümü: K8'de zincir bu panellerin platform görünümleri
+(`AppKitTextField`, `PlatformTextView`) olmadan kuruluyor. SwiftUI döngüyü seçim karesinde, yeni panelin platform
+görünümleri pencereye takılmadan önce kuruyor; tabanda başlık kayması döngüyü her yay karesinde yeniden kurduğu için
+bu görünümler tesadüfen sonradan zincire giriyordu (kaymanın değişmediği geçişlerde aynı açık tabanda da olabilir).
+Düzeltme (`2a8d5cf`): sekme değişiminde bir sonraki run-loop turunda bir kez `recalculateKeyViewLoop()` (AppKit'in
+belgelenmiş yolu; SwiftUI odak köprüsünü `_recursiveSetDefaultKeyViewLoop` ile günceller; odak taşımaz, girdi
+yönlendirmez; hızlı geçişte birleşir). Maliyet K8'e göre talimat +%0,7…+%4, CPU süresi ±%1, hitch değişmedi.
+
+| Aralık | K8 → K8b talimat | CPU süresi | Enerji tahmini |
+|---|---|---|---|
+| 650 ms | +%0,65 | +%1,1 | −%2,5 |
+| 150 ms | +%3,4 | +%0,5 | +%5,7 |
+| 80 ms | +%3,2 | −%0,4 | +%4,9 |
+| 50 ms | +%4,0 | −%2,2 | +%7,4 |
+| 80 ms, 480 seçim | +%3,2 | −%0,3 | +%3,8 |
 
 Olay: AX ağacı aracı kilitli ekranda döngülü bir ağaçta sonsuz çıktı üretti (15 dosya × 2,7 GB, yalnız kendi kanıt
 klasörümde). Süreçler durduruldu, dosyalar silindi; araca derinlik/öğe sınırı ve döngü denetimi, betiğe 5 MB çıktı
@@ -204,15 +240,17 @@ sınırı eklendi.
 | Commit | İçerik |
 |---|---|
 | `60c1f27` | K8: başlık kaymasının yerleşimi tek adımda, etiketleri canlı (`Components.swift`, `ExpandedIslandView.swift`) |
-| (bu rapor) | Belge |
+| `de7b322` | Rapor (ilk sürüm) |
+| `2a8d5cf` | K8: sekme değişiminden sonra key-view döngüsünü bir kez yeniden kur (`IslandViewModel.swift`, `NotchWindowController.swift`) |
+| (bu güncelleme) | Rapor: canlı doğrulama, hitch, klavye |
 
-Geri alma: `git revert 60c1f27` (iki dosya, 31 satır). K7D yalnız `OpenIsland-k7d-exp` deney ağacında ve
+Geri alma: `git revert 2a8d5cf 60c1f27` (dört dosya, 51 satır); `2a8d5cf` tek başına geri alınmamalı. K7D yalnız `OpenIsland-k7d-exp` deney ağacında ve
 `apps/K7D.diff` olarak duruyor; commit'lenmedi.
 
 ## 9. Kalan riskler ve sonraki adım
 
-1. Ekran açıkken: 6 sekme ekran görüntüsü + AX (BASE/K8), klavye Tab/Shift-Tab (BASE/K8), Animation Hitches,
-   `check-controls`.
+1. 80 ms hitch artışı (+%11,6): ürüne alınmadan önce giderilmeli. Aday yollar: seçim anındaki kurulum patlamasını
+   küçültmek (K7-P'nin kalıcı host'ları ya da panel bazında mount maliyeti), ölçümü daha uzun kayıtlarla tekrarlamak.
 2. K8 transient: canlanma süresince (≤ 0,5 s) düğmenin isabet/AX çerçevesi son konumda, görünen etiket ≤ 3 pt
    geride. Durağan halde birebir aynı.
 3. İkinci aşama hedefi: panel kurulumu (ilk 30 ms; AttributeGraph %30, CA commit %18, metin %12,6, platform
