@@ -55,6 +55,33 @@ final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { acceptsKeyFocus }
     override var canBecomeMain: Bool { false }
 
+    /// Sekme değişiminden beri key-view döngüsü bayat mı (yeni panelin platform görünümleri döngüye girmemiş olabilir).
+    private var keyViewLoopIsStale = false
+
+    /// Döngüyü hemen yeniden kurmak yerine bayat işaretler. Döngüyü yalnız klavyeyle gezinme kullanır: Tab/Shift-Tab
+    /// pencereye ulaşmadan ve panel key olmadan hemen önce bir kez `recalculateKeyViewLoop()` çağrılır (AppKit'in
+    /// belgelenmiş yolu; SwiftUI odak köprüsünü `_recursiveSetDefaultKeyViewLoop` ile günceller). Odak taşınmaz.
+    func invalidateKeyViewLoop() {
+        keyViewLoopIsStale = true
+    }
+
+    private func refreshKeyViewLoopIfStale() {
+        guard keyViewLoopIsStale else { return }
+        keyViewLoopIsStale = false
+        recalculateKeyViewLoop()
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        // 48 = Tab (kVK_Tab); Shift/Control ile birlikte de aynı tuş kodu.
+        if event.type == .keyDown, event.keyCode == 48 { refreshKeyViewLoopIfStale() }
+        super.sendEvent(event)
+    }
+
+    override func becomeKey() {
+        refreshKeyViewLoopIfStale()
+        super.becomeKey()
+    }
+
     override func cancelOperation(_ sender: Any?) {
         onEscape?()
     }

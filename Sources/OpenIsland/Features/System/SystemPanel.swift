@@ -11,10 +11,13 @@ struct SystemPanel: View {
         VStack(alignment: .leading, spacing: IslandLayoutEngine.System.sectionGap) {
             HStack(alignment: .top, spacing: IslandLayoutEngine.columnGap) {
                 TemperatureColumn(system: system).frame(width: widths[0], height: IslandLayoutEngine.System.columnHeight, alignment: .topLeading)
+                    .accessibilitySortPriority(PanelAXOrder.first)
                 Rectangle().fill(IslandPalette.separator).frame(width: 0.5, height: IslandLayoutEngine.System.columnHeight)
                 UsageColumn(system: system).frame(width: widths[1], height: IslandLayoutEngine.System.columnHeight, alignment: .topLeading)
+                    .accessibilitySortPriority(PanelAXOrder.second)
                 Rectangle().fill(IslandPalette.separator).frame(width: 0.5, height: IslandLayoutEngine.System.columnHeight)
                 ControlsColumn(system: system).frame(width: widths[2], height: IslandLayoutEngine.System.columnHeight, alignment: .topLeading)
+                    .accessibilitySortPriority(PanelAXOrder.third)
             }
             Rectangle().fill(IslandPalette.separator).frame(height: 0.5)
             StorageSection(system: system).frame(height: IslandLayoutEngine.System.storageHeight, alignment: .top)

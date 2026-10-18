@@ -20,6 +20,7 @@ struct NotesPanel: View {
                     .background(RoundedRectangle(cornerRadius: IslandSpacing.cardRadius - 4, style: .continuous).fill(IslandPalette.fill))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilitySortPriority(PanelAXOrder.first)
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {

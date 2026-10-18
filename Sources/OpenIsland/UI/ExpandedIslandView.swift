@@ -38,6 +38,7 @@ extension ExpandedTab {
 /// aynı ölçülerden türetilir; böylece kalıcı albüm kapağı katmanı `MediaPanel`'deki yere oturur.
 struct ExpandedIslandView: View {
     @Environment(\.islandMotionStyle) private var motionStyle
+    @Environment(\.islandEnergySaving) private var energySaving
     let tab: ExpandedTab
     let model: IslandViewModel
     let environment: AppEnvironment
@@ -67,6 +68,27 @@ struct ExpandedIslandView: View {
                 .offset(x: headerPlacement.shift)
                 .layoutWithoutAnimation()
 
+            // Sekme içerikleri kalıcı host'larda (`PanelStage`); sahne sabit dış çerçeveyi kaplar. Ağaçta başlıktan sonra ve
+            // HUD'dan önce gelir: erişilebilirlik sırası tabandaki gibi başlık, panel, HUD; HUD panelin üstünde çizilir,
+            // host'lar başlık bölgesiyle örtüşmez.
+            // İçerik dikdörtgeni özgün iç yığının yerleşimiyle aynıdır: yığın genişliği gövde ile görünmez başlık
+            // iskeletinin büyüğüdür (dar gövdelerde iskelet taşar ve içerik bu genişlikte ortalanır).
+            let stackWidth = max(layout.size.width, headerPlacement.skeletonWidth)
+            PanelStage(
+                tab: tab,
+                contentRect: CGRect(
+                    x: (frameWidth - stackWidth) / 2 + side,
+                    y: metrics.notchSize.height + IslandLayoutEngine.headerGap,
+                    width: stackWidth - 2 * side,
+                    height: layout.size.height - metrics.notchSize.height - IslandLayoutEngine.headerGap
+                        - IslandLayoutEngine.expandedBottomInset(for: metrics)),
+                motionStyle: motionStyle, energySaving: energySaving,
+                inputs: metrics,
+                make: { item in AnyView(content(for: item, metrics: metrics)) }
+            )
+            .frame(width: frameWidth, height: IslandLayoutEngine.canvasSize(for: metrics).height, alignment: .top)
+            .frame(width: frameWidth, height: layout.size.height, alignment: .top)
+
             ZStack(alignment: .top) {
                 // Görünmez, etkileşimsiz iskelet: özgün yapıda başlık bu yığının içindeydi ve dar gövdelerde gövdeden
                 // geniş ölçülerek içeriğin önerilen genişliğini belirliyordu. İskelet aynı yerleşimi korur.
@@ -76,17 +98,6 @@ struct ExpandedIslandView: View {
                     .hidden()
                     .accessibilityHidden(true)
                     .allowsHitTesting(false)
-
-                content(metrics: metrics)
-                    .id(tab)
-                    .transition(.islandReveal(motionStyle, expanded: true))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(EdgeInsets(
-                        top: metrics.notchSize.height + IslandLayoutEngine.headerGap,
-                        leading: side,
-                        bottom: IslandLayoutEngine.expandedBottomInset(for: metrics),
-                        trailing: side
-                    ))
 
                 HUDBannerHost(model: model)
                     .frame(maxHeight: .infinity, alignment: .bottom)
@@ -104,6 +115,8 @@ struct ExpandedIslandView: View {
     private struct HeaderPlacement {
         let boxWidth: CGFloat
         let shift: CGFloat
+        /// Görünmez iskeletin (dolgu dahil) yerleşim genişliği: satır sığmazsa en küçük satır genişliği.
+        let skeletonWidth: CGFloat
 
         init(bodyWidth: CGFloat, boxWidth: CGFloat, padding: CGFloat, metrics: NotchMetrics, visible: [ExpandedTab]) {
             let tab = IslandLayoutEngine.tabButtonSize.width
@@ -113,6 +126,7 @@ struct ExpandedIslandView: View {
             let leadingRow = leading > 0 ? leading * tab + (leading - 1) * spacing : 0
             let trailingRow = trailing * (tab + spacing) + IslandIconButton.diameter(for: PinButton.iconSize)
             let gap = ExpandedIslandView.headerCenterGap(metrics)
+            skeletonWidth = 2 * padding + max(bodyWidth - 2 * padding, leadingRow + gap + trailingRow)
             func shift(_ width: CGFloat) -> CGFloat? {
                 IslandLayoutEngine.headerRowShift(bodyWidth: width, sidePadding: padding, centerGap: gap,
                                                   leadingRowWidth: leadingRow, trailingRowWidth: trailingRow, scale: metrics.scale)
@@ -164,7 +178,7 @@ struct ExpandedIslandView: View {
     }
 
     @ViewBuilder
-    private func content(metrics: NotchMetrics) -> some View {
+    private func content(for tab: ExpandedTab, metrics: NotchMetrics) -> some View {
         switch tab {
         case .nook:
             NookPanel(environment: environment, metrics: metrics)

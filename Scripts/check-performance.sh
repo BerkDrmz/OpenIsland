@@ -88,6 +88,11 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lI
   Sources/OpenIsland/Features/Media/{NowPlaying,ScriptedPlayerSource}.swift \
   Tools/PerformanceChecks/ScriptedPlayerCheck.swift -o "$CHECK_DIR/scripted-player-check"
 "$CHECK_DIR/scripted-player-check"
+swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lIslandCore \
+  -Xlinker -rpath -Xlinker "$CHECK_DIR" \
+  Sources/OpenIsland/System/Preferences.swift Sources/OpenIsland/UI/{IslandDesign,PanelStage}.swift \
+  Tools/PerformanceChecks/PanelStageCheck.swift -o "$CHECK_DIR/panel-stage-check"
+"$CHECK_DIR/panel-stage-check"
 python3 Tools/PerformanceChecks/ResourceProbeCheck.py
 
 python3 Tools/PerformanceChecks/TabBenchmarkReportCheck.py

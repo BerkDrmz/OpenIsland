@@ -11,6 +11,7 @@ struct ClipboardPanel: View {
     var body: some View {
         HStack(alignment: .top, spacing: IslandLayoutEngine.columnGap) {
             historyColumn.frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilitySortPriority(PanelAXOrder.first)
             Rectangle().fill(IslandPalette.separator).frame(width: 0.5)
             ColorColumn(colors: colors).frame(width: IslandLayoutEngine.Clipboard.colorColumnWidth)
         }

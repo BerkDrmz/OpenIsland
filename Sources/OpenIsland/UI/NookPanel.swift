@@ -52,15 +52,18 @@ private struct NookMediaWidget: View {
     var body: some View {
         let size = IslandLayoutEngine.artworkSlot(for: .expanded(.nook), metrics: metrics)?.rect.size ?? .zero
         HStack(alignment: .top, spacing: IslandSpacing.m) {
-            if media.nowPlaying == nil {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(IslandPalette.fill)
-                    .overlay(Image(systemName: "music.note").foregroundStyle(IslandPalette.tertiary))
-                    .frame(width: size.width, height: size.height)
-            } else {
-                SourceAppButton(media: media) {
-                    Color.clear.frame(width: size.width, height: size.height) // kalıcı kapak katmanı
+            Group {
+                if media.nowPlaying == nil {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(IslandPalette.fill)
+                        .overlay(Image(systemName: "music.note").foregroundStyle(IslandPalette.tertiary))
+                        .frame(width: size.width, height: size.height)
+                } else {
+                    SourceAppButton(media: media) {
+                        Color.clear.frame(width: size.width, height: size.height) // kalıcı kapak katmanı
+                    }
                 }
             }
+            .accessibilitySortPriority(PanelAXOrder.first)
             VStack(alignment: .leading, spacing: IslandSpacing.xxs) {
                 SourceAppButton(media: media) {
                     VStack(alignment: .leading, spacing: IslandSpacing.xxs) {
@@ -77,6 +80,7 @@ private struct NookMediaWidget: View {
                 }
             }
             .frame(width: IslandLayoutEngine.nookMediaTextWidth, height: size.height, alignment: .leading)
+            .accessibilitySortPriority(PanelAXOrder.second)
         }
     }
 }
