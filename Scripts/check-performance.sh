@@ -21,7 +21,7 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lI
   -Xlinker -rpath -Xlinker "$CHECK_DIR" \
   Sources/OpenIsland/UI/IslandDesign.swift Sources/OpenIsland/Island/IslandViewModel.swift \
   Sources/OpenIsland/System/Preferences.swift \
-  Sources/OpenIsland/Window/NotchPanel.swift Tools/PerformanceChecks/HoverExitCheck.swift \
+  Sources/OpenIsland/Window/NotchPanel.swift Sources/OpenIsland/UI/PanelStage.swift Tools/PerformanceChecks/HoverExitCheck.swift \
   -o "$CHECK_DIR/hover-exit-check"
 "$CHECK_DIR/hover-exit-check"
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \

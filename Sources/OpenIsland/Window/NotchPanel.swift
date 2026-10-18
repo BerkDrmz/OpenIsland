@@ -66,9 +66,62 @@ final class NotchPanel: NSPanel {
     }
 
     private func refreshKeyViewLoopIfStale() {
-        guard keyViewLoopIsStale else { return }
-        keyViewLoopIsStale = false
-        recalculateKeyViewLoop()
+        if keyViewLoopIsStale {
+            keyViewLoopIsStale = false
+            recalculateKeyViewLoop()
+        }
+        orderPanelKeyViewsAfterRoot()
+    }
+
+    /// Kök SwiftUI host'u key-view halkasına önce platform görünümlerini (panel sahnesi dahil), sonra kendi odak vekillerini
+    /// (başlık düğmeleri) koyar; tabanda panel öğeleri başlıktan sonra gelir. Sahne bölümü halkanın sonuna, son kök
+    /// vekilinden sonraya taşınır: Tab sırası başlık → panel → (başa dön), Shift-Tab tersi. Yalnız `nextKeyView` bağları
+    /// değişir; SwiftUI halkayı yeniden kurarsa bir sonraki Tab'da yeniden uygulanır.
+    private func orderPanelKeyViewsAfterRoot() {
+        guard let start = contentView else { return }
+        var cycle: [NSView] = []
+        var view: NSView? = start
+        while let current = view, cycle.count < 400 {
+            if !cycle.isEmpty && current === start { break }
+            if cycle.contains(where: { $0 === current }) { return } // halka başa dönmüyor: dokunma
+            cycle.append(current)
+            view = current.nextKeyView
+        }
+        guard view === start else { return }
+        func inStage(_ view: NSView) -> Bool {
+            var node: NSView? = view
+            while let current = node {
+                if current is PanelStageView { return true }
+                if current.subviews.contains(where: { $0 is PanelStageView }) { return true } // sahnenin SwiftUI kabı
+                node = current.superview
+            }
+            return false
+        }
+        guard let first = cycle.firstIndex(where: inStage), first > 0 else { return }
+        var last = first
+        while last + 1 < cycle.count, inStage(cycle[last + 1]) { last += 1 }
+        guard last + 1 < cycle.count, !cycle[(last + 1)...].contains(where: inStage) else { return } // zaten sonda
+        cycle[first - 1].nextKeyView = cycle[last + 1]
+        cycle[cycle.count - 1].nextKeyView = cycle[first]
+        cycle[last].nextKeyView = start
+    }
+
+    /// SwiftUI odağı bir panel host'unun içindeyken (ilk yanıtlayıcı host'un odak vekili ya da host'un kendisi) odaklı
+    /// öğe o host'tan alınır: host erişilebilirlikte görünmez olduğu için AppKit odaklı öğeyi en yakın görünür ataya, kök
+    /// "OpenIsland" kapsayıcısına bağlıyordu (öğenin kendi `AXFocused`'ı doğruyken). İlk yanıtlayıcı gerçek bir AppKit
+    /// denetimi ya da metin görünümüyse (açılır düğme, metin düzenleyici) AppKit'in çözümü doğrudur.
+    override var accessibilityFocusedUIElement: Any? {
+        // Erişilebilirlik sorguları ana thread'de gelir.
+        nonisolated(unsafe) var focused: Any?
+        MainActor.assumeIsolated {
+            guard let responder = firstResponder as? NSView, !(responder is NSControl), !(responder is NSText) else { return }
+            var node: NSView? = responder
+            while let current = node {
+                if let host = current as? PanelHostingView { focused = host.accessibilityFocusedUIElement; return }
+                node = current.superview
+            }
+        }
+        return focused ?? super.accessibilityFocusedUIElement
     }
 
     override func sendEvent(_ event: NSEvent) {
