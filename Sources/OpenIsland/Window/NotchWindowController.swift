@@ -41,6 +41,7 @@ final class NotchWindowController {
     private var outsideClickMonitors: [Any] = []
     /// "Her zaman gizle" + tam ekran: ada hover/tıklama ile açılmaz (sensör kapalı).
     private var interactionBlocked = false
+    private var managedDropReceiver: ManagedDropReceiver?
 
     init(screen: NotchScreen, environment: AppEnvironment) {
         self.screen = screen
@@ -72,6 +73,7 @@ final class NotchWindowController {
         panel.orderFrontRegardless()
         sensor.orderFrontRegardless()
         SpacePresentationController.shared.attach([panel, sensor])
+        wireManagedDropReceiver()
         updateInputRouting()
 
         if let diagnostics = IslandDiagnostics.shared {
@@ -124,6 +126,8 @@ final class NotchWindowController {
     }
 
     func close() {
+        managedDropReceiver?.stop()
+        managedDropReceiver = nil
         model.cancelPendingEffects()
         stopOutsideClickMonitor()
         SpacePresentationController.shared.detach([panel, sensor])
@@ -246,6 +250,7 @@ final class NotchWindowController {
     // MARK: - Girdi yönlendirmesi
 
     private func updateInputRouting() {
+        managedDropReceiver?.update(frame: hitRect(for: targetLayout), enabled: !interactionBlocked)
         let machine = model.machine
         let dragActive = machine.context.isFileDragActive
         let engaged = machine.isEngaged || dragActive
@@ -297,6 +302,48 @@ final class NotchWindowController {
     }
 
     // MARK: - Sensör
+
+    private func wireManagedDropReceiver() {
+        let receiver = ManagedDropReceiver(frame: hitRect(for: targetLayout))
+        receiver.onEnter = { [weak self] point in
+            guard let self else { return }
+            IslandDiagnostics.shared?.log("native drop: entered")
+            self.model.send(.fileDragEntered)
+            self.updateNativeDropZone(at: point)
+        }
+        receiver.onMove = { [weak self] point in self?.updateNativeDropZone(at: point) }
+        receiver.onExit = { [weak self] in
+            self?.model.nativeDropZone = nil
+            self?.model.send(.fileDragExited)
+        }
+        receiver.onCancel = { [weak self] in
+            self?.model.nativeDropZone = nil
+            self?.model.send(.fileDragEnded(dropped: false))
+        }
+        receiver.onDrop = { [weak self] pasteboard, point in
+            guard let self else { return false }
+            let airDrop = self.model.presentation == .dropTarget && point.x >= self.screen.anchor.x
+            self.model.nativeDropZone = nil
+            if airDrop {
+                let urls = ShelfStore.fileURLs(from: pasteboard)
+                self.model.send(.fileDragEnded(dropped: false))
+                guard !urls.isEmpty else { return false }
+                self.shelf.airDrop(urls)
+                return true
+            }
+            let accepted = self.shelf.ingest(pasteboard: pasteboard)
+            IslandDiagnostics.shared?.log("native drop: accepted=\(accepted)")
+            self.model.send(.fileDragEnded(dropped: accepted))
+            return accepted
+        }
+        managedDropReceiver = receiver
+    }
+
+    private func updateNativeDropZone(at point: CGPoint) {
+        let next: IslandDropZone = model.presentation == .dropTarget && point.x >= screen.anchor.x ? .airDrop : .shelf
+        guard model.nativeDropZone != next else { return }
+        withAnimation(IslandMotion.control) { model.nativeDropZone = next }
+    }
 
     private func wireSensor() {
         let view = sensor.sensorView

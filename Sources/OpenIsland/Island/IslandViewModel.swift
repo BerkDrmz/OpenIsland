@@ -22,6 +22,9 @@ final class IslandViewModel {
     private(set) var isRelaxing = false
     /// Pil tasarrufu etkin (Düşük Güç Modu / ısınma): müzik nabzı sakin formda sabit kalır.
     var energySaving = false
+    /// Native managed drop receiver and the existing SwiftUI drop target share
+    /// the same highlight without changing the visible window's Space.
+    var nativeDropZone: IslandDropZone?
 
     var metrics: NotchMetrics {
         didSet {
