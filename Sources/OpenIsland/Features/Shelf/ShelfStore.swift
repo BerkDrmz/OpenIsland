@@ -156,11 +156,15 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
     /// Sensör penceresine (AppKit drag destination) doğrudan bırakılan içerik.
     @discardableResult
     func ingest(pasteboard: NSPasteboard) -> Bool {
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+        let urls = Self.fileURLs(from: pasteboard)
+        if !urls.isEmpty {
             urls.forEach { add($0, temporary: false) }
             selectDropped(urls)
             return true
         }
+        // A named file whose URL cannot be decoded must not silently become a
+        // text/image export. Keep the source filename, extension and bytes intact.
+        if pasteboard.availableType(from: [.fileURL]) != nil { return false }
         // File promise (Fotoğraflar, Mail): dosya henüz yok; kaynak uygulama hedef klasöre yazar.
         if let receivers = pasteboard.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver], !receivers.isEmpty {
             for receiver in receivers {
@@ -178,11 +182,33 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
         let representations = [NSPasteboard.PasteboardType.png, .tiff].compactMap { type in
             pasteboard.data(forType: type).map { (type.rawValue, $0) }
         }
-        guard let image = ShelfImportRules.imageRepresentation(from: Dictionary(uniqueKeysWithValues: representations)) else { return false }
-        let target = Self.uniqueURL(in: storage, name: "Görsel-\(UUID().uuidString.prefix(6))", extension: image.fileExtension)
-        guard (try? image.data.write(to: target)) != nil else { return false }
-        add(target, temporary: true)
-        return true
+        if let image = ShelfImportRules.imageRepresentation(from: Dictionary(uniqueKeysWithValues: representations)) {
+            let target = Self.uniqueURL(in: storage, name: "Görsel-\(UUID().uuidString.prefix(6))", extension: image.fileExtension)
+            guard (try? image.data.write(to: target)) != nil else { return false }
+            add(target, temporary: true)
+            return true
+        }
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           let url = urls.first, !url.isFileURL {
+            addLink(url)
+            return true
+        }
+        if let text = pasteboard.string(forType: .string), !text.isEmpty {
+            addText(text)
+            return true
+        }
+        return false
+    }
+
+    /// Validate the advertised representation before NSURL's pasteboard reader
+    /// can coerce malformed/non-file strings into relative file paths. Still use
+    /// the native reader afterward to retain its sandbox-extension handling.
+    static func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        for item in pasteboard.pasteboardItems ?? [] where item.types.contains(.fileURL) {
+            guard let raw = item.string(forType: .fileURL), URL(string: raw)?.isFileURL == true else { return [] }
+        }
+        return (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? [])
+            .filter(\.isFileURL)
     }
 
     func add(_ url: URL, temporary: Bool) {
@@ -271,11 +297,15 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
             thumbnailRequests[item.url] = nil
             if item.isTemporaryCopy {
                 // Only OpenIsland-owned cache files may be deleted by removing a shelf item.
-                let root = storage.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+                let storagePath = storage.resolvingSymlinksInPath().standardizedFileURL.path
+                let root = storagePath + "/"
                 guard item.url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root) else { continue }
                 try? FileManager.default.removeItem(at: item.url)
                 let folder = item.url.deletingLastPathComponent()
-                if folder != storage, (try? FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty) == true {
+                // URL equality also compares directory/trailing-slash spelling.
+                // Never remove the cache root just because its URL spelling differs.
+                if folder.resolvingSymlinksInPath().standardizedFileURL.path != storagePath,
+                   (try? FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty) == true {
                     try? FileManager.default.removeItem(at: folder)
                 }
             }

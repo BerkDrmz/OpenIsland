@@ -97,6 +97,36 @@ extension CGRect { func containsInclusive(_ point: CGPoint) -> Bool { contains(p
         shelf.removeAll()
         print("PASS: multi-file NSItemProvider URL import preserves source paths")
 
+        // Real native drags can offer both a file URL and its text contents.
+        // The URL must win; otherwise .pdf/.txt/etc becomes a new text export.
+        pasteboard.clearContents()
+        pasteboard.writeObjects([sources[0] as NSURL])
+        pasteboard.setString("This representation must not replace a file", forType: .string)
+        precondition(shelf.ingest(pasteboard: pasteboard))
+        precondition(shelf.items.count == 1 && shelf.items[0].url == sources[0])
+        precondition(!shelf.items[0].isTemporaryCopy)
+        shelf.removeAll()
+        pasteboard.clearContents()
+        pasteboard.setString("https://example.invalid/not-a-file", forType: .fileURL)
+        pasteboard.setString("Do not silently export this as text", forType: .string)
+        precondition(!shelf.ingest(pasteboard: pasteboard) && shelf.items.isEmpty)
+        pasteboard.clearContents()
+        pasteboard.setString("Intentional text drop", forType: .string)
+        precondition(shelf.ingest(pasteboard: pasteboard))
+        precondition(!shelf.items.isEmpty, "Intentional text drop produced no item")
+        let textBytes = try String(contentsOf: shelf.items[0].url, encoding: .utf8)
+        precondition(textBytes == "Intentional text drop" && shelf.items[0].isTemporaryCopy)
+        shelf.removeAll()
+        precondition(FileManager.default.fileExists(atPath: root.appendingPathComponent("cache").path), "Removing the final temporary item deleted the cache root")
+        pasteboard.clearContents()
+        let webURL = URL(string: "https://example.invalid/openisland-fixture")!
+        pasteboard.writeObjects([webURL as NSURL])
+        precondition(shelf.ingest(pasteboard: pasteboard))
+        precondition(!shelf.items.isEmpty, "Web URL drop produced no item")
+        precondition(shelf.items[0].url.pathExtension == "webloc")
+        shelf.removeAll()
+        print("PASS Native pasteboard: file URL wins over text; invalid file URLs cannot change type; intentional text/web drops preserved")
+
         let representations = sources.map { source in
             let provider = NSItemProvider()
             provider.suggestedName = source.lastPathComponent
