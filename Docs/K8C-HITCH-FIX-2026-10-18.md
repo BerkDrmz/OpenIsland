@@ -129,6 +129,20 @@ yeniden eklenmesinden (katman ağacının render sunucusuna yeniden aktarılmas�
 taban düzeyine indiriyor, ama `onAppear/onDisappear` anlamını bozuyor (Sistem örneklemesi, kamera vb.) ve uygulama işini
 artırıyor (650 ms'de CPU süresi +%16; K7V'de talimat +%31); eşdeğer olmadığı için uygulanmadı.
 
+### 5.1 Azaltma araştırması (2026-10-21)
+
+| Adım | Yöntem | Bulgu |
+|---|---|---|
+| WindowServer profili | Tüm süreçler Time Profiler, profile-rapid 150 ms, 8 s, A/B/B/A (`tools/wsprof.sh`, `wssyms.py`) | Fark iki yerde: CA pencere içe alma aşaması (`ca_window_prep_ingestion_phase` 35 → 159 ms/8 s) ve birleştirme/çizim (`CompositorMetal::composite`, `CA::OGL::render` +~150–170 ms/8 s). Bir taban koşusunda uygulama örneği eksik kaldığı için sayılar yön göstericidir |
+| Katman sayısı | Sekme değişiminden 0,6 s sonra penceredeki CALayer sayısı (tanı derlemeleri `LCB`, `LC9`) | K8c tabandan yalnız 1–3 katman fazla (Medya 46 → 49, Pano 93 → 96, Nook 116 → 119). Ek yük fazladan katmandan değil, host alt ağacının pencereden çıkarılıp yeniden eklenmesinden |
+| Gizleme ile yaşam döngüsü | `HostLifecycle` deneyi yeniden koşuldu | `isHidden` `onDisappear`/`task` iptalini **tetiklemiyor**; yalnız pencereden çıkarma tetikliyor. Host'ları pencerede tutmak yalnız yaşam döngüsü kancası olmayan panellerde eşdeğer olabilir |
+| Kancası olmayan paneller | Panel kodu tarandı | Raf (`onAppear`), Notlar (`.task`), Medya (`onAppear/onDisappear`, `TimelineView`), Nook (anımsatıcılar `onAppear/onDisappear`), Sistem, Odak, Ayna, Mikser kancalı; yalnız Pano kancasız (satır içi `task(id: didCopy)` dışında) |
+| H10: yalnız Pano pencerede gizli | tab-speeds A/B/B/A n=4/4, K8c → H10 | WindowServer −%3…−%4 (aralıklar örtüşüyor, gürültü içinde); uygulama talimatı **+%12…+%17**, CPU süresi +%2…+%14 (gizli host güncellemelere katılmaya devam ediyor). **Reddedildi** (`h9/H10-rejected.diff`) |
+
+Sonuç: eşdeğerliği koruyarak WindowServer ek yükünü azaltan bir yol bulunamadı. Yük, yaşam döngüsünün (`onAppear/onDisappear`,
+`task` iptali) korunması için host'un pencereden çıkarılmasının doğrudan bedeli; yalnız hızlı geçişte belirgin (80 ms'de
++~4–6 puan), 650 ms'de yok. K8c değişmeden kalıyor.
+
 ## 6. Kalan riskler
 
 1. Tab sırası düzeltmesi SwiftUI'nin kurduğu `nextKeyView` bağlarını yeniden düzenler (public API); SwiftUI halkayı yeniden
@@ -157,7 +171,8 @@ artırıyor (650 ms'de CPU süresi +%16; K7V'de talimat +%31); eşdeğer olmadı
 | `3774a40` | Bu rapor (ilk sürüm) |
 | `9424041` | Tam klavye erişimi: Tab sırası ve AX odağı düzeltmesi, `check-performance` derleme satırı |
 | `09ba9dd` | Rapor güncellemesi (tam klavye erişimi açık) |
-| (bu commit) | Rapor: tam klavye erişimi kapalı ve `check-controls` son derlemeyle |
+| `54792af` | Rapor: tam klavye erişimi kapalı ve `check-controls` son derlemeyle |
+| (bu commit) | Rapor: WindowServer azaltma araştırması (§5.1) |
 
 Geri alma: `git revert 9424041 df99809` (K8b'ye döner; `9424041` tek başına geri alınabilir, `df99809` tek başına alınmamalı). Reddedilen deneyler yalnız kanıt klasöründe: `h9/H4-clip-lazy.diff`
 (Pano önizleme öneki + `ClipPreviewCheck`), tanı derlemeleri `HX`, `HNS`/`BNS`, `H7b`.
