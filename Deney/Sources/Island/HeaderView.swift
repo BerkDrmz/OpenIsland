@@ -138,10 +138,10 @@ final class HeaderView: FlippedView {
         lastLayoutTab = tab
         for (t, button) in buttons {
             guard let bx = layoutPositions[t] else { continue }
-            button.frame = CGRect(x: bx, y: y, width: size.width, height: size.height)
+            button.frame = pixelRect(CGRect(x: bx, y: y, width: size.width, height: size.height))
         }
         let d = IconButtonView.diameter(for: 9.5)
-        pin.frame = CGRect(x: pinX, y: (bounds.height - d) / 2, width: d, height: d)
+        pin.frame = pixelRect(CGRect(x: pinX, y: (bounds.height - d) / 2, width: d, height: d))
         // Seçim kapsülü (matchedGeometryEffect): yerleşim değişince yeniden boyutlama yayıyla, değişmezse anında.
         if let sx = layoutPositions[tab] {
             if animate, layout.size.width != (lastBodyWidth ?? layout.size.width) {
@@ -151,7 +151,7 @@ final class HeaderView: FlippedView {
             } else {
                 capsuleX.set(sx)
             }
-            capsule.frame = CGRect(x: capsuleX.value, y: y, width: size.width, height: size.height)
+            capsule.frame = pixelRect(CGRect(x: capsuleX.value, y: y, width: size.width, height: size.height))
         }
         lastBodyWidth = layout.size.width
         applyVisualOffsets()
@@ -167,7 +167,7 @@ final class HeaderView: FlippedView {
         for button in buttons.values { button.labelOffset = dx }
         pin.labelOffset = dx
         let size = IslandLayoutEngine.tabButtonSize
-        capsule.frame = CGRect(x: capsuleX.value + dx, y: capsule.frame.minY, width: size.width, height: size.height)
+        capsule.frame = pixelRect(CGRect(x: capsuleX.value + dx, y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
         CATransaction.commit()
     }
 }

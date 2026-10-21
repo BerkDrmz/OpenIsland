@@ -58,35 +58,124 @@ enum Spacing {
         outer: IslandLayoutEngine.expandedBottomRadius, inset: IslandLayoutEngine.contentInset)
 }
 
-/// Tek satırlık, seçilemez etiket.
-final class TextLabel: NSTextField {
+/// Metin etiketi: SwiftUI `Text` gibi iç boşluksuz çizer; içerik yalnız değişince katmana bir kez çizilir
+/// (kare başı iş yok). Varsayılan tek satır + sondan kesme; `maximumLines` ile çok satırlı ortalı metin.
+final class TextLabel: NSView {
+    var stringValue: String { didSet { if stringValue != oldValue { invalidate() } } }
+    var font: NSFont { didSet { if font != oldValue { invalidate() } } }
+    var textColor: NSColor { didSet { if textColor != oldValue { needsDisplay = true } } }
+    var alignment: NSTextAlignment { didSet { if alignment != oldValue { needsDisplay = true } } }
+    var lineBreakMode: NSLineBreakMode { didSet { needsDisplay = true } }
+    var maximumLines = 1 { didSet { invalidate() } }
+    /// SwiftUI `minimumScaleFactor`: tek satır sığmazsa yazı en çok bu orana kadar küçülür.
+    var minimumScaleFactor: CGFloat = 1 { didSet { needsDisplay = true } }
+
     init(_ text: String = "", font: NSFont = Fonts.body, color: NSColor = Palette.primary,
          alignment: NSTextAlignment = .left, truncation: NSLineBreakMode = .byTruncatingTail) {
-        super.init(frame: .zero)
         stringValue = text
         self.font = font
         textColor = color
         self.alignment = alignment
-        isEditable = false
-        isSelectable = false
-        isBordered = false
-        drawsBackground = false
         lineBreakMode = truncation
-        maximumNumberOfLines = 1
-        cell?.truncatesLastVisibleLine = true
-        usesSingleLineMode = true
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        super.init(frame: .zero)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityValue(text)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
-    override var allowsVibrancy: Bool { false }
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     func set(_ text: String) { if stringValue != text { stringValue = text } }
 
+    private func invalidate() {
+        needsDisplay = true
+        invalidateIntrinsicContentSize()
+        setAccessibilityValue(stringValue)
+    }
+
+    var lineHeight: CGFloat { TextMetrics.lineHeight(for: font) }
+
+    private var attributes: [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = alignment
+        paragraph.lineBreakMode = maximumLines == 1 ? lineBreakMode : .byWordWrapping
+        return [.font: font, .foregroundColor: textColor, .paragraphStyle: paragraph]
+    }
+
     /// Doğal tek satır genişliği.
-    var naturalWidth: CGFloat { ceil(attributedStringValue.size().width) + 4 }
+    var naturalWidth: CGFloat { ceil((stringValue as NSString).size(withAttributes: [.font: font]).width) }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: naturalWidth, height: lineHeight) }
+
+    /// Verilen genişlikte gereken yükseklik (çok satırlı metin için): satır sayısı × SwiftUI satır yüksekliği.
+    func height(forWidth width: CGFloat) -> CGFloat {
+        guard maximumLines != 1 else { return lineHeight }
+        var lines = TextMetrics.lineCount(stringValue, attributes: attributes, width: width)
+        if maximumLines > 0 { lines = min(lines, maximumLines) }
+        return CGFloat(max(lines, 1)) * lineHeight
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        var attributes = self.attributes
+        var rect = bounds
+        if maximumLines == 1, minimumScaleFactor < 1, naturalWidth > bounds.width, naturalWidth > 0 {
+            let scale = max(minimumScaleFactor, bounds.width / naturalWidth)
+            let scaled = NSFont(descriptor: font.fontDescriptor, size: font.pointSize * scale) ?? font
+            attributes[.font] = scaled
+            // Küçülen satır dikeyde ortada kalır (SwiftUI ile aynı).
+            rect.origin.y += ((font.ascender - font.descender) - (scaled.ascender - scaled.descender)) / 2
+        }
+        (stringValue as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                                       attributes: attributes, context: nil)
+    }
+}
+
+/// SwiftUI `Text` ile aynı satır yüksekliği. SwiftUI'nin değeri yalnız punto boyutuna bağlı (ağırlık ve yuvarlak tasarım
+/// değiştirmiyor) ve basit bir formüle oturmuyor; 7–28 pt aralığı ölçülmüştür (Deney/README.md → Ölçümler).
+enum TextMetrics {
+    private static let table: [Double: CGFloat] = [
+        7.0: 9, 7.5: 9, 8.0: 10, 8.5: 10, 9.0: 11, 9.5: 12, 10.0: 13, 10.5: 13, 11.0: 14, 11.5: 14, 12.0: 15, 12.5: 15,
+        13.0: 16, 13.5: 16, 14.0: 17, 14.5: 18, 15.0: 19, 15.5: 19, 16.0: 19, 16.5: 20, 17.0: 20, 17.5: 21, 18.0: 21,
+        18.5: 22, 19.0: 23, 19.5: 24, 20.0: 24, 20.5: 25, 21.0: 25, 21.5: 26, 22.0: 26, 22.5: 27, 23.0: 27, 23.5: 28,
+        24.0: 28, 24.5: 29, 25.0: 29, 25.5: 30, 26.0: 30, 26.5: 32, 27.0: 32, 27.5: 33, 28.0: 33,
+    ]
+
+    static func lineHeight(for font: NSFont) -> CGFloat {
+        table[(Double(font.pointSize) * 2).rounded() / 2] ?? ceil(font.ascender - font.descender + font.leading)
+    }
+
+    /// Verilen genişlikte satır sayısı (TextKit ile, sözcük kaydırma).
+    static func lineCount(_ text: String, attributes: [NSAttributedString.Key: Any], width: CGFloat) -> Int {
+        let storage = NSTextStorage(string: text, attributes: attributes)
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        var lines = 0
+        var index = 0
+        let glyphs = manager.numberOfGlyphs
+        while index < glyphs {
+            var range = NSRange()
+            manager.lineFragmentRect(forGlyphAt: index, effectiveRange: &range)
+            index = NSMaxRange(range)
+            lines += 1
+        }
+        return lines
+    }
+}
+
+/// SwiftUI gibi kenarları piksel ızgarasına (2× ekranda 0,5 pt) yuvarlar.
+func pixelRect(_ r: CGRect, scale: CGFloat = 2) -> CGRect {
+    func p(_ v: CGFloat) -> CGFloat { (v * scale).rounded() / scale }
+    let x0 = p(r.minX), y0 = p(r.minY), x1 = p(r.maxX), y1 = p(r.maxY)
+    return CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
 }
 
 /// SF Symbol görünümü. Sembol değişimi istenirse `.replace` içerik geçişiyle yapılır (SwiftUI `contentTransition`).
@@ -100,6 +189,7 @@ final class SymbolView: NSImageView {
         super.init(frame: .zero)
         imageScaling = .scaleNone
         contentTintColor = color
+        // Düğme ve satır içindeki simgeler ayrı öğe değildir (SwiftUI ile aynı); `exposeAsImage` ile açılır.
         set(name, animated: false)
     }
 
@@ -126,6 +216,24 @@ final class SymbolView: NSImageView {
 
     override var intrinsicContentSize: NSSize { image?.size ?? .zero }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private var isExposed = false
+    override func isAccessibilityElement() -> Bool { isExposed }
+    override func accessibilityChildren() -> [Any]? { nil }
+
+    /// Bağımsız görsel olarak AX'e açar (SwiftUI `Image(systemName:)`): sistemin sembol etiketi, sözcükler büyük harfle.
+    func exposeAsImage() {
+        let description = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.accessibilityDescription ?? ""
+        isExposed = true
+        setAccessibilityRole(.image)
+        setAccessibilityLabel(description.capitalized(with: Locale(identifier: "tr_TR")))
+    }
+}
+
+/// Süs görseli: AX'te ayrı öğe olarak görünmez (SwiftUI düğme içindeki `Image`).
+final class DecorativeImageView: NSImageView {
+    override func isAccessibilityElement() -> Bool { false }
+    override func accessibilityChildren() -> [Any]? { nil }
 }
 
 /// Sürekli eğrilikli (squircle) köşeli dolgu katmanı olan görünüm.

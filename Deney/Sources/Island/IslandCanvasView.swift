@@ -19,7 +19,7 @@ final class IslandCanvasView: NSView {
 
     private let surfaceView = ShapeView()     // #000000 gövde
     private let maskLayer = CAShapeLayer()    // içerik kırpması (aynı yol)
-    private let contentView = FlippedView()
+    private let contentView = AccessibleContainerView()
     private let media: MediaLayersView
 
     /// Ekranda çizilen (canlanan) yüzeyin hedefi; SwiftUI'deki `surface` durumunun karşılığı.
@@ -66,15 +66,17 @@ final class IslandCanvasView: NSView {
 
         rebuildContent(animated: false)
         observeModel()
+        // AX yapısı SwiftUI ile aynı: etiketsiz host grubu → "OpenIsland" kapsayıcısı → içerik öğeleri.
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("OpenIsland")
-        setAccessibilityCustomActions([NSAccessibilityCustomAction(name: "Genişlet") { [weak model] in
+        contentView.setAccessibilityElement(true)
+        contentView.setAccessibilityRole(.group)
+        contentView.setAccessibilityLabel("OpenIsland")
+        contentView.setAccessibilityCustomActions([NSAccessibilityCustomAction(name: "Genişlet") { [weak model] in
             model?.send(.tapped); return true
         }])
+        contentView.onCancel = { [weak model] in model?.send(.escapePressed) }
     }
-
-    override func accessibilityPerformCancel() -> Bool { model.send(.escapePressed); return true }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
@@ -377,4 +379,10 @@ final class ShapeView: NSView {
     override var isFlipped: Bool { true }
     override func makeBackingLayer() -> CALayer { CAShapeLayer() }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// "OpenIsland" kapsayıcısı: Escape (AXCancel) eylemini taşır.
+final class AccessibleContainerView: FlippedView {
+    var onCancel: (() -> Void)?
+    override func accessibilityPerformCancel() -> Bool { onCancel?(); return onCancel != nil }
 }

@@ -174,7 +174,15 @@ final class PanelContainer: FlippedView {
 enum PanelFactory {
     static func make(_ tab: ExpandedTab, model: IslandViewModel, environment: AppEnvironment) -> IslandPanel {
         switch tab {
-        default: PlaceholderPanel(tab: tab)
+        case .media: MediaPanelView(media: environment.media, model: model)
+        case .nook: NookPanelView(environment: environment, model: model)
+        case .shelf: ShelfPanelView(shelf: environment.shelf)
+        case .clipboard: ClipboardPanelView(history: environment.clipboard, colors: environment.colorPicker)
+        case .focus: FocusPanelView(timer: environment.focusTimer)
+        case .notes: NotesPanelView(notes: environment.notes, launcher: environment.launcher)
+        case .mirror: MirrorPanelView(mirror: environment.mirror)
+        case .mixer: MixerPanelView(mixer: environment.audioMixer, settings: { environment.openSettings() })
+        case .system: SystemPanelView(system: environment.system)
         }
     }
 }
