@@ -171,6 +171,9 @@ final class Preferences {
     /// Bayrak yalnızca kayıt gerçekten oluştuysa (etkin ya da kullanıcı onayı bekliyor) kalıcı olur; kayıt
     /// başarısız olursa (ör. durum `.notFound`) sonraki açılışta yeniden denenir.
     func enableLaunchAtLoginOnFirstRun() {
+        #if OPENISLAND_DENEY
+        return // AppKit deneyi kendini oturum açılış öğesi olarak kaydetmez.
+        #endif
         guard AppPaths.isRunningAsBundle, defaults.object(forKey: "launchAtLoginDefaultApplied") == nil else { return }
         refreshLaunchAtLogin()
         if !launchAtLogin { launchAtLogin = true }

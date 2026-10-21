@@ -13,7 +13,12 @@ enum AppPaths {
             return url
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        #if OPENISLAND_DENEY
+        // AppKit deneyi: kullanıcının gerçek verisine (raf, notlar, pano) dokunmaz.
+        let url = base.appendingPathComponent("io.github.openisland.deney", isDirectory: true)
+        #else
         let url = base.appendingPathComponent("io.github.openisland", isDirectory: true)
+        #endif
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
