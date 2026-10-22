@@ -28,8 +28,11 @@ swiftc "${FLAGS[@]}" -parse-as-library -emit-library -static -emit-module -modul
   Sources/IslandCore/*.swift -o "$OUT/libIslandCore.a" -emit-module-path "$OUT/IslandCore.swiftmodule"
 
 echo "▸ OpenIsland Deney (${#SOURCES[@]} dosya)"
+# Üretim SwiftUI ikilisi (`swift build`) LC_BUILD_VERSION'da "sdk 14.0" taşır; AppKit/SwiftUI denetimleri bu yüzden
+# Sonoma görünümüyle çizilir (yuvarlak kaydırıcı düğmesi vb.). Görsel eşdeğerlik için aynı platform sürümü yazılır.
 swiftc "${FLAGS[@]}" -parse-as-library -module-name OpenIslandDeney -I "$OUT" -L "$OUT" -lIslandCore \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$ROOT/Support/Info.plist" \
+  -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker 14.0 \
   "${SOURCES[@]}" -o "$OUT/OpenIslandDeney"
 
 rm -rf "$APP"

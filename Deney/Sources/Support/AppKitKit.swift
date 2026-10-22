@@ -8,6 +8,8 @@ enum Palette {
     static let secondary = white(0.62, increased: 0.8)
     static let tertiary = white(0.48, increased: 0.7)
     static let fill = white(0.07, increased: 0.14)
+    /// Renk animasyonunda `clear` yerine (önçarpımlı karışımda SwiftUI ile aynı: siyaha değil beyaza doğru solar).
+    static let clearWhite = NSColor(white: 1, alpha: 0)
     static let fillHover = white(0.12, increased: 0.22)
     static let separator = white(0.12, increased: 0.32)
     static let track = white(0.18, increased: 0.34)
@@ -109,27 +111,91 @@ final class TextLabel: NSView {
     }
 
     /// Doğal tek satır genişliği.
-    var naturalWidth: CGFloat { ceil((stringValue as NSString).size(withAttributes: [.font: font]).width) }
+    var naturalWidth: CGFloat { ceil(exactWidth) }
+    /// Yuvarlanmamış tek satır genişliği.
+    var exactWidth: CGFloat { (stringValue as NSString).size(withAttributes: [.font: font]).width }
 
     override var intrinsicContentSize: NSSize { NSSize(width: naturalWidth, height: lineHeight) }
+
+    /// `minimumScaleFactor` ile tek satırın verilen genişliğe sığması için uygulanan ölçek (1 = küçülmez).
+    func fittingScale(forWidth width: CGFloat) -> CGFloat {
+        guard maximumLines == 1, minimumScaleFactor < 1, width > 0 else { return 1 }
+        let natural = exactWidth
+        return natural > width ? max(minimumScaleFactor, width / natural) : 1
+    }
+
+    /// SwiftUI küçülen metnin satır yüksekliğini küçülmüş puntoyla hesaplar (ör. 19 pt × 0,99 → 22 pt, 23 değil);
+    /// yığınlarda (VStack) yerleşim bu yüksekliğe göre yapılır.
+    func fittedLineHeight(forWidth width: CGFloat) -> CGFloat {
+        let scale = fittingScale(forWidth: width)
+        return scale < 1 ? TextMetrics.lineHeight(forPointSize: font.pointSize * scale) : lineHeight
+    }
 
     /// Verilen genişlikte gereken yükseklik (çok satırlı metin için): satır sayısı × SwiftUI satır yüksekliği.
     func height(forWidth width: CGFloat) -> CGFloat {
         guard maximumLines != 1 else { return lineHeight }
-        var lines = TextMetrics.lineCount(stringValue, attributes: attributes, width: width)
+        var lines = TextMetrics.layout(stringValue, attributes: attributes, width: width).lines
         if maximumLines > 0 { lines = min(lines, maximumLines) }
         return CGFloat(max(lines, 1)) * lineHeight
+    }
+
+    /// AX çerçevesi SwiftUI `Text` gibi metnin kapladığı alandır: genişlik piksele (0,5 pt) yukarı yuvarlanır, hizalamaya
+    /// göre yerleşir. Yalnız AX sorgusunda hesaplanır.
+    override func accessibilityFrame() -> NSRect {
+        guard let window else { return super.accessibilityFrame() }
+        let used: CGFloat
+        var height = min(lineHeight, bounds.height)
+        if maximumLines == 1 {
+            used = exactWidth
+        } else {
+            used = TextMetrics.layout(stringValue, attributes: attributes, width: bounds.width).usedWidth
+            height = bounds.height
+        }
+        let width = min(pixelCeil(used), bounds.width)
+        let x: CGFloat = switch alignment {
+        case .center: (bounds.width - width) / 2
+        case .right: bounds.width - width
+        default: 0
+        }
+        return window.convertToScreen(convert(CGRect(x: x, y: 0, width: width, height: height), to: nil))
     }
 
     override func draw(_ dirtyRect: NSRect) {
         var attributes = self.attributes
         var rect = bounds
-        if maximumLines == 1, minimumScaleFactor < 1, naturalWidth > bounds.width, naturalWidth > 0 {
-            let scale = max(minimumScaleFactor, bounds.width / naturalWidth)
-            let scaled = NSFont(descriptor: font.fontDescriptor, size: font.pointSize * scale) ?? font
-            attributes[.font] = scaled
-            // Küçülen satır dikeyde ortada kalır (SwiftUI ile aynı).
-            rect.origin.y += ((font.ascender - font.descender) - (scaled.ascender - scaled.descender)) / 2
+        if alignment == .center || alignment == .right {
+            // SwiftUI metin kutusu piksele yukarı yuvarlanmış genişliktedir ve kutu piksele oturur; satırlar kutu içinde
+            // hizalanır. Alt piksel ortalama farklı kenar yumuşatması üretir.
+            let used = maximumLines == 1 ? exactWidth : TextMetrics.layout(stringValue, attributes: self.attributes, width: bounds.width).usedWidth
+            let w = min(pixelCeil(used), bounds.width)
+            let free = bounds.width - w
+            let x = alignment == .center ? free / 2 : free
+            rect = CGRect(x: (x * 2 + 0.5).rounded(.down) / 2, y: 0, width: w, height: bounds.height)
+        }
+        let scale = fittingScale(forWidth: bounds.width)
+        if scale < 1 {
+            attributes[.font] = NSFont(descriptor: font.fontDescriptor, size: font.pointSize * scale) ?? font
+            // SwiftUI: küçülen satırın kutusu küçülmüş satır yüksekliğidir ve kapsayıcıda dikeyde ortalanır; kutu zaten
+            // bu yükseklikteyse kayma sıfırdır.
+            rect.origin.y += (bounds.height - fittedLineHeight(forWidth: bounds.width)) / 2
+        }
+        let drawFont = attributes[.font] as? NSFont ?? font
+        if maximumLines == 1, lineBreakMode == .byTruncatingTail, scale == 1, exactWidth > rect.width,
+           let context = NSGraphicsContext.current?.cgContext {
+            // SwiftUI tek satırı CoreText kesmesiyle kısaltır (`CTLineCreateTruncatedLine`, "…"); NSString çizimi
+            // farklı noktada keser (61 genişlikte ölçüldü). Taban çizgisi NSString çizimiyle aynı yerde.
+            let plain: [NSAttributedString.Key: Any] = [.font: drawFont, .foregroundColor: textColor]
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: stringValue, attributes: plain))
+            let token = CTLineCreateWithAttributedString(NSAttributedString(string: "…", attributes: plain))
+            let truncated = CTLineCreateTruncatedLine(line, Double(rect.width), .end, token) ?? line
+            context.saveGState()
+            context.textMatrix = .identity
+            context.translateBy(x: rect.minX, y: rect.minY + drawFont.ascender)
+            context.scaleBy(x: 1, y: -1)
+            context.textPosition = .zero
+            CTLineDraw(truncated, context)
+            context.restoreGState()
+            return
         }
         (stringValue as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
                                        attributes: attributes, context: nil)
@@ -150,8 +216,22 @@ enum TextMetrics {
         table[(Double(font.pointSize) * 2).rounded() / 2] ?? ceil(font.ascender - font.descender + font.leading)
     }
 
-    /// Verilen genişlikte satır sayısı (TextKit ile, sözcük kaydırma).
-    static func lineCount(_ text: String, attributes: [NSAttributedString.Key: Any], width: CGFloat) -> Int {
+    /// Tablo dışı (küçülmüş) punto: SwiftUI'nin basamaklı değeri, ölçülmüş en yakın alt basamaktan alınır
+    /// (18,8 pt → 22; 19 pt → 23).
+    /// Metin satırının üstünden taban çizgisine uzaklık (SwiftUI `Label` simge hizası için; 11 pt ölçüldü).
+    static func baseline(for font: NSFont) -> CGFloat {
+        if font.pointSize == 11 { return 11.125 }
+        let lh = lineHeight(for: font)
+        return (((lh - (font.ascender - font.descender)) / 2 + font.ascender) * 8).rounded() / 8
+    }
+
+    static func lineHeight(forPointSize size: CGFloat) -> CGFloat {
+        let step = (Double(size) * 2).rounded(.down) / 2
+        return table[step] ?? ceil(size * 1.2)
+    }
+
+    /// Verilen genişlikte satır sayısı ve en geniş satırın kullanılan genişliği (TextKit ile, sözcük kaydırma).
+    static func layout(_ text: String, attributes: [NSAttributedString.Key: Any], width: CGFloat) -> (lines: Int, usedWidth: CGFloat) {
         let storage = NSTextStorage(string: text, attributes: attributes)
         let manager = NSLayoutManager()
         let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
@@ -159,21 +239,25 @@ enum TextMetrics {
         manager.addTextContainer(container)
         storage.addLayoutManager(manager)
         var lines = 0
+        var usedWidth: CGFloat = 0
         var index = 0
         let glyphs = manager.numberOfGlyphs
         while index < glyphs {
             var range = NSRange()
-            manager.lineFragmentRect(forGlyphAt: index, effectiveRange: &range)
+            usedWidth = max(usedWidth, manager.lineFragmentUsedRect(forGlyphAt: index, effectiveRange: &range).width)
             index = NSMaxRange(range)
             lines += 1
         }
-        return lines
+        return (lines, usedWidth)
     }
 }
 
+/// Piksele (2× ekranda 0,5 pt) yukarı yuvarlar; SwiftUI metin çerçevesi genişliği.
+func pixelCeil(_ v: CGFloat, scale: CGFloat = 2) -> CGFloat { ceil(v * scale) / scale }
+
 /// SwiftUI gibi kenarları piksel ızgarasına (2× ekranda 0,5 pt) yuvarlar.
 func pixelRect(_ r: CGRect, scale: CGFloat = 2) -> CGRect {
-    func p(_ v: CGFloat) -> CGFloat { (v * scale).rounded() / scale }
+    func p(_ v: CGFloat) -> CGFloat { (v * scale + 0.5).rounded(.down) / scale } // yarım değerler yukarı (SwiftUI)
     let x0 = p(r.minX), y0 = p(r.minY), x1 = p(r.maxX), y1 = p(r.maxY)
     return CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
 }
@@ -199,6 +283,7 @@ final class SymbolView: NSImageView {
     func set(_ name: String, animated: Bool = true) {
         guard name != symbol else { return }
         symbol = name
+        inkBounds = nil
         let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
         if animated, let image, #available(macOS 14.0, *) {
             setSymbolImage(image, contentTransition: .replace)
@@ -217,16 +302,101 @@ final class SymbolView: NSImageView {
     override var intrinsicContentSize: NSSize { image?.size ?? .zero }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    /// SwiftUI `Image(systemName:)` yerleşim kutusu: genişlik hizalama genişliği, yükseklik görüntü yüksekliği − 0,5
+    /// (çalışma anında 24 sembol/boyutta ölçülmüştür; Deney/README.md → Ölçümler).
+    var layoutSize: CGSize {
+        guard let image else { return .zero }
+        return CGSize(width: image.alignmentRect.width, height: image.size.height - 0.5)
+    }
+
+    /// Yerleşim kutusu `origin`'de olan sembolün çizim çerçevesi: SwiftUI görüntüyü kutunun sol-alt köşesine yaslar
+    /// (üstte 0,5 pt taşar) ve kökeni en yakın piksele yuvarlar.
+    /// `halfPixelUp`: adanın başlık satırında SwiftUI yarım pikseli yukarı yuvarlar (gövde içinde aşağı); ekran
+    /// görüntüsü karşılaştırmasıyla belirlenmiştir.
+    func drawingFrame(layoutOrigin origin: CGPoint, scale: CGFloat = 2, halfPixelUp: Bool = false) -> CGRect {
+        guard let image else { return .zero }
+        func snapX(_ v: CGFloat) -> CGFloat { (v * scale + 0.5).rounded(.down) / scale }
+        func snapY(_ v: CGFloat) -> CGFloat { halfPixelUp ? (v * scale - 0.5).rounded(.up) / scale : (v * scale + 0.5).rounded(.down) / scale }
+        let layout = layoutSize
+        return CGRect(x: snapX(origin.x - image.alignmentRect.minX), y: snapY(origin.y + layout.height - image.size.height),
+                      width: image.size.width, height: image.size.height)
+    }
+
+    /// Düz düğmenin etiketi olan sembol: düğmenin çerçevesi yerleşim kutusudur, sembol mutlak piksel ızgarasına oturur.
+    /// `origin` düğmenin üst görünümünün koordinatlarındadır.
+    func place(asLabelOf button: NSView, layoutOrigin origin: CGPoint) {
+        button.frame = CGRect(origin: origin, size: layoutSize)
+        frame = drawingFrame(layoutOrigin: origin).offsetBy(dx: -origin.x, dy: -origin.y)
+        (button as? PlainButton)?.inkSymbol = self // SwiftUI: yalnız simgeli düğmenin AX çerçevesi simge mürekkebidir
+    }
+
+    /// SwiftUI `.frame(width:height:)` içinde ortalanmış sembolün çizim çerçevesi.
+    func drawingFrame(centeredIn rect: CGRect, halfPixelUp: Bool = false) -> CGRect {
+        let layout = layoutSize
+        return drawingFrame(layoutOrigin: CGPoint(x: rect.midX - layout.width / 2, y: rect.midY - layout.height / 2), halfPixelUp: halfPixelUp)
+    }
+
     private var isExposed = false
     override func isAccessibilityElement() -> Bool { isExposed }
     override func accessibilityChildren() -> [Any]? { nil }
 
     /// Bağımsız görsel olarak AX'e açar (SwiftUI `Image(systemName:)`): sistemin sembol etiketi, sözcükler büyük harfle.
-    func exposeAsImage() {
+    func exposeAsImage(frameOf container: NSView? = nil) {
         let description = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.accessibilityDescription ?? ""
+        frameContainer = container
         isExposed = true
         setAccessibilityRole(.image)
         setAccessibilityLabel(description.capitalized(with: Locale(identifier: "tr_TR")))
+    }
+
+    /// SwiftUI sembol görselinin AX çerçevesi, sembolün mürekkep sınırıdır (görüntü kutusu değil). Yalnız AX sorgusunda,
+    /// sembol başına bir kez 2× taranır.
+    private var inkBounds: CGRect?
+    /// Kaplama (`overlay`) olarak kullanılan sembolde AX çerçevesi taşıyıcı kutunun çerçevesidir.
+    private weak var frameContainer: NSView?
+
+    override func accessibilityFrame() -> NSRect {
+        if let frameContainer, let window = frameContainer.window {
+            return window.convertToScreen(frameContainer.convert(frameContainer.bounds, to: nil))
+        }
+        guard isExposed, let ink = inkScreenFrame() else { return super.accessibilityFrame() }
+        return ink
+    }
+
+    /// Sembol mürekkebinin ekran çerçevesi (yalnız AX sorgularında hesaplanır).
+    func inkScreenFrame() -> NSRect? {
+        guard let window, let image else { return nil }
+        let ink = inkBounds ?? Self.measureInk(image)
+        inkBounds = ink
+        // Görüntü sınırların ortasında çizilir (`scaleNone`); mürekkep üstten ölçülmüştür, görünüm çevrik değildir.
+        let imageBottom = (bounds.height - image.size.height) / 2
+        let rect = CGRect(x: (bounds.width - image.size.width) / 2 + ink.minX,
+                          y: imageBottom + image.size.height - ink.maxY, width: ink.width, height: ink.height)
+        return window.convertToScreen(convert(rect, to: nil))
+    }
+
+    private static func measureInk(_ image: NSImage) -> CGRect {
+        let w = Int(image.size.width * 2), h = Int(image.size.height * 2)
+        guard w > 0, h > 0, let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8,
+                                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return CGRect(origin: .zero, size: image.size) }
+        rep.size = image.size // bağlam oluşturulmadan önce: 2× ölçek
+        guard let context = NSGraphicsContext(bitmapImageRep: rep) else { return CGRect(origin: .zero, size: image.size) }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+        NSGraphicsContext.restoreGraphicsState()
+        guard let data = rep.bitmapData else { return CGRect(origin: .zero, size: image.size) }
+        var minX = w, minY = h, maxX = -1, maxY = -1
+        for y in 0..<h {
+            let row = data + y * rep.bytesPerRow
+            for x in 0..<w where row[x * 4 + 3] > 0 {
+                minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= minX else { return CGRect(origin: .zero, size: image.size) }
+        return CGRect(x: CGFloat(minX) / 2, y: CGFloat(minY) / 2, width: CGFloat(maxX - minX + 1) / 2, height: CGFloat(maxY - minY + 1) / 2)
     }
 }
 

@@ -102,11 +102,11 @@ final class MediaPanelView: FlippedView, IslandPanel {
         let controlsY = scrubY + 14 + gap
         let total = small + 22 + big + 22 + small
         var cx = x + (width - total) / 2
-        previous.frame = CGRect(x: cx, y: controlsY + (big - small) / 2, width: small, height: small)
+        previous.setLayoutFrame(CGRect(x: cx, y: controlsY + (big - small) / 2, width: small, height: small))
         cx += small + 22
-        playPause.frame = CGRect(x: cx, y: controlsY, width: big, height: big)
+        playPause.setLayoutFrame(CGRect(x: cx, y: controlsY, width: big, height: big))
         cx += big + 22
-        next.frame = CGRect(x: cx, y: controlsY + (big - small) / 2, width: small, height: small)
+        next.setLayoutFrame(CGRect(x: cx, y: controlsY + (big - small) / 2, width: small, height: small))
     }
 }
 

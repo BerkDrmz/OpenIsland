@@ -32,6 +32,7 @@ final class HeaderView: FlippedView {
             model?.send(.togglePin)
         }
         super.init(frame: .zero)
+        pin.inHeader = true
         capsule.layer?.cornerRadius = IslandLayoutEngine.tabButtonSize.width / 2
         addSubview(capsule)
         rebuildButtons()
@@ -65,8 +66,17 @@ final class HeaderView: FlippedView {
         rebuildButtons()
         let tab = model.presentation.expandedTab
         if tab != selectedTab {
+            let previousTab = selectedTab
             selectedTab = tab
-            for (t, b) in buttons { b.isSelected = t == tab }
+            // SwiftUI: sekme geçişi yerleşimi değiştiriyorsa `IslandMotion.resize` işleminde, değilse animasyonsuz.
+            var spec: SpringSpec?
+            if let old = previousTab, let tab, window != nil {
+                let metrics = model.metrics
+                if IslandLayoutEngine.layout(for: .expanded(old), metrics: metrics) != IslandLayoutEngine.layout(for: .expanded(tab), metrics: metrics) {
+                    spec = DeneyMotion.resize(style: DeneyMotion.effectiveStyle(model.motionStyle))
+                }
+            }
+            for (t, b) in buttons { b.setSelected(t == tab, spec: spec) }
         }
         pin.setSymbol(model.isPinned ? "pin.fill" : "pin", label: model.isPinned ? "Sabitlemeyi kaldır" : "Adayı açık tut")
     }
@@ -141,7 +151,7 @@ final class HeaderView: FlippedView {
             button.frame = pixelRect(CGRect(x: bx, y: y, width: size.width, height: size.height))
         }
         let d = IconButtonView.diameter(for: 9.5)
-        pin.frame = pixelRect(CGRect(x: pinX, y: (bounds.height - d) / 2, width: d, height: d))
+        pin.setLayoutFrame(CGRect(x: pinX, y: (bounds.height - d) / 2, width: d, height: d))
         // Seçim kapsülü (matchedGeometryEffect): yerleşim değişince yeniden boyutlama yayıyla, değişmezse anında.
         if let sx = layoutPositions[tab] {
             if animate, layout.size.width != (lastBodyWidth ?? layout.size.width) {
@@ -167,7 +177,9 @@ final class HeaderView: FlippedView {
         for button in buttons.values { button.labelOffset = dx }
         pin.labelOffset = dx
         let size = IslandLayoutEngine.tabButtonSize
-        capsule.frame = pixelRect(CGRect(x: capsuleX.value + dx, y: (bounds.height - size.height) / 2, width: size.width, height: size.height))
+        // Hareket sırasında kesirli konum (SwiftUI şekli de ara karelerde piksele oturmaz); dururken piksel ızgarası.
+        let rect = CGRect(x: capsuleX.value + dx, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
+        capsule.frame = shift.isActive || capsuleX.isActive ? rect : pixelRect(rect)
         CATransaction.commit()
     }
 }
@@ -178,7 +190,28 @@ final class TabButtonView: FlippedView {
     let tab: ExpandedTab
     private let icon: SymbolView
     private let action: () -> Void
-    var isSelected = false { didSet { if isSelected != oldValue { updateTint(); setAccessibilitySelected(isSelected) } } }
+    private(set) var isSelected = false
+    /// Seçim değişimi SwiftUI'deki işlemle aynı: yerleşim değiştiyse `IslandMotion.resize` yayı, değişmediyse anında.
+    func setSelected(_ selected: Bool, spec: SpringSpec?) {
+        guard selected != isSelected else { return }
+        isSelected = selected
+        setAccessibilitySelected(selected)
+        updateTint(spec: spec)
+    }
+    /// Seçililik miktarı (0…1). Tek katmanlı sembollerde katman opaklığı (render sunucusunda); Pano/Mikser'de renk alfası
+    /// alt yollara ayrı uygulandığı için kare sürücüsüyle renk karışımı (SwiftUI renk animasyonu ile birebir).
+    private lazy var opacity = LayerSpring(0) { [weak self] s in
+        guard let self, let layer = self.icon.layer else { return [] }
+        return [(layer, "opacity", Float(self.unselectedAlpha + (1 - self.unselectedAlpha) * s))]
+    }
+    private var colorAmount = Spring(0)
+    private lazy var colorDriver = FrameDriver(view: self) { [weak self] dt in
+        guard let self else { return false }
+        self.colorAmount.step(dt)
+        self.applyColor()
+        return self.colorAmount.isActive
+    }
+    private var unselectedAlpha: CGFloat { Palette.increasedContrast ? 0.7 : 0.48 }
     var labelOffset: CGFloat = 0 { didSet { if labelOffset != oldValue { needsLayout = true; layoutIcon() } } }
 
     init(tab: ExpandedTab, action: @escaping () -> Void) {
@@ -194,7 +227,7 @@ final class TabButtonView: FlippedView {
         setAccessibilityRole(.button)
         setAccessibilityLabel(tab.title)
         setAccessibilityHelp(tab.title)
-        updateTint()
+        updateTint(spec: nil)
     }
 
     @available(*, unavailable)
@@ -202,25 +235,30 @@ final class TabButtonView: FlippedView {
 
     private var usesLayerOpacity: Bool { tab != .mixer && tab != .clipboard }
 
-    private func updateTint() {
+    private func updateTint(spec: SpringSpec?) {
+        let target: Double = isSelected ? 1 : 0
         if usesLayerOpacity {
             icon.contentTintColor = Palette.primary
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.2
-                ctx.allowsImplicitAnimation = true
-                icon.layer?.opacity = isSelected ? 1 : Float(Palette.increasedContrast ? 0.7 : 0.48)
-            }
+            opacity.animate(to: CGFloat(target), spec: spec)
+        } else if let spec, window != nil {
+            colorAmount.animate(to: target, spec: spec)
+            colorDriver.start()
         } else {
-            icon.contentTintColor = isSelected ? Palette.primary : Palette.tertiary
+            colorAmount.set(target)
+            applyColor()
         }
+    }
+
+    private func applyColor() {
+        let a = unselectedAlpha + (1 - unselectedAlpha) * CGFloat(colorAmount.value)
+        icon.contentTintColor = NSColor(white: 1, alpha: a)
     }
 
     override func layout() { super.layout(); layoutIcon() }
 
     private func layoutIcon() {
-        let s = icon.intrinsicContentSize
-        icon.frame = CGRect(x: (bounds.width - s.width) / 2 + labelOffset, y: (bounds.height - s.height) / 2,
-                            width: s.width, height: s.height)
+        // Kaydırma ofseti canlandırılır; SwiftUI'deki gibi yalnız taban konum piksele oturur.
+        icon.frame = icon.drawingFrame(centeredIn: bounds, halfPixelUp: true).offsetBy(dx: labelOffset, dy: 0)
     }
 
     override func mouseDown(with event: NSEvent) {}
@@ -247,8 +285,23 @@ final class IconButtonView: FlippedView {
     private let action: () -> Void
     private let isProminent: Bool
     private var hoverArea: NSTrackingArea?
-    private var isHovering = false { didSet { updateHover() } }
+    private var isHovering = false { didSet { if isHovering != oldValue { updateHover(animated: true) } } }
     var labelOffset: CGFloat = 0 { didSet { if labelOffset != oldValue { layoutContent() } } }
+    /// Başlık satırındaki düğme (iğne): sembolün yarım piksel yuvarlaması başlık kuralıyla.
+    var inHeader = false
+    /// Hover miktarı (0…1): dolgu ve 1,06 ölçek aynı `IslandMotion.control` yayıyla, düğme merkezi çevresinde
+    /// (SwiftUI `.background(Circle).scaleEffect`).
+    private lazy var hover = LayerSpring(0) { [weak self] h in
+        guard let self, let layer = self.layer, let circleLayer = self.circle.layer else { return [] }
+        let scale = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 1 : 1 + 0.06 * h
+        let center = CGPoint(x: self.bounds.midX + self.labelOffset, y: self.bounds.midY)
+        var color = CGColor.clear
+        self.effectiveAppearance.performAsCurrentDrawingAppearance {
+            color = LayerSpring.mix(self.isProminent ? Palette.fill : Palette.clearWhite, Palette.fillHover, h)
+        }
+        return [(layer, "transform", LayerSpring.scale(scale, about: center, in: layer)),
+                (circleLayer, "backgroundColor", color)]
+    }
 
     init(symbol: String, label: String, size: CGFloat, isProminent: Bool = false, action: @escaping () -> Void) {
         self.action = action
@@ -263,7 +316,7 @@ final class IconButtonView: FlippedView {
         setSymbol(symbol, label: label)
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        updateHover()
+        updateHover(animated: false)
     }
 
     @available(*, unavailable)
@@ -276,24 +329,31 @@ final class IconButtonView: FlippedView {
         setAccessibilityHelp(label)
     }
 
-    private func updateHover() {
+    private func updateHover(animated: Bool) {
+        // Model değeri (görünüm değişiminde `updateLayer` bunu yeniden yazar); görünen geçiş katman yayında.
         circle.fill = isHovering ? Palette.fillHover : (isProminent ? Palette.fill : .clear)
-        let scale: CGFloat = isHovering && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 1.06 : 1
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.26
-            ctx.allowsImplicitAnimation = true
-            circle.layer?.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
-            icon.layer?.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
-        }
+        hover.animate(to: isHovering ? 1 : 0, spec: animated ? DeneyMotion.control : nil)
     }
 
     override func layout() { super.layout(); layoutContent() }
 
+    /// SwiftUI yerleşim çerçevesi: görünüm piksele oturur, AX ham (kesirli) çerçeveyi bildirir (SwiftUI ile aynı).
+    private var layoutRect: CGRect?
+    func setLayoutFrame(_ rect: CGRect) {
+        layoutRect = rect
+        frame = pixelRect(rect)
+    }
+
+    override func accessibilityFrame() -> NSRect {
+        guard let layoutRect, let superview, let window else { return super.accessibilityFrame() }
+        return window.convertToScreen(superview.convert(layoutRect, to: nil))
+    }
+
     private func layoutContent() {
         circle.frame = bounds.offsetBy(dx: labelOffset, dy: 0)
         circle.layer?.cornerRadius = bounds.width / 2
-        let s = icon.intrinsicContentSize
-        icon.frame = CGRect(x: (bounds.width - s.width) / 2 + labelOffset, y: (bounds.height - s.height) / 2, width: s.width, height: s.height)
+        icon.frame = icon.drawingFrame(centeredIn: bounds, halfPixelUp: inHeader).offsetBy(dx: labelOffset, dy: 0)
+        if hover.target != 0 { hover.animate(to: hover.target, spec: nil) } // ölçek merkezi yeni sınırlara göre
     }
 
     override func updateTrackingAreas() {
@@ -385,13 +445,14 @@ final class BannerHostView: FlippedView {
 
     override func layout() {
         super.layout()
-        let s = icon.intrinsicContentSize
+        let s = icon.layoutSize
         let contentWidth = s.width + Spacing.s + (bar.isHidden ? text.naturalWidth : 120)
         let w = contentWidth + 2 * Spacing.m
         let h: CGFloat = max(s.height, 14) + 12
         capsule.frame = CGRect(x: (bounds.width - w) / 2, y: bounds.height - h, width: w, height: h)
         capsule.layer?.cornerRadius = h / 2
-        icon.frame = CGRect(x: Spacing.m, y: (h - s.height) / 2, width: s.width, height: s.height)
+        icon.frame = icon.drawingFrame(layoutOrigin: CGPoint(x: capsule.frame.minX + Spacing.m, y: capsule.frame.minY + (h - s.height) / 2))
+            .offsetBy(dx: -capsule.frame.minX, dy: -capsule.frame.minY)
         let x = Spacing.m + s.width + Spacing.s
         bar.frame = CGRect(x: x, y: (h - 4) / 2, width: 120, height: 4)
         let th = ceil(text.intrinsicContentSize.height)

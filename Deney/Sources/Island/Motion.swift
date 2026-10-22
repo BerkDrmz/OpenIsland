@@ -184,3 +184,69 @@ final class FrameDriver: NSObject {
         if !tick(dt) { stop() }
     }
 }
+
+/// SwiftUI yayının Core Animation karşılığı. `CASpringAnimation` (kütle 1, katılık (2π/response)², sönüm 4πζ/response)
+/// render sunucusunda çalışır: ana iş parçacığında kare başına iş yoktur. Tek bir skaler (ör. hover miktarı 0…1) analitik
+/// olarak izlenir ve katman özelliklerine `apply` ile eşlenir; hedef değişince o anki değer ve hız yeni animasyona
+/// aktarılır (SwiftUI'de olduğu gibi yörünge kırılmaz). `apply` skalerde doğrusal olmalıdır (ölçek, renk karışımı).
+@MainActor
+final class LayerSpring {
+    typealias Target = (layer: CALayer, keyPath: String, value: Any)
+    private var spring: Spring
+    private var stamp = CACurrentMediaTime()
+    private let apply: (CGFloat) -> [Target]
+
+    init(_ value: CGFloat, apply: @escaping (CGFloat) -> [Target]) {
+        spring = Spring(Double(value))
+        self.apply = apply
+    }
+
+    var target: CGFloat { CGFloat(spring.target) }
+
+    /// `spec == nil`: animasyonsuz atama (SwiftUI'de animasyonsuz işlem).
+    func animate(to target: CGFloat, spec: SpringSpec?) {
+        let now = CACurrentMediaTime()
+        spring.step(now - stamp)
+        stamp = now
+        let from = CGFloat(spring.value), velocity = CGFloat(spring.velocity)
+        let targets = apply(target)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for t in targets { t.layer.setValue(t.value, forKeyPath: t.keyPath) }
+        CATransaction.commit()
+        guard let spec, from != target || velocity != 0 else {
+            spring.set(Double(target))
+            for t in targets { t.layer.removeAnimation(forKey: "spring." + t.keyPath) }
+            return
+        }
+        spring.animate(to: Double(target), spec: spec)
+        let origins = apply(from)
+        for (t, o) in zip(targets, origins) {
+            let a = CASpringAnimation(keyPath: t.keyPath)
+            a.mass = 1
+            a.stiffness = pow(2 * .pi / spec.response, 2)
+            a.damping = 4 * .pi * spec.damping / spec.response
+            a.fromValue = o.value
+            a.toValue = t.value
+            a.initialVelocity = target != from ? velocity / (target - from) : 0
+            a.duration = a.settlingDuration
+            a.isRemovedOnCompletion = true
+            t.layer.add(a, forKey: "spring." + t.keyPath)
+        }
+    }
+
+    /// Katmanı `point` çevresinde (katman koordinatları) ölçekleyen dönüşüm; çapa noktası hesaba katılır.
+    static func scale(_ s: CGFloat, about point: CGPoint, in layer: CALayer) -> CATransform3D {
+        let anchor = CGPoint(x: layer.anchorPoint.x * layer.bounds.width, y: layer.anchorPoint.y * layer.bounds.height)
+        let dx = point.x - anchor.x, dy = point.y - anchor.y
+        return CATransform3DTranslate(CATransform3DScale(CATransform3DMakeTranslation(dx, dy, 0), s, s, 1), -dx, -dy, 0)
+    }
+
+    /// sRGB'de doğrusal renk karışımı (SwiftUI renk animasyonu).
+    static func mix(_ a: NSColor, _ b: NSColor, _ t: CGFloat) -> CGColor {
+        let x = a.usingColorSpace(.sRGB) ?? a, y = b.usingColorSpace(.sRGB) ?? b
+        func l(_ p: CGFloat, _ q: CGFloat) -> CGFloat { p + (q - p) * t }
+        return CGColor(srgbRed: l(x.redComponent, y.redComponent), green: l(x.greenComponent, y.greenComponent),
+                       blue: l(x.blueComponent, y.blueComponent), alpha: l(x.alphaComponent, y.alphaComponent))
+    }
+}

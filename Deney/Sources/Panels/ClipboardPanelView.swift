@@ -61,11 +61,11 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
         let gap = IslandLayoutEngine.columnGap
         let historyWidth = bounds.width - colorWidth - 0.5 - 2 * gap
         placeholder.frame = CGRect(x: 0, y: 0, width: historyWidth, height: bounds.height)
-        let footer: CGFloat = 14
+        let footer = hint.lineHeight // HStack: caption2 metin + caption2 düz düğme (13 pt)
         list.frame = CGRect(x: 0, y: 0, width: historyWidth, height: bounds.height - footer - 6)
         let fy = bounds.height - footer
-        hint.frame = CGRect(x: 0, y: fy + (footer - hint.lineHeight) / 2, width: hint.naturalWidth, height: hint.lineHeight)
-        let cw = clearLabel.naturalWidth
+        hint.frame = CGRect(x: 0, y: fy + (footer - hint.lineHeight) / 2, width: pixelCeil(hint.exactWidth), height: hint.lineHeight)
+        let cw = pixelCeil(clearLabel.exactWidth)
         clear.frame = CGRect(x: historyWidth - cw, y: fy + (footer - clearLabel.lineHeight) / 2, width: cw, height: clearLabel.lineHeight)
         clearLabel.frame = clear.bounds
         separator.frame = pixelRect(CGRect(x: historyWidth + gap, y: 0, width: 0.5, height: bounds.height))
@@ -77,7 +77,7 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
 @MainActor
 private final class ClipListView: NSScrollView {
     private let history: ClipboardHistory
-    private let document = FlippedView()
+    private let document = LazyStackView()
     private var items: [ClipItem] = []
     private var rows: [UUID: ClipRowView] = [:]
     private var pool: [ClipRowView] = []
@@ -92,7 +92,6 @@ private final class ClipListView: NSScrollView {
         hasHorizontalScroller = false
         verticalScrollElasticity = .allowed
         documentView = document
-        document.makeLazyStackContainer()
         contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: contentView)
     }
@@ -258,22 +257,21 @@ private final class ClipRowView: RoundedView {
         super.layout()
         let h = bounds.height
         var right = bounds.width - 10
-        let cs = copyIcon.intrinsicContentSize
+        let cs = copyIcon.layoutSize
         right -= cs.width
-        copyIcon.frame = pixelRect(CGRect(x: right, y: (h - cs.height) / 2, width: cs.width, height: cs.height))
-        if !trash.isHidden, let icon = trash.subviews.first {
-            let ts = icon.intrinsicContentSize
+        copyIcon.frame = copyIcon.drawingFrame(layoutOrigin: CGPoint(x: right, y: (h - cs.height) / 2))
+        if !trash.isHidden, let icon = trash.subviews.first as? SymbolView {
+            let ts = icon.layoutSize
             right -= 10 + ts.width
-            trash.frame = pixelRect(CGRect(x: right, y: (h - ts.height) / 2, width: ts.width, height: ts.height))
-            icon.frame = trash.bounds
+            icon.place(asLabelOf: trash, layoutOrigin: CGPoint(x: right, y: (h - ts.height) / 2))
         }
         var x: CGFloat = 10
         if !thumbnail.isHidden {
             thumbnail.frame = CGRect(x: x, y: (h - 20) / 2, width: 30, height: 20)
             x += 30 + 8
         } else if !fileIcon.isHidden {
-            let s = fileIcon.intrinsicContentSize
-            fileIcon.frame = pixelRect(CGRect(x: x, y: (h - s.height) / 2, width: s.width, height: s.height))
+            let s = fileIcon.layoutSize
+            fileIcon.frame = fileIcon.drawingFrame(layoutOrigin: CGPoint(x: x, y: (h - s.height) / 2))
             x += s.width + 5
         }
         // HStack(spacing: 10) { metin, Spacer(minLength: 8), [çöp], simge }: metin ile simge arasında 10 + 8 + 10.

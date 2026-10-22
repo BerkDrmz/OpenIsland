@@ -200,8 +200,7 @@ final class ArtworkLayerView: NSView {
         }
         layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
         note.setConfiguration(size: max(bounds.width * 0.38, 6), weight: .semibold)
-        let size = note.intrinsicContentSize
-        note.frame = CGRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
+        note.frame = note.drawingFrame(centeredIn: bounds)
         CATransaction.commit()
     }
 

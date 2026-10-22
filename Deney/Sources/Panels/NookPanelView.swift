@@ -113,7 +113,7 @@ private final class NookMediaWidgetView: FlippedView {
         playPause = IconButtonView(symbol: "play.fill", label: "Oynat", size: 14, isProminent: true) { media.togglePlayPause() }
         next = IconButtonView(symbol: "forward.fill", label: "Sonraki parça", size: 11) { media.nextTrack() }
         super.init(frame: .zero)
-        placeholderIcon.exposeAsImage()
+        placeholderIcon.exposeAsImage(frameOf: placeholder) // SwiftUI: kaplama görseli kutunun çerçevesini bildirir
         placeholder.addSubview(placeholderIcon)
         artworkButton.action = { media.revealSourceApplication() }
         textButton.action = { media.revealSourceApplication() }
@@ -156,23 +156,24 @@ private final class NookMediaWidgetView: FlippedView {
         super.layout()
         let size = artworkSize
         placeholder.frame = CGRect(origin: .zero, size: size)
-        let s = placeholderIcon.intrinsicContentSize
-        placeholderIcon.frame = pixelRect(CGRect(x: (size.width - s.width) / 2, y: (size.height - s.height) / 2, width: s.width, height: s.height))
+        placeholderIcon.frame = placeholderIcon.drawingFrame(centeredIn: CGRect(origin: .zero, size: size))
         artworkButton.frame = CGRect(origin: .zero, size: size)
         let x = size.width + Spacing.m
         let w = IslandLayoutEngine.nookMediaTextWidth
         let blockH = title.lineHeight + Spacing.xxs + artist.lineHeight
-        textButton.frame = CGRect(x: x, y: 0, width: w, height: blockH)
-        title.frame = CGRect(x: 0, y: 0, width: w, height: title.lineHeight)
-        artist.frame = CGRect(x: 0, y: title.lineHeight + Spacing.xxs, width: w, height: artist.lineHeight)
+        // Metin düğmesi SwiftUI'deki gibi içeriği kadar geniştir (tıklama alanı ve AX çerçevesi aynı).
+        let textW = min(w, pixelCeil(max(title.exactWidth, artist.exactWidth)))
+        textButton.frame = CGRect(x: x, y: 0, width: textW, height: blockH)
+        title.frame = CGRect(x: 0, y: 0, width: textW, height: title.lineHeight)
+        artist.frame = CGRect(x: 0, y: title.lineHeight + Spacing.xxs, width: textW, height: artist.lineHeight)
         let big = IconButtonView.diameter(for: 14), small = IconButtonView.diameter(for: 11)
         let y = size.height - big
         var cx = x
-        previous.frame = pixelRect(CGRect(x: cx, y: y + (big - small) / 2, width: small, height: small))
+        previous.setLayoutFrame(CGRect(x: cx, y: y + (big - small) / 2, width: small, height: small))
         cx += small + Spacing.m
-        playPause.frame = pixelRect(CGRect(x: cx, y: y, width: big, height: big))
+        playPause.setLayoutFrame(CGRect(x: cx, y: y, width: big, height: big))
         cx += big + Spacing.m
-        next.frame = pixelRect(CGRect(x: cx, y: y + (big - small) / 2, width: small, height: small))
+        next.setLayoutFrame(CGRect(x: cx, y: y + (big - small) / 2, width: small, height: small))
     }
 }
 
@@ -292,7 +293,7 @@ private final class NookCalendarView: FlippedView {
             for v in labels {
                 switch v {
                 case let s as SymbolView:
-                    let size = s.intrinsicContentSize
+                    let size = s.layoutSize // yerleşim kutusu; çizim çerçevesi aşağıda dikey ortalamada
                     h = max(h, size.height)
                     s.frame = CGRect(x: bx, y: 0, width: size.width, height: size.height)
                     bx += size.width + 5
@@ -309,7 +310,14 @@ private final class NookCalendarView: FlippedView {
                 }
             }
             // Satır içinde dikey ortalama.
-            for v in labels { v.frame.origin.y = (h - v.frame.height) / 2 }
+            for v in labels {
+                if let s = v as? SymbolView {
+                    let size = s.layoutSize
+                    s.frame = s.drawingFrame(layoutOrigin: CGPoint(x: v.frame.minX, y: (h - size.height) / 2))
+                } else {
+                    v.frame.origin.y = (h - v.frame.height) / 2
+                }
+            }
             button.frame = pixelRect(CGRect(x: 0, y: y, width: labels.count == 1 && labels.first is TextLabel ? bounds.width : bx - 6, height: h))
             y += h + 3
         }
@@ -324,7 +332,7 @@ private final class DayCellView: PlainButton {
     private let number = TextLabel("", font: Fonts.rounded(14, .semibold), alignment: .center)
     private let circle = RoundedView(radius: 11, fill: .clear)
     private var isSelected = false
-    private var isHovering = false { didSet { updateCircle() } }
+    private var isHovering = false { didSet { if isHovering != oldValue { updateCircle(animated: true) } } }
     private var hoverArea: NSTrackingArea?
 
     init(offset: Int, select: @escaping () -> Void) {
@@ -345,21 +353,24 @@ private final class DayCellView: PlainButton {
         weekday.set(symbols[(wd - 1) % symbols.count])
         number.set("\(Calendar.current.component(.day, from: date))")
         let isToday = offset == 0
+        let wasSelected = isSelected
         isSelected = offset == selectedOffset
         number.textColor = isToday ? .controlAccentColor : (isSelected ? Palette.primary : Palette.secondary)
         setAccessibilityLabel(date.formatted(date: .complete, time: .omitted) + (isToday ? ", bugün" : ""))
         setAccessibilitySelected(isSelected)
-        updateCircle()
+        updateCircle(animated: window != nil && wasSelected != isSelected) // gün seçimi `IslandMotion.control` içinde
     }
 
-    private func updateCircle() {
-        let visible = isSelected || isHovering
+    /// SwiftUI: daire `if seçili || hover` ile eklenir/kalkar (varsayılan opaklık geçişi); hover ve gün seçimi
+    /// `IslandMotion.control` ile canlanır.
+    private lazy var visibility = LayerSpring(0) { [weak self] v in
+        guard let layer = self?.circle.layer else { return [] }
+        return [(layer, "opacity", Float(v))]
+    }
+
+    private func updateCircle(animated: Bool = false) {
         circle.fill = isSelected ? Palette.fillHover : Palette.fill
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.26
-            ctx.allowsImplicitAnimation = true
-            circle.layer?.opacity = visible ? 1 : 0
-        }
+        visibility.animate(to: isSelected || isHovering ? 1 : 0, spec: animated ? DeneyMotion.control : nil)
     }
 
     override func layout() {
@@ -468,10 +479,9 @@ private final class NookShortcutsView: FlippedView {
     override func layout() {
         super.layout()
         header.frame = CGRect(x: 0, y: 0, width: header.naturalWidth, height: header.lineHeight)
-        if let icon = tools.subviews.first {
-            let s = icon.intrinsicContentSize
-            tools.frame = pixelRect(CGRect(x: bounds.width - s.width, y: (header.lineHeight - s.height) / 2, width: s.width, height: s.height))
-            icon.frame = tools.bounds
+        if let icon = tools.subviews.first as? SymbolView {
+            let s = icon.layoutSize
+            icon.place(asLabelOf: tools, layoutOrigin: CGPoint(x: bounds.width - s.width, y: (header.lineHeight - s.height) / 2))
         }
         let y = header.lineHeight + Spacing.xs
         empty.frame = CGRect(x: 0, y: y, width: bounds.width, height: empty.lineHeight)

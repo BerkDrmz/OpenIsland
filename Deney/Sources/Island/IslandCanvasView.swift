@@ -49,6 +49,8 @@ final class IslandCanvasView: NSView {
         topInset = Spring(layout.topInset)
         media = MediaLayersView(media: environment.media, preferences: environment.preferences)
         super.init(frame: .zero)
+        // SwiftUI kökü `.environment(\.colorScheme, .dark)`: barındırılan AppKit denetimleri koyu görünümle çizilir.
+        appearance = NSAppearance(named: .darkAqua)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
         layer?.masksToBounds = false

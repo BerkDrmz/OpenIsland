@@ -84,6 +84,14 @@ final class SecondTicker {
 class PlainButton: FlippedView {
     var action: (() -> Void)?
     var isEnabled = true
+    weak var inkSymbol: SymbolView?
+    /// Etiketi Label olan düz düğme: AX çerçevesi etiketinkidir (mürekkep + metin).
+    weak var accessibilityFrameSource: NSView?
+
+    override func accessibilityFrame() -> NSRect {
+        if let source = accessibilityFrameSource { return source.accessibilityFrame() }
+        return inkSymbol?.inkScreenFrame() ?? super.accessibilityFrame()
+    }
 
     init(action: (() -> Void)? = nil) {
         self.action = action
@@ -146,13 +154,13 @@ final class PlaceholderStack: FlippedView {
 
     override func layout() {
         super.layout()
-        let s = icon.intrinsicContentSize
+        let s = icon.layoutSize
         let th = title.lineHeight
         let dw = min(maxDetailWidth, bounds.width)
         let dh = detail.height(forWidth: dw)
         let total = s.height + iconGap + th + iconGap + dh
         var y = (bounds.height - total) / 2
-        icon.frame = pixelRect(CGRect(x: (bounds.width - s.width) / 2, y: y, width: s.width, height: s.height))
+        icon.frame = icon.drawingFrame(layoutOrigin: CGPoint(x: (bounds.width - s.width) / 2, y: y))
         y += s.height + iconGap
         title.frame = pixelRect(CGRect(x: 0, y: y, width: bounds.width, height: th))
         y += th + iconGap
@@ -165,10 +173,30 @@ extension NSAccessibility.Role {
     static let opaqueProviderGroup = NSAccessibility.Role(rawValue: "AXOpaqueProviderGroup")
 }
 
-extension NSView {
-    func makeLazyStackContainer() {
+/// SwiftUI `LazyVStack`/`LazyVGrid` karşılığı belge görünümü: AX rolü aynı, AX çerçevesi de SwiftUI gibi gerçekleşmiş
+/// çocukların birleşimidir (belgenin tüm yüksekliği değil).
+class LazyStackView: FlippedView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
         setAccessibilityElement(true)
         setAccessibilityRole(.opaqueProviderGroup)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
+
+    override func accessibilityFrame() -> NSRect {
+        let frames = subviews.lazy.filter { !$0.isHidden }.map(\.frame)
+        guard let window, let first = frames.first else { return super.accessibilityFrame() }
+        return window.convertToScreen(convert(frames.dropFirst().reduce(first) { $0.union($1) }, to: nil))
+    }
+}
+
+/// AX çerçevesi görünüm çerçevesi olan açılır düğme (SwiftUI `Menu` gibi; hücrenin iç çerçevesi değil).
+final class FramedPopUpButton: NSPopUpButton {
+    override func accessibilityFrame() -> NSRect {
+        guard let window else { return super.accessibilityFrame() }
+        return window.convertToScreen(convert(bounds, to: nil))
     }
 }
 

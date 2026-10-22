@@ -67,6 +67,11 @@ final class SystemPanelView: FlippedView, IslandPanel {
         storage.frame = CGRect(x: 0, y: h + 2 * sectionGap + 0.5, width: bounds.width, height: IslandLayoutEngine.System.storageHeight)
     }
 
+    /// SwiftUI `.frame(height: 12)`: 13 pt'lik metin satırı 12 pt'lik kutuda dikeyde ortalanır (üstten −0,5 pt).
+    static func sectionLabelFrame(_ label: TextLabel, width: CGFloat) -> CGRect {
+        CGRect(x: 0, y: (12 - label.lineHeight) / 2, width: width, height: label.lineHeight)
+    }
+
     static func sectionLabel(_ text: String) -> TextLabel {
         TextLabel(text, font: Fonts.sectionLabel, color: Palette.tertiary)
     }
@@ -99,15 +104,15 @@ private final class TemperatureColumnView: FlippedView {
 
     override func layout() {
         super.layout()
-        header.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 12)
+        header.frame = SystemPanelView.sectionLabelFrame(header, width: bounds.width)
         let tileH = cpu.preferredHeight
         let tileW = (bounds.width - 8) / 2
         cpu.frame = CGRect(x: 0, y: 12 + 6, width: tileW, height: tileH)
         gpu.frame = CGRect(x: tileW + 8, y: 12 + 6, width: tileW, height: tileH)
         let lh = uptime.lineHeight
-        let s = clock.intrinsicContentSize
+        let s = clock.layoutSize
         let y = bounds.height - lh
-        clock.frame = pixelRect(CGRect(x: 0, y: y + (lh - s.height) / 2, width: s.width, height: s.height))
+        clock.frame = clock.drawingFrame(layoutOrigin: CGPoint(x: 0, y: y + (lh - s.height) / 2))
         uptime.frame = CGRect(x: s.width + 4, y: y, width: bounds.width - s.width - 4, height: lh)
     }
 
@@ -187,8 +192,12 @@ private final class UsageColumnView: FlippedView {
             memory.set(fraction: m.usedFraction, text: "\(Self.bytes(m.usedBytes)) / \(Self.bytes(m.totalBytes))", tint: tint)
             memory.toolTip = "Mac'in toplam RAM kullanımıdır; OpenIsland'in kendi kullanımı değildir. Bellek basıncı: \(pressure)."
             memory.setAccessibilityHelp("Mac'in toplam RAM kullanımı. Bellek basıncı: \(pressure).")
-            detail.set("Sıkıştırılmış \(Self.bytes(m.compressedBytes)) · Takas \(Self.bytes(m.swapUsedBytes))")
-            detail.isHidden = false
+            let text = "Sıkıştırılmış \(Self.bytes(m.compressedBytes)) · Takas \(Self.bytes(m.swapUsedBytes))"
+            if detail.stringValue != text || detail.isHidden {
+                detail.set(text)
+                detail.isHidden = false
+                needsLayout = true // genişlik metne bağlı
+            }
         } else {
             memory.set(fraction: nil, text: "—")
             memory.toolTip = nil
@@ -199,7 +208,7 @@ private final class UsageColumnView: FlippedView {
 
     override func layout() {
         super.layout()
-        header.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 12)
+        header.frame = SystemPanelView.sectionLabelFrame(header, width: bounds.width)
         var y: CGFloat = 12 + 6
         for row in [cpu, gpu, memory] {
             row.frame = CGRect(x: 0, y: y, width: bounds.width, height: 18)
@@ -258,6 +267,13 @@ private final class UsageRow: FlippedView {
         setAccessibilityValue(text)
     }
 
+    /// SwiftUI satırın AX çerçevesini içeriğin birleşimi olarak bildirir (18 pt'lik kutu değil, 14 pt'lik metin satırı).
+    override func accessibilityFrame() -> NSRect {
+        guard let window else { return super.accessibilityFrame() }
+        let h = max(title.lineHeight, value.lineHeight)
+        return window.convertToScreen(convert(CGRect(x: 0, y: (bounds.height - h) / 2, width: bounds.width, height: h), to: nil))
+    }
+
     override func layout() {
         super.layout()
         let lh = title.lineHeight
@@ -291,7 +307,7 @@ private final class ControlsColumnView: FlippedView {
 
     override func layout() {
         super.layout()
-        header.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 12)
+        header.frame = SystemPanelView.sectionLabelFrame(header, width: bounds.width)
         brightness.frame = CGRect(x: 0, y: 18, width: bounds.width, height: 22)
         keyboard.frame = CGRect(x: 0, y: 18 + 22 + 6, width: bounds.width, height: 22)
     }
@@ -299,7 +315,7 @@ private final class ControlsColumnView: FlippedView {
 
 private final class SliderRow: FlippedView {
     private let icon: SymbolView
-    private let slider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let slider = AlignedSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
     private let unavailable: TextLabel
     private let title: String
     private let set: (Float) -> Void
@@ -348,11 +364,10 @@ private final class SliderRow: FlippedView {
 
     override func layout() {
         super.layout()
-        let s = icon.intrinsicContentSize
-        icon.frame = pixelRect(CGRect(x: (14 - s.width) / 2, y: (bounds.height - s.height) / 2, width: s.width, height: s.height))
+        icon.frame = icon.drawingFrame(centeredIn: CGRect(x: 0, y: 0, width: 14, height: bounds.height))
         let x: CGFloat = 14 + 8
-        let sh = slider.intrinsicContentSize.height
-        slider.frame = CGRect(x: x, y: (bounds.height - sh) / 2, width: bounds.width - x, height: sh)
+        // SwiftUI küçük kaydırıcı: hizalama dikdörtgeni 16 pt yüksek, görünüm her yandan 2 pt taşar.
+        slider.setAlignmentFrame(CGRect(x: x, y: (bounds.height - 16) / 2, width: bounds.width - x, height: 16))
         unavailable.frame = CGRect(x: x, y: (bounds.height - unavailable.lineHeight) / 2, width: bounds.width - x, height: unavailable.lineHeight)
     }
 }
@@ -362,16 +377,15 @@ private final class SliderRow: FlippedView {
 private final class StorageSectionView: FlippedView {
     private let system: SystemMonitor
     private let header = SystemPanelView.sectionLabel("DEPOLAMA")
-    private let picker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let diskIcon = SymbolView("internaldrive", size: 11, color: Palette.primary)
-    private let diskName = TextLabel("", font: Fonts.caption)
+    private let picker = AlignedPopUpButton(frame: .zero, pullsDown: false)
+    private var diskLabel = IconLabelView("", symbol: "internaldrive")
     private let refresh: PlainButton
     private let settings: PlainButton
     private let bar = LevelBarView()
     private let usage = TextLabel("", font: Fonts.numericSmall)
     private let free = TextLabel("", font: Fonts.numericSmall, color: Palette.secondary)
     private let loading = TextLabel("Depolama bilgisi okunuyor veya disk kullanılamıyor.", font: Fonts.caption2, color: Palette.secondary)
-    private let usageGroup = FlippedView()
+    private let usageGroup = ContentFramedView()
     private var selectedID = "/"
     private var volumes: [StorageVolume] = []
 
@@ -382,8 +396,11 @@ private final class StorageSectionView: FlippedView {
             if let url = URL(string: "x-apple.systempreferences:com.apple.Storage-Settings.extension") { NSWorkspace.shared.open(url) }
         }
         super.init(frame: .zero)
+        // SwiftUI: `.buttonStyle(.plain)` içindeki menü seçici kenarlıksız ve okuysuz çizilir (çalışma anında okundu).
         picker.controlSize = .mini
-        picker.font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .mini))
+        picker.font = NSFont.systemFont(ofSize: 9)
+        picker.isBordered = false
+        (picker.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
         picker.target = self
         picker.action = #selector(pick(_:))
         picker.toolTip = "Dahili veya harici disk seç"
@@ -402,8 +419,8 @@ private final class StorageSectionView: FlippedView {
         [usage, free].forEach { $0.setAccessibilityElement(false) }
         usageGroup.setAccessibilityElement(true)
         usageGroup.setAccessibilityRole(.unknown)
-        [header, picker, diskIcon, diskName, refresh, settings, usageGroup, loading].forEach(addSubview)
-        diskName.setAccessibilityElement(true)
+        usageGroup.contentHeight = TextMetrics.lineHeight(for: Fonts.numericSmall)
+        [header, picker, diskLabel, refresh, settings, usageGroup, loading].forEach(addSubview)
     }
 
     @available(*, unavailable)
@@ -421,14 +438,18 @@ private final class StorageSectionView: FlippedView {
         let volume = selected
         let multiple = volumes.count > 1
         picker.isHidden = volume == nil || !multiple
-        diskIcon.isHidden = volume == nil || multiple
-        diskName.isHidden = volume == nil || multiple
+        diskLabel.isHidden = volume == nil || multiple
         usageGroup.isHidden = volume == nil
         loading.isHidden = volume != nil
         if let volume {
             if let index = volumes.firstIndex(where: { $0.id == volume.id }) { picker.selectItem(at: index) }
-            diskIcon.set(volume.isInternal ? "internaldrive" : "externaldrive", animated: false)
-            diskName.set(volume.name)
+            let symbol = volume.isInternal ? "internaldrive" : "externaldrive"
+            if diskLabel.text.stringValue != volume.name || diskLabel.symbolName != symbol {
+                let label = IconLabelView(volume.name, symbol: symbol)
+                label.isHidden = diskLabel.isHidden
+                replaceSubview(diskLabel, with: label)
+                diskLabel = label
+            }
             bar.setLevel(volume.usedFraction, animated: false)
             usage.set("\(Self.bytes(volume.used)) / \(Self.bytes(volume.total))")
             free.set("\(Self.bytes(volume.available)) boş")
@@ -447,35 +468,31 @@ private final class StorageSectionView: FlippedView {
     override func layout() {
         super.layout()
         let rowH: CGFloat = 18
-        let hw = header.naturalWidth
+        let hw = pixelCeil(header.exactWidth)
         header.frame = CGRect(x: 0, y: (rowH - header.lineHeight) / 2, width: hw, height: header.lineHeight)
         var x = hw + 8
         if !picker.isHidden {
-            let w = min(picker.intrinsicContentSize.width, 145)
+            // Esnek genişlik: `.frame(maxWidth: 145)` önerisini alır.
             let h = picker.intrinsicContentSize.height
-            picker.frame = CGRect(x: x, y: (rowH - h) / 2, width: w, height: h)
+            picker.setAlignmentFrame(CGRect(x: x, y: (rowH - h) / 2, width: 145, height: h))
         } else {
-            let s = diskIcon.intrinsicContentSize
-            diskIcon.frame = pixelRect(CGRect(x: x, y: (rowH - s.height) / 2, width: s.width, height: s.height))
-            let nameX = x + s.width + 5
-            let available = bounds.width - nameX - 8 - 2 * 20
-            diskName.frame = CGRect(x: nameX, y: (rowH - diskName.lineHeight) / 2, width: min(diskName.naturalWidth, max(available, 0)), height: diskName.lineHeight)
+            let s = diskLabel.fittingSize
+            diskLabel.frame = CGRect(x: x, y: (rowH - s.height) / 2, width: s.width, height: s.height)
         }
         // Sağda iki düğme (SwiftUI düz düğmeleri: simge boyutu kadar, aralarında 8 pt).
         var right = bounds.width
         for button in [settings, refresh] {
-            guard let icon = button.subviews.first else { continue }
-            let s = icon.intrinsicContentSize
+            guard let icon = button.subviews.first as? SymbolView else { continue }
+            let s = icon.layoutSize
             right -= s.width
-            button.frame = pixelRect(CGRect(x: right, y: (rowH - s.height) / 2, width: s.width, height: s.height))
-            icon.frame = CGRect(origin: .zero, size: s)
+            icon.place(asLabelOf: button, layoutOrigin: CGPoint(x: right, y: (rowH - s.height) / 2))
             right -= 8
         }
         _ = x
         x = 0
         let y2 = rowH + 6
         usageGroup.frame = CGRect(x: 0, y: y2, width: bounds.width, height: rowH)
-        let fw = free.naturalWidth, uw = usage.naturalWidth
+        let fw = pixelCeil(free.exactWidth), uw = pixelCeil(usage.exactWidth)
         free.frame = CGRect(x: bounds.width - fw, y: (rowH - free.lineHeight) / 2, width: fw, height: free.lineHeight)
         usage.frame = CGRect(x: bounds.width - fw - 10 - uw, y: (rowH - usage.lineHeight) / 2, width: uw, height: usage.lineHeight)
         bar.frame = pixelRect(CGRect(x: 0, y: (rowH - 4) / 2, width: max(bounds.width - fw - uw - 20, 0), height: 4))
@@ -483,4 +500,15 @@ private final class StorageSectionView: FlippedView {
     }
 
     private static func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .file) }
+}
+
+/// AX çerçevesi SwiftUI gibi içeriğin birleşimi (dikeyde ortalı `contentHeight`), kutunun tamamı değil.
+final class ContentFramedView: FlippedView {
+    var contentHeight: CGFloat = 0
+
+    override func accessibilityFrame() -> NSRect {
+        guard let window, contentHeight > 0 else { return super.accessibilityFrame() }
+        let r = CGRect(x: 0, y: (bounds.height - contentHeight) / 2, width: bounds.width, height: contentHeight)
+        return window.convertToScreen(convert(r, to: nil))
+    }
 }

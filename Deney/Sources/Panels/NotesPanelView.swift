@@ -11,9 +11,9 @@ final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
     private let scroll = NSScrollView()
     private let textView: NSTextView
     private let launcherLabel = TextLabel("Başlatıcı", font: Fonts.sectionLabel, color: Palette.secondary)
-    private let addButton = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let addButton = FramedPopUpButton(frame: .zero, pullsDown: true)
     private let grid = NSScrollView()
-    private let gridDocument = FlippedView()
+    private let gridDocument = LazyStackView()
     private var tiles: [UUID: LauncherTileView] = [:]
     private var refreshTask: Task<Void, Never>?
     private lazy var observer = Observer(track: { [notes, launcher] in
@@ -26,13 +26,25 @@ final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
         let textView = NSTextView(frame: .zero)
         self.textView = textView
         super.init(frame: .zero)
+        // SwiftUI `TextEditor`'ün metin görünümü ayarlarıyla birebir (çalışma anında okunmuştur): ekleme imleci vurgu
+        // renginde, akıllı tırnak/tire, metin değiştirme, otomatik düzeltme ve tamamlama açık; sürekli imla denetimi kapalı.
         textView.font = Fonts.body
         textView.textColor = Palette.primary
-        textView.insertionPointColor = Palette.primary
+        textView.insertionPointColor = .controlAccentColor
         textView.drawsBackground = false
         textView.isRichText = false
         textView.allowsUndo = true
-        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticQuoteSubstitutionEnabled = true
+        textView.isAutomaticDashSubstitutionEnabled = true
+        textView.isAutomaticTextReplacementEnabled = true
+        textView.isAutomaticSpellingCorrectionEnabled = true
+        textView.isAutomaticTextCompletionEnabled = true
+        textView.isGrammarCheckingEnabled = true
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 5
         textView.isVerticallyResizable = true
@@ -43,6 +55,7 @@ final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = false
         scroll.scrollerStyle = .overlay
+        scroll.verticalScrollElasticity = .allowed
         scroll.documentView = textView
         editorBackground.addSubview(scroll)
 
@@ -53,7 +66,6 @@ final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
         grid.drawsBackground = false
         grid.hasVerticalScroller = false
         grid.documentView = gridDocument
-        gridDocument.makeLazyStackContainer()
         [noteLabel, editorBackground, launcherLabel, addButton, grid].forEach(addSubview)
     }
 
@@ -180,10 +192,6 @@ final class LauncherTileView: PlainButton {
     override func layout() {
         super.layout()
         image.frame = bounds
-        if let l = image.layer {
-            l.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-            l.position = CGPoint(x: image.frame.midX, y: image.frame.midY)
-        }
     }
 
     override func updateTrackingAreas() {
@@ -197,13 +205,13 @@ final class LauncherTileView: PlainButton {
     override func mouseEntered(with event: NSEvent) { setHover(true) }
     override func mouseExited(with event: NSEvent) { setHover(false) }
 
-    private func setHover(_ on: Bool) {
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.26
-            ctx.allowsImplicitAnimation = true
-            image.layer?.setAffineTransform(on ? CGAffineTransform(scaleX: 1.08, y: 1.08) : .identity)
-        }
+    /// 1,08 hover ölçeği `IslandMotion.control` yayıyla, simge merkezi çevresinde.
+    private lazy var hover = LayerSpring(0) { [weak self] h in
+        guard let layer = self?.image.layer else { return [] }
+        return [(layer, "transform", LayerSpring.scale(1 + 0.08 * h, about: CGPoint(x: layer.bounds.midX, y: layer.bounds.midY), in: layer))]
     }
+
+    private func setHover(_ on: Bool) { hover.animate(to: on ? 1 : 0, spec: DeneyMotion.control) }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()

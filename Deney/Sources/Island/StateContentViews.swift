@@ -110,11 +110,15 @@ final class CompactContentView: FlippedView, IslandContentView {
         let grid = DeneyWingGrid(layout: layout, metrics: model.metrics, iconSize: 18)
         let h = bounds.height
         if let leading {
-            let size: CGSize = leading is TimeProgressLayerView ? CGSize(width: 16, height: 16) : leading.intrinsicContentSize
-            leading.frame = CGRect(x: grid.sideInset, y: (h - size.height) / 2, width: size.width, height: size.height)
-            if let arrow = leading.subviews.first {
-                let s = arrow.intrinsicContentSize
-                arrow.frame = CGRect(x: (16 - s.width) / 2, y: (16 - s.height) / 2, width: s.width, height: s.height)
+            if let symbol = leading as? SymbolView {
+                let size = symbol.layoutSize
+                symbol.frame = symbol.drawingFrame(layoutOrigin: CGPoint(x: grid.sideInset, y: (h - size.height) / 2))
+            } else {
+                let size: CGSize = leading is TimeProgressLayerView ? CGSize(width: 16, height: 16) : leading.intrinsicContentSize
+                leading.frame = CGRect(x: grid.sideInset, y: (h - size.height) / 2, width: size.width, height: size.height)
+            }
+            if let arrow = leading.subviews.first as? SymbolView {
+                arrow.frame = arrow.drawingFrame(centeredIn: CGRect(x: 0, y: 0, width: 16, height: 16))
             }
         }
         if trailing != nil {
@@ -199,8 +203,7 @@ final class HUDContentView: FlippedView, IslandContentView {
         let layout = IslandLayoutEngine.layout(for: .hud(payload), metrics: model.metrics)
         let grid = DeneyWingGrid(layout: layout, metrics: model.metrics, iconSize: 18)
         let h = bounds.height
-        let s = icon.intrinsicContentSize
-        icon.frame = CGRect(x: grid.sideInset + (18 - s.width) / 2, y: (h - s.height) / 2, width: s.width, height: s.height)
+        icon.frame = icon.drawingFrame(centeredIn: CGRect(x: grid.sideInset, y: 0, width: 18, height: h))
         let groupX = bounds.width - grid.sideInset - 92
         let lineHeight = ceil(value.intrinsicContentSize.height)
         value.frame = CGRect(x: groupX + 92 - 22, y: (h - lineHeight) / 2, width: 22, height: lineHeight)
@@ -345,17 +348,25 @@ final class NoticeContentView: FlippedView, IslandContentView {
         let gap = metrics.style == .notch ? metrics.notchSize.width : Spacing.s
         let wingWidth = (bounds.width - 2 * side - gap) / 2
         if let leading {
-            let size: CGSize = switch leading {
-            case is BatteryGlyphView: CGSize(width: 28.5, height: 12)
-            case is RoundedView: CGSize(width: 16, height: 16)
-            default: leading.intrinsicContentSize
+            if let symbol = leading as? SymbolView {
+                let size = symbol.layoutSize
+                symbol.frame = symbol.drawingFrame(layoutOrigin: CGPoint(x: side, y: (wingHeight - size.height) / 2))
+            } else {
+                let size: CGSize = switch leading {
+                case is BatteryGlyphView: CGSize(width: 28.5, height: 12)
+                case is RoundedView: CGSize(width: 16, height: 16)
+                default: leading.intrinsicContentSize
+                }
+                leading.frame = CGRect(x: side, y: (wingHeight - size.height) / 2, width: size.width, height: size.height)
             }
-            leading.frame = CGRect(x: side, y: (wingHeight - size.height) / 2, width: size.width, height: size.height)
         }
         if let trailing {
             if let label = trailing as? TextLabel {
                 let lh = ceil(label.intrinsicContentSize.height)
                 label.frame = CGRect(x: bounds.width - side - wingWidth, y: (wingHeight - lh) / 2, width: wingWidth, height: lh)
+            } else if let symbol = trailing as? SymbolView {
+                let s = symbol.layoutSize
+                symbol.frame = symbol.drawingFrame(layoutOrigin: CGPoint(x: bounds.width - side - s.width, y: (wingHeight - s.height) / 2))
             } else {
                 let s = trailing.intrinsicContentSize
                 trailing.frame = CGRect(x: bounds.width - side - s.width, y: (wingHeight - s.height) / 2, width: s.width, height: s.height)
@@ -417,8 +428,7 @@ final class BatteryGlyphView: FlippedView {
         fillView.frame = CGRect(x: 2, y: 2, width: max(2, 21 * level.value), height: 8)
         tip.frame = CGRect(x: 26.5, y: 4, width: 1.5, height: 4)
         if let bolt {
-            let s = bolt.intrinsicContentSize
-            bolt.frame = CGRect(x: (25 - s.width) / 2, y: (12 - s.height) / 2, width: s.width, height: s.height)
+            bolt.frame = bolt.drawingFrame(centeredIn: CGRect(x: 0, y: 0, width: 25, height: 12))
         }
     }
 }
@@ -461,8 +471,7 @@ final class AudioNoticeContentView: FlippedView, IslandContentView {
         let metrics = model.metrics
         let wing = (bounds.width - metrics.notchSize.width) / 2
         icon.setConfiguration(size: min(bounds.height * 0.48, 17), weight: .medium)
-        let s = icon.intrinsicContentSize
-        icon.frame = CGRect(x: (wing - s.width) / 2, y: (bounds.height - s.height) / 2, width: s.width, height: s.height)
+        icon.frame = icon.drawingFrame(centeredIn: CGRect(x: 0, y: 0, width: wing, height: bounds.height))
         let x = wing + metrics.notchSize.width + 10
         let w = wing - 20
         let h1 = ceil(name.intrinsicContentSize.height), h2 = ceil(status.intrinsicContentSize.height)
@@ -532,8 +541,8 @@ final class UnlockContentView: FlippedView, IslandContentView {
         let reduced = DeneyMotion.effectiveStyle(model.motionStyle) == .reduced
         let scale = reduced ? 1 : 0.7 + 0.3 * unlock.value
         symbol.layer?.opacity = Float(0.6 + 0.4 * unlock.value)
-        let s = symbol.intrinsicContentSize
-        symbol.frame = CGRect(x: centerX - s.width / 2, y: (bounds.height - s.height) / 2, width: s.width, height: s.height)
+        let s = symbol.layoutSize
+        symbol.frame = symbol.drawingFrame(centeredIn: CGRect(x: centerX - s.width / 2, y: 0, width: s.width, height: bounds.height))
         if let l = symbol.layer {
             l.anchorPoint = CGPoint(x: 0.5, y: 0.5)
             l.position = CGPoint(x: symbol.frame.midX, y: symbol.frame.midY)
@@ -604,18 +613,22 @@ final class DropTile: FlippedView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
+    /// Etkinlik miktarı (0…1): dolgu, kesikli kenar rengi ve 1,02 ölçek `.animation(IslandMotion.control)` ile.
+    private lazy var activity = LayerSpring(0) { [weak self] a in
+        guard let self, let layer = self.layer else { return [] }
+        var fill = CGColor.clear, stroke = CGColor.clear
+        self.effectiveAppearance.performAsCurrentDrawingAppearance {
+            fill = LayerSpring.mix(Palette.fill, Palette.fillHover, a)
+            stroke = LayerSpring.mix(Palette.separator, Palette.secondary, a)
+        }
+        let center = CGPoint(x: self.bounds.midX, y: self.bounds.midY)
+        return [(layer, "transform", LayerSpring.scale(1 + 0.02 * a, about: center, in: layer)),
+                (self.background, "fillColor", fill), (self.background, "strokeColor", stroke)]
+    }
+
     private func update() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            background.fillColor = (isActive ? Palette.fillHover : Palette.fill).cgColor
-            background.strokeColor = (isActive ? Palette.secondary : Palette.separator).cgColor
-        }
         setAccessibilitySelected(isActive)
-        let s: CGFloat = isActive ? 1.02 : 1
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.26
-            ctx.allowsImplicitAnimation = true
-            layer?.setAffineTransform(CGAffineTransform(scaleX: s, y: s))
-        }
+        activity.animate(to: isActive ? 1 : 0, spec: window != nil ? DeneyMotion.control : nil)
     }
 
     override func layout() {
@@ -623,11 +636,12 @@ final class DropTile: FlippedView {
         let radius = Spacing.cardRadius
         background.frame = bounds
         background.path = CGPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), cornerWidth: radius, cornerHeight: radius, transform: nil)
-        let s = icon.intrinsicContentSize
-        let th = ceil(title.intrinsicContentSize.height)
+        let s = icon.layoutSize
+        let th = title.lineHeight
         let total = s.height + Spacing.s + th
         let top = (bounds.height - total) / 2
-        icon.frame = CGRect(x: (bounds.width - s.width) / 2, y: top, width: s.width, height: s.height)
-        title.frame = CGRect(x: 0, y: top + s.height + Spacing.s, width: bounds.width, height: th)
+        icon.frame = icon.drawingFrame(layoutOrigin: CGPoint(x: (bounds.width - s.width) / 2, y: top))
+        title.frame = pixelRect(CGRect(x: 0, y: top + s.height + Spacing.s, width: bounds.width, height: th))
+        activity.animate(to: activity.target, spec: nil) // ölçek merkezi yeni sınırlara göre
     }
 }
