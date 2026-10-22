@@ -23,17 +23,12 @@ final class MediaLayersView: FlippedView {
         self.model = model
         super.init(frame: .zero)
         wantsLayer = true
-        layerUsesCoreImageFilters = true
+        let noBlur = ProcessInfo.processInfo.environment["OPENISLAND_DENEY_NOBLUR"] != nil
+        layerUsesCoreImageFilters = !noBlur
         addSubview(artwork)
         addSubview(waveform)
-        for view in [artwork, waveform] as [NSView] {
-            view.wantsLayer = true
-            if let blur = CIFilter(name: "CIGaussianBlur") {
-                blur.name = "reveal"
-                blur.setValue(0, forKey: kCIInputRadiusKey)
-                view.layer?.filters = [blur]
-            }
-        }
+        _ = noBlur
+        for view in [artwork, waveform] as [NSView] { view.wantsLayer = true }
         artwork.setAccessibilityElement(true)
         artwork.setAccessibilityRole(.image)
         waveform.setAccessibilityElement(false)
@@ -140,7 +135,7 @@ private struct SlotItem {
         let p = max(0, min(1, progress.value))
         view.frame = CGRect(x: offset.x + x.value, y: offset.y + y.value, width: max(w.value, 0), height: max(h.value, 0))
         view.layer?.opacity = Float(p)
-        view.layer?.setValue(hasSlot ? (1 - p) * 6 : 0, forKeyPath: "filters.reveal.inputRadius")
+        RevealBlur.apply(radius: hasSlot ? (1 - p) * 6 : 0, to: view.layer)
         view.isHidden = p <= 0.001
         radius?(r.value)
     }

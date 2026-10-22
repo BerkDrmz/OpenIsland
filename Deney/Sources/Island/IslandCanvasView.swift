@@ -72,8 +72,9 @@ final class IslandCanvasView: NSView {
         maskLayer.actions = Self.noActions
 
         contentView.wantsLayer = true
-        contentView.layerUsesCoreImageFilters = true
-        contentView.layer?.mask = maskLayer
+        let env = ProcessInfo.processInfo.environment
+        contentView.layerUsesCoreImageFilters = env["OPENISLAND_DENEY_NOBLUR"] == nil
+        if env["OPENISLAND_DENEY_NOMASK"] == nil { contentView.layer?.mask = maskLayer }
         addSubview(contentView)
         contentView.addSubview(media)
 
@@ -169,14 +170,15 @@ final class IslandCanvasView: NSView {
         }
         let spec = DeneyMotion.morph(from: surfacePresentation, to: presentation, style: style)
         if presentation.isExpanded && !surfacePresentation.isExpanded {
-            // Önce hedef içerik kurulup yerleşir, sonra taze bir yay saati başlar (SwiftUI sürümüyle aynı).
+            // Önce hedef içerik kurulup yerleşir ve ilk karesi ekrana çıkar (katman dokuları render sunucusuna yüklenir),
+            // sonra taze bir yay saati başlar. SwiftUI'de de ağır ilk çizim hareketten önce biter; hareket kesintisiz.
             let work = DispatchWorkItem { [weak self] in
                 if FrameDriver.isLogging { FrameDriver.note("opening spring start") }
                 self?.applySurface(layout: layout, presentation: presentation, spec: spec)
                 self?.pendingOpening = nil
             }
             pendingOpening = work
-            DispatchQueue.main.async(execute: work)
+            FrameDriver.afterPresentedFrame(of: self) { if !work.isCancelled { work.perform() } }
         } else {
             applySurface(layout: layout, presentation: presentation, spec: spec)
         }
@@ -339,11 +341,6 @@ final class ContentSlot {
         self.view = view
         self.blurs = blurs
         view.wantsLayer = true
-        if blurs, let blur = CIFilter(name: "CIGaussianBlur") {
-            blur.name = "reveal"
-            blur.setValue(0, forKey: kCIInputRadiusKey)
-            view.layer?.filters = [blur]
-        }
     }
 
     var isExpanded: Bool { key.isExpanded }
@@ -365,7 +362,7 @@ final class ContentSlot {
     func remove(spec: SpringSpec?) {
         isRemoving = true
         // Kaldırılan içerik saydamlıkla söner (bulanıklık yalnız girişte; SwiftUI `.opacity` kaldırma geçişi).
-        if let filters = view.layer?.filters, !filters.isEmpty { view.layer?.filters = nil }
+        RevealBlur.apply(radius: 0, to: view.layer)
         if let spec { progress.animate(to: 0, spec: spec) } else { progress.set(0) }
         view.setAccessibilityElement(false)
     }
@@ -377,10 +374,10 @@ final class ContentSlot {
 
     func apply() {
         let p = max(0, min(1, progress.value))
-        view.layer?.opacity = Float(p)
-        if blurs, !isRemoving {
-            view.layer?.setValue((1 - p) * 6, forKeyPath: "filters.reveal.inputRadius")
-        }
+        // Açılacak genişletilmiş içerik görünmeden önce de çok düşük opaklıkla birleştirilir (%0,4, göz ayırt etmez):
+        // ilk doku yüklemesi yüzey hareketinden önce olur, hareketin ortasında kare kaçmaz.
+        view.layer?.opacity = Float(isExpanded && !isRemoving ? max(p, 0.004) : p)
+        if blurs, !isRemoving { RevealBlur.apply(radius: (1 - p) * 6, to: view.layer) }
         view.isHidden = p <= 0.001 && isRemoving
     }
 }

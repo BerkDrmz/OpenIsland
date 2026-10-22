@@ -164,6 +164,13 @@ final class FrameDriver: NSObject {
 
     var isRunning: Bool { link != nil }
 
+    /// `body`, şu anki işlemin içeren karesi ekrana çıktıktan sonra (iki ekran tazelemesi) bir kez çalışır.
+    static func afterPresentedFrame(of view: NSView, _ body: @escaping @MainActor () -> Void) {
+        let waiter = FrameWaiter(frames: 2, body: body)
+        let link = view.displayLink(target: waiter, selector: #selector(FrameWaiter.step(_:)))
+        link.add(to: .main, forMode: .common)
+    }
+
     func start() {
         guard link == nil, let view else { return }
         let link = view.displayLink(target: self, selector: #selector(step(_:)))
@@ -290,5 +297,48 @@ final class LayerSpring {
         func l(_ p: CGFloat, _ q: CGFloat) -> CGFloat { p + (q - p) * t }
         return CGColor(srgbRed: l(x.redComponent, y.redComponent), green: l(x.greenComponent, y.greenComponent),
                        blue: l(x.blueComponent, y.blueComponent), alpha: l(x.alphaComponent, y.alphaComponent))
+    }
+}
+
+/// Tek seferlik kare bekleyicisi (`FrameDriver.afterPresentedFrame`). Bağlantı kendini geçersiz kılınca bırakılır.
+@MainActor
+final class FrameWaiter: NSObject {
+    private var remaining: Int
+    private let body: () -> Void
+
+    init(frames: Int, body: @escaping () -> Void) {
+        remaining = frames
+        self.body = body
+    }
+
+    @objc func step(_ link: CADisplayLink) {
+        remaining -= 1
+        guard remaining <= 0 else { return }
+        link.invalidate()
+        body()
+    }
+}
+
+/// İçerik girişindeki bulanıklık (`.islandReveal`: opaklık + (1 − p) × 6 pt Gauss). Filtre yalnız yarıçap sıfırdan
+/// büyükken katmanda durur: SwiftUI'de 0 yarıçaplı bulanıklık hiç uygulanmaz. Takılı kalan Core Image filtresi
+/// katmanın her birleştirmesini (ör. sürekli canlanan nabız) pencere sunucusunda filtre yolundan geçiriyordu
+/// (8 aç/kapat döngüsünde ~350 ms fazladan WindowServer süresi ölçüldü).
+enum RevealBlur { // yalnız ana iş parçacığındaki katman güncellemelerinden çağrılır
+    static let isDisabled = ProcessInfo.processInfo.environment["OPENISLAND_DENEY_NOBLUR"] != nil
+
+    static func apply(radius: CGFloat, to layer: CALayer?) {
+        guard let layer else { return }
+        let attached = (layer.filters?.isEmpty == false)
+        guard radius > 0.01, !isDisabled else {
+            if attached { layer.filters = nil }
+            return
+        }
+        if !attached, let blur = CIFilter(name: "CIGaussianBlur") {
+            blur.name = "reveal"
+            blur.setValue(radius, forKey: kCIInputRadiusKey)
+            layer.filters = [blur]
+        } else {
+            layer.setValue(radius, forKeyPath: "filters.reveal.inputRadius")
+        }
     }
 }
