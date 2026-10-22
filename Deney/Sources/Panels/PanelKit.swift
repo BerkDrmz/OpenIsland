@@ -81,6 +81,13 @@ final class SecondTicker {
 }
 
 /// Düz (görünmez) tıklanabilir alan: SwiftUI `.buttonStyle(.plain)` düğmesi. Çocuk görünümler çizimi yapar.
+/// Kapanan genişletilmiş içerik bir sonraki açılışta yeniden kullanılır; SwiftUI'de içerik her açılışta yeni olduğu
+/// için hover/sürükleme gibi geçici durumlar kapanışta animasyonsuz sıfırlanır.
+@MainActor
+protocol TransientStateResettable: NSView {
+    func resetTransientState()
+}
+
 class PlainButton: FlippedView {
     var action: (() -> Void)?
     var isEnabled = true

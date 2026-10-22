@@ -171,7 +171,9 @@ final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
 
 /// Başlatıcı kutucuğu: 28 pt simge, hover'da 1,08 ölçek, sağ tıkta "Kaldır".
 @MainActor
-final class LauncherTileView: PlainButton {
+final class LauncherTileView: PlainButton, TransientStateResettable {
+    func resetTransientState() { hover.animate(to: 0, spec: nil) }
+
     private let image = DecorativeImageView()
     private let remove: () -> Void
     private var hoverArea: NSTrackingArea?

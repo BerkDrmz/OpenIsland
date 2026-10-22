@@ -335,7 +335,13 @@ private final class NookCalendarView: FlippedView {
 
 /// Takvim şeridindeki gün hücresi: haftanın günü + gün numarası (bugün vurgu renginde, seçili/hover dairesi).
 @MainActor
-private final class DayCellView: PlainButton {
+private final class DayCellView: PlainButton, TransientStateResettable {
+    func resetTransientState() {
+        guard isHovering else { return }
+        isHovering = false
+        updateCircle(animated: false)
+    }
+
     let offset: Int
     private let weekday = TextLabel("", font: NSFont.systemFont(ofSize: 9, weight: .semibold), color: Palette.tertiary, alignment: .center)
     private let number = TextLabel("", font: Fonts.rounded(14, .semibold), alignment: .center)

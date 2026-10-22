@@ -277,7 +277,13 @@ final class TabButtonView: FlippedView {
 }
 
 /// Ada içindeki yuvarlak ikon düğmesi (SwiftUI `IslandIconButton`): hover'da dolgu ve 1,06 ölçek.
-final class IconButtonView: FlippedView {
+final class IconButtonView: FlippedView, TransientStateResettable {
+    func resetTransientState() {
+        guard isHovering else { return }
+        isHovering = false
+        updateHover(animated: false)
+    }
+
     static func diameter(for size: CGFloat) -> CGFloat { size * 2.1 }
 
     private let circle = RoundedView(radius: 0, fill: .clear)

@@ -151,7 +151,9 @@ final class ShelfPanelView: FlippedView, IslandPanel {
 /// Raf öğesi: 52 pt küçük resim/simge + ad; seçili: vurgu dolgu + kontur; hover: dolgu. Tıklama/çift tıklama/
 /// ⌘⇧ seçim, sağ tık menüsü ve çok öğeli sürükleme oturumu.
 @MainActor
-private final class ShelfItemCell: RoundedView, NSDraggingSource {
+private final class ShelfItemCell: RoundedView, NSDraggingSource, TransientStateResettable {
+    func resetTransientState() { if isHovering { isHovering = false } }
+
     private let shelf: ShelfStore
     private var item: ShelfItem?
     private let image = DecorativeImageView()

@@ -148,7 +148,15 @@ private final class ClipListView: NSScrollView {
 
 /// Pano satırı (SwiftUI `ClipRow`): önizleme, hover'da sil düğmesi, kopyala simgesi (kopyalanınca onay işareti 1,2 sn).
 @MainActor
-private final class ClipRowView: RoundedView {
+private final class ClipRowView: RoundedView, TransientStateResettable {
+    func resetTransientState() {
+        resetWork?.cancel()
+        guard isHovering || didCopy else { return }
+        didCopy = false
+        isHovering = false
+        updateState(animated: false)
+    }
+
     private let history: ClipboardHistory
     private var item: ClipItem?
     private let text = TextLabel("", font: Fonts.body)

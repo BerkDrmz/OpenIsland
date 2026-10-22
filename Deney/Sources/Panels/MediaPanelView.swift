@@ -113,7 +113,15 @@ final class MediaPanelView: FlippedView, IslandPanel {
 /// Satır içi süre çubuğu: `1:12 ━━━━━━━━ -2:35`. Çubuk Core Animation ile akar; etiketler tam saniye
 /// sınırlarında ve yalnız çalarken güncellenir. Tıklama atlar, sürükleme sarar (çubuk kalınlaşır), bırakınca seek.
 @MainActor
-final class MediaScrubberView: FlippedView {
+final class MediaScrubberView: FlippedView, TransientStateResettable {
+    func resetTransientState() {
+        guard isHovering || dragProgress != nil || thickness.target != 4 else { return }
+        isHovering = false
+        dragProgress = nil
+        thickness.set(4)
+        needsLayout = true
+    }
+
     private let media: MediaController
     private let elapsedLabel = TextLabel("", font: Fonts.numericSmall, color: Palette.tertiary)
     private let remainingLabel = TextLabel("", font: Fonts.numericSmall, color: Palette.tertiary, alignment: .right)

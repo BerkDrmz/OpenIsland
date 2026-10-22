@@ -19,6 +19,8 @@ final class ExpandedContentView: FlippedView, IslandContentView {
     private var activeTab: ExpandedTab?
     private let banner: BannerHostView
     private(set) var isDormant: Bool
+    /// Bir kez pencerede gösterildi (katmanları çizili): yeniden kullanımda ilk kare beklenmez.
+    private(set) var hasBeenShown = false
 
     init(model: IslandViewModel, environment: AppEnvironment, dormant: Bool = false) {
         self.model = model
@@ -41,6 +43,7 @@ final class ExpandedContentView: FlippedView, IslandContentView {
     func activate() {
         guard isDormant else { return }
         isDormant = false
+        defer { hasBeenShown = true }
         let t0 = CACurrentMediaTime()
         refresh()
         let t1 = CACurrentMediaTime()
@@ -48,6 +51,30 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         if FrameDriver.isLogging {
             FrameDriver.note(String(format: "activate refresh %.2f ms, didShow %.2f ms", (t1 - t0) * 1000, (CACurrentMediaTime() - t1) * 1000))
         }
+    }
+
+    /// Kapanış geçişi bitince: panelin `onDisappear`'ı (`didHide`) çalışır, geçici arayüz durumu (kaydırma konumu,
+    /// hover, odak) SwiftUI'deki yeni görünüm gibi sıfırlanır; görünüm katmanlarıyla birlikte saklanır ve bir sonraki
+    /// açılışta `activate()` ile `onAppear` noktasında yeniden çalışır. Kurulum ve ilk çizim maliyeti tekrar ödenmez.
+    func suspend() {
+        guard !isDormant else { return }
+        isDormant = true
+        hasBeenShown = true
+        panels.values.forEach { $0.suspend() }
+        Self.resetTransientState(in: self)
+    }
+
+    private static func resetTransientState(in view: NSView) {
+        if let resettable = view as? TransientStateResettable { resettable.resetTransientState() }
+        if let scroll = view as? NSScrollView, let document = scroll.documentView {
+            let origin = NSPoint(x: 0, y: document.isFlipped ? 0 : max(document.bounds.height - scroll.contentView.bounds.height, 0))
+            if scroll.contentView.bounds.origin != origin {
+                scroll.contentView.scroll(to: origin)
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+        }
+        if let text = view as? NSTextView, text.window?.firstResponder === text { text.window?.makeFirstResponder(nil) }
+        view.subviews.forEach { resetTransientState(in: $0) }
     }
 
     /// Uyku halinde kurulum: başlık ve son sekmenin paneli yerleşir; panel görünür ama çalışmaz.
@@ -168,6 +195,13 @@ final class PanelContainer: FlippedView {
     override func layout() {
         super.layout()
         panel.frame = bounds
+    }
+
+    /// Kapanışta: sönme iptal, gösteriliyorsa `didHide`. Etkin panel görünür kalır (açılışta `fadeIn` ile yeniden başlar).
+    func suspend() {
+        hideWork?.cancel(); hideWork = nil
+        if isFadingOut { isFadingOut = false; isHidden = true; layer?.removeAnimation(forKey: "fade") }
+        if isShown { isShown = false; panel.didHide() }
     }
 
     /// Uyku halinde görünür kıl (`didShow` yok); `fadeIn` açılışta çalışmayı başlatır.

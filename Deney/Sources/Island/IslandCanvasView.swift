@@ -169,7 +169,18 @@ final class IslandCanvasView: NSView {
             return
         }
         let spec = DeneyMotion.morph(from: surfacePresentation, to: presentation, style: style)
-        if presentation.isExpanded && !surfacePresentation.isExpanded {
+        // Daha önce çizilmiş içerik (saklanan ya da kapanırken geri dönen) ilk kareyi beklemez: SwiftUI gibi bir
+        // run-loop turu sonra başlar. Yeni kurulan içerik ise ilk karesi ekrana çıkınca başlar.
+        let contentIsDrawn = spareExpanded?.hasBeenShown == true || slots.contains { $0.isExpanded && $0.isRemoving }
+        if presentation.isExpanded && !surfacePresentation.isExpanded && contentIsDrawn {
+            let work = DispatchWorkItem { [weak self] in
+                if FrameDriver.isLogging { FrameDriver.note("opening spring start (drawn content)") }
+                self?.applySurface(layout: layout, presentation: presentation, spec: spec)
+                self?.pendingOpening = nil
+            }
+            pendingOpening = work
+            DispatchQueue.main.async(execute: work)
+        } else if presentation.isExpanded && !surfacePresentation.isExpanded {
             // Önce hedef içerik kurulup yerleşir ve ilk karesi ekrana çıkar (katman dokuları render sunucusuna yüklenir),
             // sonra taze bir yay saati başlar. SwiftUI'de de ağır ilk çizim hareketten önce biter; hareket kesintisiz.
             let work = DispatchWorkItem { [weak self] in
@@ -217,6 +228,17 @@ final class IslandCanvasView: NSView {
         for slot in slots where !slot.isRemoving {
             slot.remove(spec: animated ? DeneyMotion.contentOut(style) : nil)
         }
+        // Kapanış geçişi bitmeden yeniden açılırsa aynı içerik geri döner (SwiftUI'de görünüm geçiş bitince kalkar).
+        if key == .expanded, let removing = slots.last(where: { $0.isExpanded && $0.isRemoving }) {
+            for slot in slots where !slot.isRemoving { slot.remove(spec: animated ? DeneyMotion.contentOut(style) : nil) }
+            removing.revive()
+            slots.removeAll { $0 === removing }
+            slots.append(removing)
+            removing.view.refresh() // saydamlık bulunduğu yerden açılış yayıyla geri gelir (applySurface → setVisible)
+            applyFrame()
+            driver.start()
+            return
+        }
         let spare = key == .expanded ? takeSpareExpanded() : nil
         guard let view = spare ?? IslandContentFactory.make(key, model: model, environment: environment) else { return }
         let slot = ContentSlot(key: key, view: view, blurs: style != .reduced && !key.isExpanded)
@@ -245,7 +267,12 @@ final class IslandCanvasView: NSView {
         let finished = slots.filter { $0.isRemoving && $0.isFinished }
         finished.forEach { $0.view.removeFromSuperview() }
         slots.removeAll { slot in finished.contains { $0 === slot } }
-        if finished.contains(where: { $0.isExpanded }) { scheduleSpareExpanded(after: 0.05) }
+        // Kapanan genişletilmiş içerik yeniden kullanılmak üzere saklanır (yeni kurulum yok; kare kaybı yok).
+        for slot in finished where slot.isExpanded {
+            guard spareExpanded == nil, let view = slot.view as? ExpandedContentView else { continue }
+            view.suspend()
+            spareExpanded = view
+        }
         applyFrame()
         return active || !finished.isEmpty
     }
@@ -357,6 +384,12 @@ final class ContentSlot {
 
     func setVisible(_ visible: Bool, spec: SpringSpec) {
         progress.animate(to: visible ? 1 : 0, spec: spec)
+    }
+
+    /// Kaldırma geçişini iptal eder (yeniden açılış).
+    func revive() {
+        isRemoving = false
+        view.isHidden = false
     }
 
     func remove(spec: SpringSpec?) {
