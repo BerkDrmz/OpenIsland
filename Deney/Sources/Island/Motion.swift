@@ -162,6 +162,8 @@ final class FrameDriver: NSObject {
         self.tick = tick
     }
 
+    var isRunning: Bool { link != nil }
+
     func start() {
         guard link == nil, let view else { return }
         let link = view.displayLink(target: self, selector: #selector(step(_:)))
@@ -200,6 +202,29 @@ final class FrameDriver: NSObject {
         FileManager.default.createFile(atPath: path, contents: nil)
         return FileHandle(forWritingAtPath: path)
     }()
+
+    static var isLogging: Bool { frameLog != nil }
+
+    /// Tanı satırı (yalnız OPENISLAND_DENEY_FRAMELOG açıkken).
+    static func note(_ text: String) {
+        guard let log = frameLog else { return }
+        log.write(Data(String(format: "%.3f # %@\n", CACurrentMediaTime(), text).utf8))
+    }
+
+    /// Çalışma döngüsü başına ana iş parçacığı süresi (uyanıştan uykuya; Core Animation commit'i, yerleşim ve çizim
+    /// dahil). 6 ms'yi aşan döngüler yazılır.
+    static func installRunLoopProbe() {
+        guard frameLog != nil else { return }
+        var start: CFTimeInterval = 0
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue,
+                                                          true, 0) { _, activity in
+            let now = CACurrentMediaTime()
+            if activity == .afterWaiting { start = now; return }
+            let busy = (now - start) * 1000
+            if start > 0, busy > 6 { note(String(format: "runloop busy=%.2f ms", busy)) }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+    }
 }
 
 /// SwiftUI yayının Core Animation karşılığı. `CASpringAnimation` (kütle 1, katılık (2π/response)², sönüm 4πζ/response)

@@ -30,6 +30,8 @@ final class IslandCanvasView: NSView {
     private var pendingOpening: DispatchWorkItem?
 
     private var slots: [ContentSlot] = []
+    var spareExpanded: ExpandedContentView?
+    var didWarmDrawing = false
     /// Sürükleme sırasında etkin bölge (SwiftUI `@State dropZone`).
     var dropZone: DropZone? {
         didSet {
@@ -59,6 +61,7 @@ final class IslandCanvasView: NSView {
         // SwiftUI kökü `.environment(\.colorScheme, .dark)`: barındırılan AppKit denetimleri koyu görünümle çizilir.
         appearance = NSAppearance(named: .darkAqua)
         registerForDraggedTypes(Self.draggedTypes)
+        FrameDriver.installRunLoopProbe()
         wantsLayer = true
         layerContentsRedrawPolicy = .never
         layer?.masksToBounds = false
@@ -97,6 +100,11 @@ final class IslandCanvasView: NSView {
 
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil, spareExpanded == nil { scheduleSpareExpanded(after: 1) } // açılıştan sonra boşta
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? { super.menu(for: event) ?? fallbackMenu?() }
 
     override func layout() {
@@ -125,9 +133,12 @@ final class IslandCanvasView: NSView {
     private func modelDidChange() {
         observeModel()
         let target = (layout: model.layout, presentation: model.presentation)
+        if FrameDriver.isLogging { FrameDriver.note("model \(model.presentation) \(Int(model.layout.size.width))x\(Int(model.layout.size.height))") }
         morph(toLayout: target.layout, presentation: target.presentation)
         if model.presentation != displayedPresentation || model.presentation.expandedTab != displayedTab {
+            let t0 = CACurrentMediaTime()
             rebuildContent(animated: true)
+            if FrameDriver.isLogging { FrameDriver.note(String(format: "rebuildContent %.2f ms", (CACurrentMediaTime() - t0) * 1000)) }
         } else {
             slots.forEach { $0.view.refresh() }
         }
@@ -158,6 +169,7 @@ final class IslandCanvasView: NSView {
         if presentation.isExpanded && !surfacePresentation.isExpanded {
             // Önce hedef içerik kurulup yerleşir, sonra taze bir yay saati başlar (SwiftUI sürümüyle aynı).
             let work = DispatchWorkItem { [weak self] in
+                if FrameDriver.isLogging { FrameDriver.note("opening spring start") }
                 self?.applySurface(layout: layout, presentation: presentation, spec: spec)
                 self?.pendingOpening = nil
             }
@@ -201,11 +213,13 @@ final class IslandCanvasView: NSView {
         for slot in slots where !slot.isRemoving {
             slot.remove(spec: animated ? DeneyMotion.contentOut(style) : nil)
         }
-        guard let view = IslandContentFactory.make(key, model: model, environment: environment) else { return }
+        let spare = key == .expanded ? takeSpareExpanded() : nil
+        guard let view = spare ?? IslandContentFactory.make(key, model: model, environment: environment) else { return }
         let slot = ContentSlot(key: key, view: view, blurs: style != .reduced && !key.isExpanded)
         slots.append(slot)
         (view as? DropZoneContentView)?.zone = dropZone
         contentView.addSubview(view, positioned: .below, relativeTo: media)
+        spare?.activate()
         if key.isExpanded {
             // Yüzey hazırlanıp hareket etmeye başlayınca belirir (surfacePresentation genişlediğinde).
             slot.begin(visible: surfacePresentation.isExpanded, animated: false, spec: nil)
@@ -227,6 +241,7 @@ final class IslandCanvasView: NSView {
         let finished = slots.filter { $0.isRemoving && $0.isFinished }
         finished.forEach { $0.view.removeFromSuperview() }
         slots.removeAll { slot in finished.contains { $0 === slot } }
+        if finished.contains(where: { $0.isExpanded }) { scheduleSpareExpanded() }
         applyFrame()
         return active || !finished.isEmpty
     }
@@ -481,5 +496,42 @@ extension IslandCanvasView {
             if let url = item.string(forType: .fileURL).flatMap(URL.init(string:)) { provider.suggestedName = url.lastPathComponent }
             return provider
         }
+    }
+}
+
+// MARK: - Önceden kurulan genişletilmiş içerik
+
+extension IslandCanvasView {
+    /// Ada kapalıyken boşta bir sonraki açılışın içeriğini uyku halinde kurar (SwiftUI'deki gibi her açılış yeni bir
+    /// görünümle başlar; yalnız kurulum maliyeti açılış anından alınır). İlk kurulum ekran dışı bir kez çizilerek yazı
+    /// tipi/sembol önbellekleri ısıtılır.
+    func scheduleSpareExpanded(after delay: Double = 0.35) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            MainActor.assumeIsolated { self?.prepareSpareExpanded() }
+        }
+    }
+
+    private func prepareSpareExpanded() {
+        guard spareExpanded == nil, window != nil, !model.presentation.isExpanded, !driver.isRunning else {
+            if spareExpanded == nil, window != nil, !model.presentation.isExpanded { scheduleSpareExpanded(after: 0.25) }
+            return
+        }
+        let t0 = CACurrentMediaTime()
+        let view = ExpandedContentView(model: model, environment: environment, dormant: true)
+        let canvas = bounds.size
+        let size = IslandLayoutEngine.layout(for: .expanded(model.machine.context.lastTab), metrics: model.metrics).size
+        view.frame = CGRect(x: 0, y: 0, width: max(canvas.width, size.width), height: size.height)
+        view.layoutSubtreeIfNeeded()
+        if !didWarmDrawing, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: rep) // önbellek ısıtma; sonuç kullanılmaz
+            didWarmDrawing = true
+        }
+        spareExpanded = view
+        if FrameDriver.isLogging { FrameDriver.note(String(format: "spare expanded ready %.2f ms", (CACurrentMediaTime() - t0) * 1000)) }
+    }
+
+    func takeSpareExpanded() -> ExpandedContentView? {
+        defer { spareExpanded = nil }
+        return spareExpanded
     }
 }

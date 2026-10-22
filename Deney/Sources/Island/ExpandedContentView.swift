@@ -6,6 +6,10 @@ import IslandCore
 /// Paneller sekme başına bir kez kurulur ve aynı açık oturum boyunca pencerede kalır; seçili olmayan panel gizlenir.
 /// SwiftUI'deki `onAppear/onDisappear` anlamı panelin kendi `didShow/didHide` çağrılarıyla korunur (örnekleme,
 /// konum izleme vb. yalnız panel görünürken). Ada kapanınca görünüm bırakılır; her açılış özgünle aynı başlar.
+///
+/// Açılışta kurulum/çizim donması olmasın diye bir sonraki açılışın görünümü ada kapalıyken **uyku halinde** önceden
+/// kurulur (`dormant`): panel yerleşir ama `didShow` çağrılmaz, gözlem/örnekleme başlamaz; `activate()` açılış anında
+/// SwiftUI'deki `onAppear` ile aynı noktada çağrılır.
 @MainActor
 final class ExpandedContentView: FlippedView, IslandContentView {
     private let model: IslandViewModel
@@ -14,17 +18,41 @@ final class ExpandedContentView: FlippedView, IslandContentView {
     private var panels: [ExpandedTab: PanelContainer] = [:]
     private var activeTab: ExpandedTab?
     private let banner: BannerHostView
+    private(set) var isDormant: Bool
 
-    init(model: IslandViewModel, environment: AppEnvironment) {
+    init(model: IslandViewModel, environment: AppEnvironment, dormant: Bool = false) {
         self.model = model
         self.environment = environment
+        isDormant = dormant
         header = HeaderView(model: model, environment: environment)
         banner = BannerHostView(model: model)
         super.init(frame: .zero)
         addSubview(header)
         addSubview(banner)
         setAccessibilityElement(false)
+        if dormant {
+            prepare(model.machine.context.lastTab)
+        } else {
+            refresh()
+        }
+    }
+
+    /// Önceden kurulmuş görünümü açılış anında devreye alır (panelin `didShow`'u burada).
+    func activate() {
+        guard isDormant else { return }
+        isDormant = false
         refresh()
+        if let tab = activeTab { panels[tab]?.fadeIn(duration: 0) }
+    }
+
+    /// Uyku halinde kurulum: başlık ve son sekmenin paneli yerleşir; panel görünür ama çalışmaz.
+    private func prepare(_ tab: ExpandedTab) {
+        header.refresh()
+        activeTab = tab
+        let container = PanelContainer(panel: PanelFactory.make(tab, model: model, environment: environment))
+        panels[tab] = container
+        addSubview(container, positioned: .below, relativeTo: banner)
+        container.prepare()
     }
 
     @available(*, unavailable)
@@ -131,6 +159,12 @@ final class PanelContainer: FlippedView {
     override func layout() {
         super.layout()
         panel.frame = bounds
+    }
+
+    /// Uyku halinde görünür kıl (`didShow` yok); `fadeIn` açılışta çalışmayı başlatır.
+    func prepare() {
+        isHidden = false
+        layer?.opacity = 1
     }
 
     func fadeIn(duration: Double) {
