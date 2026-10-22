@@ -39,6 +39,38 @@ davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım Swif
 | Kalıcı medya katmanları (kapak, nabız) | AppKit |
 | Kompakt, HUD, bildirimler, kilit açma, ses aygıtı, bırakma bölgesi | AppKit |
 | Genişletilmiş kabuk: sekmeler, seçim kapsülü, iğne, başlık kayması, HUD şeridi | AppKit |
-| Paneller (Medya, Nook, Raf, Pano, Odak, Notlar, Ayna, Mikser, Sistem) | Sırayla çevriliyor |
-| Sürükle-bırak hedefi | Yapılacak |
-| Ayarlar, Araçlar, Dock önizlemeleri | Şimdilik SwiftUI (sonra) |
+| Dokuz panel (Medya, Nook, Raf, Pano, Ses Mikseri, Odak, Notlar, Ayna, Sistem) | AppKit |
+| Sürükle-bırak hedefi (Raf / AirDrop bölgeleri) | AppKit |
+| Ayarlar, Araçlar, Dock önizlemeleri | SwiftUI barındırılıyor (istek üzerine açılan pencereler) |
+
+## Eşdeğerlik kuralları (SwiftUI'den çalışma anında ölçülmüştür)
+
+Her kural, aynı görünüm SwiftUI'de küçük bir koşum programında çizdirilip görünüm ağacı, yerleşim çerçeveleri,
+AX ağacı ve 2× ekran görüntüsü okunarak çıkarılmıştır (araçlar: `OpenIsland-Evidence/20261021-appkit/tools`).
+
+- **Bağlama sürümü:** Üretim ikilisi LC_BUILD_VERSION'da `sdk 14.0` taşır; AppKit/SwiftUI denetimleri bu yüzden
+  Sonoma görünümüyle çizilir (yuvarlak kaydırıcı düğmesi, klasik açılır menü). Deney aynı platform sürümüyle bağlanır.
+- **Görünüm:** SwiftUI kökü `.environment(\.colorScheme, .dark)`; tuvalde `NSAppearance.darkAqua`.
+- **Metin:** satır yüksekliği punto tablosu (`TextMetrics`, 7–28 pt); metin kutusu genişliği piksele (0,5 pt) yukarı
+  yuvarlanır; ortalı/sağa hizalı metin kutusu piksele oturur; tek satır kesme CoreText ile
+  (`CTLineCreateTruncatedLine`, 61 genişlikte birebir); `minimumScaleFactor` ile küçülen satırın yüksekliği küçülmüş
+  puntodan hesaplanır (19 pt × 0,99 → 22 pt).
+- **Sembol:** yerleşim kutusu = hizalama genişliği × (görüntü yüksekliği − 0,5); görüntü kutunun sol-alt köşesine
+  yaslanır; kökeni en yakın piksele yuvarlanır (24 sembol/boyut, 4 alt piksel konumda birebir). Adanın başlık
+  satırında yarım piksel yukarı yuvarlanır (ekran görüntüsüyle belirlendi).
+- **Label:** simge + 8 pt + metin; simge taban çizgisine hizalı (11 pt metinde taban 11,125 pt).
+- **AppKit denetimleri:** SwiftUI'nin barındırdığı gibi hizalama dikdörtgeniyle yerleşir (küçük açılır menü 16 pt,
+  mini 13 pt, kaydırıcı 16 pt; görünüm kenar boşlukları kadar taşar). `.buttonStyle(.plain)` içindeki menü seçici
+  kenarlıksız/okuysuz. `TextEditor` ayarları (akıllı tırnak, ekleme imleci vurgu renginde…) birebir.
+- **AX:** sembol görselinin çerçevesi mürekkep sınırı; metin çerçevesi metnin kapladığı alan; tembel yığının
+  çerçevesi gerçekleşmiş çocukların birleşimi; yalnız simgeli düğmenin çerçevesi simge mürekkebi; Odak panelinde
+  geometrik okuma sırası.
+- **Animasyon:** hover/seçim geçişleri `CASpringAnimation` ile SwiftUI yay sabitleriyle (kütle 1, katılık
+  (2π/response)², sönüm 4πζ/response), hedef değişince hız aktarılır, ölçek düğme merkezinden. Sekme tonu SwiftUI
+  işlemiyle aynı: yerleşim değişirse `IslandMotion.resize`, değişmezse anında.
+
+## Doğrulama
+
+`tools/vis.sh UYGULAMA ETİKET` her iki uygulamayı yalıtılmış test verisiyle başlatır (Deney'in standart tercih
+alanı SwiftUI uygulamasınınkinin kopyasıyla başlar), 8 sekmenin (Ayna kamera izni istediği için hariç) soğuk/sıcak
+ekran görüntüsünü, AX ağacını ve AX çerçevelerini alır.

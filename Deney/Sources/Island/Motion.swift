@@ -181,8 +181,25 @@ final class FrameDriver: NSObject {
         let now = link.targetTimestamp
         let dt = lastTimestamp.map { min(max(now - $0, 0), 0.05) } ?? (1.0 / 60)
         lastTimestamp = now
-        if !tick(dt) { stop() }
+        guard let log = Self.frameLog else {
+            if !tick(dt) { stop() }
+            return
+        }
+        // Geliştirici tanısı (OPENISLAND_DENEY_FRAMELOG): kare aralığı, tick süresi, hedefe kalan süre.
+        let start = CACurrentMediaTime()
+        let active = tick(dt)
+        let end = CACurrentMediaTime()
+        let line = String(format: "%.3f dt=%.2f tick=%.2f slack=%.2f %@\n", start, dt * 1000, (end - start) * 1000,
+                          (link.targetTimestamp - end) * 1000, String(describing: type(of: view ?? NSView())))
+        log.write(Data(line.utf8))
+        if !active { stop() }
     }
+
+    private static let frameLog: FileHandle? = {
+        guard let path = ProcessInfo.processInfo.environment["OPENISLAND_DENEY_FRAMELOG"] else { return nil }
+        FileManager.default.createFile(atPath: path, contents: nil)
+        return FileHandle(forWritingAtPath: path)
+    }()
 }
 
 /// SwiftUI yayının Core Animation karşılığı. `CASpringAnimation` (kütle 1, katılık (2π/response)², sönüm 4πζ/response)

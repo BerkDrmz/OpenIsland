@@ -30,6 +30,13 @@ final class IslandCanvasView: NSView {
     private var pendingOpening: DispatchWorkItem?
 
     private var slots: [ContentSlot] = []
+    /// Sürükleme sırasında etkin bölge (SwiftUI `@State dropZone`).
+    var dropZone: DropZone? {
+        didSet {
+            guard dropZone != oldValue else { return }
+            for slot in slots { (slot.view as? DropZoneContentView)?.zone = dropZone }
+        }
+    }
     private var displayedPresentation: IslandPresentation
     private var displayedTab: ExpandedTab?
 
@@ -47,10 +54,11 @@ final class IslandCanvasView: NSView {
         topRadius = Spring(layout.topCornerRadius)
         bottomRadius = Spring(layout.bottomCornerRadius)
         topInset = Spring(layout.topInset)
-        media = MediaLayersView(media: environment.media, preferences: environment.preferences)
+        media = MediaLayersView(media: environment.media, preferences: environment.preferences, model: model)
         super.init(frame: .zero)
         // SwiftUI kökü `.environment(\.colorScheme, .dark)`: barındırılan AppKit denetimleri koyu görünümle çizilir.
         appearance = NSAppearance(named: .darkAqua)
+        registerForDraggedTypes(Self.draggedTypes)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
         layer?.masksToBounds = false
@@ -196,6 +204,7 @@ final class IslandCanvasView: NSView {
         guard let view = IslandContentFactory.make(key, model: model, environment: environment) else { return }
         let slot = ContentSlot(key: key, view: view, blurs: style != .reduced && !key.isExpanded)
         slots.append(slot)
+        (view as? DropZoneContentView)?.zone = dropZone
         contentView.addSubview(view, positioned: .below, relativeTo: media)
         if key.isExpanded {
             // Yüzey hazırlanıp hareket etmeye başlayınca belirir (surfacePresentation genişlediğinde).
@@ -387,4 +396,90 @@ final class ShapeView: NSView {
 final class AccessibleContainerView: FlippedView {
     var onCancel: (() -> Void)?
     override func accessibilityPerformCancel() -> Bool { onCancel?(); return onCancel != nil }
+}
+
+// MARK: - Sürükle-bırak
+
+/// Adanın tek bırakma hedefi (SwiftUI `IslandDropDelegate` ile aynı akış): giriş/çıkış durum makinesine gider, bırakma
+/// hedefi görünümünde sol yarı Raf, sağ yarı AirDrop'tur; bölge değişimi `IslandMotion.control` ile canlanır (kutucuk).
+/// Global fare izleyicisi yok: sürükleme pencereye girdiğinde sistem çağırır.
+extension IslandCanvasView {
+    static let draggedTypes: [NSPasteboard.PasteboardType] = {
+        var utis: [String] = ShelfStore.acceptedTypes.map { $0.identifier }
+        utis += ["public.png", "public.tiff", "public.jpeg", "public.heic", "com.adobe.pdf", "public.utf8-plain-text", "public.html", "public.rtf"]
+        utis += NSFilePromiseReceiver.readableDraggedTypes
+        return utis.map { NSPasteboard.PasteboardType($0) }
+    }()
+
+    private func accepts(_ info: NSDraggingInfo) -> Bool {
+        info.draggingPasteboard.canReadItem(withDataConformingToTypes: ShelfStore.acceptedTypes.map { $0.identifier })
+            || info.draggingPasteboard.canReadObject(forClasses: [NSFilePromiseReceiver.self], options: nil)
+    }
+
+    private func zone(at info: NSDraggingInfo) -> DropZone {
+        guard model.presentation == .dropTarget else { return .shelf }
+        let location = convert(info.draggingLocation, from: nil)
+        return location.x < IslandLayoutEngine.canvasSize(for: model.metrics).width / 2 ? .shelf : .airDrop
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard accepts(sender) else { return [] }
+        model.send(.fileDragEntered)
+        dropZone = zone(at: sender)
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard accepts(sender) else { return [] }
+        let current = zone(at: sender)
+        if current != dropZone { dropZone = current }
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        guard dropZone != nil else { return }
+        dropZone = nil
+        model.send(.fileDragExited)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { accepts(sender) }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let target = zone(at: sender)
+        let pasteboard = sender.draggingPasteboard
+        dropZone = nil
+        let shelf = environment.shelf
+        let providers = Self.itemProviders(from: pasteboard)
+        if target == .airDrop {
+            ShelfStore.loadFileURLs(from: providers) { urls in shelf.airDrop(urls) }
+            model.send(.fileDragEnded(dropped: false))
+            return true
+        }
+        // Dosya vaadi (Fotoğraflar, Mail) yalnız AppKit panosundan alınabilir; geri kalan SwiftUI'deki gibi sağlayıcılarla.
+        let accepted: Bool
+        if pasteboard.canReadObject(forClasses: [NSFilePromiseReceiver.self], options: nil),
+           !pasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) {
+            accepted = shelf.ingest(pasteboard: pasteboard)
+        } else {
+            accepted = shelf.ingest(providers)
+        }
+        model.send(.fileDragEnded(dropped: accepted))
+        return accepted
+    }
+
+    /// Pano öğelerinden `NSItemProvider` (SwiftUI `DropInfo.itemProviders` karşılığı): her tür, veri isteğe bağlı okunur.
+    static func itemProviders(from pasteboard: NSPasteboard) -> [NSItemProvider] {
+        (pasteboard.pasteboardItems ?? []).map { item in
+            let provider = NSItemProvider()
+            for type in item.types {
+                guard let data = item.data(forType: type) else { continue }
+                provider.registerDataRepresentation(forTypeIdentifier: type.rawValue, visibility: .all) { completion in
+                    completion(data, nil)
+                    return nil
+                }
+            }
+            if let url = item.string(forType: .fileURL).flatMap(URL.init(string:)) { provider.suggestedName = url.lastPathComponent }
+            return provider
+        }
+    }
 }

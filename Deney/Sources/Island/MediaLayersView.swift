@@ -8,6 +8,7 @@ import IslandCore
 final class MediaLayersView: FlippedView {
     private let mediaController: MediaController
     private let preferences: Preferences
+    private let model: IslandViewModel
     private let artwork = ArtworkLayerView()
     private let waveform = WaveformLayerView()
     private var artworkItem = SlotItem()
@@ -16,9 +17,10 @@ final class MediaLayersView: FlippedView {
     private var metrics: NotchMetrics?
     private var style: MotionStyle = .expressive
 
-    init(media: MediaController, preferences: Preferences) {
+    init(media: MediaController, preferences: Preferences, model: IslandViewModel) {
         mediaController = media
         self.preferences = preferences
+        self.model = model
         super.init(frame: .zero)
         wantsLayer = true
         layerUsesCoreImageFilters = true
@@ -47,6 +49,7 @@ final class MediaLayersView: FlippedView {
         withObservationTracking {
             _ = mediaController.nowPlaying; _ = mediaController.artwork; _ = mediaController.isPlaying
             _ = mediaController.accentColor; _ = mediaController.pulseNSColor; _ = preferences.albumColoredPulse
+            _ = model.energySaving
         } onChange: { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.mediaDidChange() } }
         }
@@ -61,8 +64,9 @@ final class MediaLayersView: FlippedView {
     private func refreshMedia() {
         artwork.image = mediaController.artwork
         let color = preferences.albumColoredPulse ? (mediaController.pulseNSColor ?? Palette.pulse) : Palette.pulse
+        // SwiftUI `WaveformView`: Hareketi Azalt veya enerji tasarrufunda nabız durağandır.
         waveform.update(isPlaying: mediaController.isPlaying, color: color,
-                        reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+                        reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || model.energySaving)
         if let info = mediaController.nowPlaying {
             artwork.setAccessibilityLabel("Şimdi çalıyor: \(info.title)" + (info.artist.isEmpty ? "" : ", \(info.artist)"))
         }

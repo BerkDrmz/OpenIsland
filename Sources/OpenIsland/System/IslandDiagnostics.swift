@@ -368,7 +368,31 @@ final class IslandDiagnostics {
             // Developer-only: OPENISLAND_BENCHMARK_TABS=media,shelf,... overrides the original six-tab order.
             let tabs = Self.benchmarkTabs(default: [.media, .shelf, .clipboard, .notes, .nook, .system])
             log("controlled start; mode=\(mode); tabs=\(tabs.map { String(describing: $0) }.joined(separator: ",")); playing=\(environment.media.isPlaying); title=\(environment.media.nowPlaying?.title ?? "none")")
-            if mode == "idle-compact" {
+            if mode == "open-close" {
+                // Developer-only: N aç/kapat döngüsü (demo modu kapalı, gerçek kapanma yolu). Animasyon akıcılığı
+                // karşılaştırması için; her açılış/kapanış bir Points of Interest aralığıdır.
+                model.send(.demoModeChanged(isOn: false))
+                let cycles = max(1, min(60, Int(ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_CYCLES"] ?? "12") ?? 12))
+                try? await Task.sleep(for: .seconds(1))
+                beginBenchmarkPhase("open-close")
+                let hover = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_HOVER"] == "1"
+                for _ in 0..<cycles {
+                    beginBenchmarkPhase("open")
+                    model.send(.selectTab(.media))
+                    // Hover yolu: kabarma → gecikmeyle genişleme (kullanıcının adayı fareyle açması).
+                    model.send(hover ? .pointerEntered : .tapped)
+                    try? await Task.sleep(for: .seconds(1.5))
+                    endBenchmarkPhase("open")
+                    guard model.machine.isExpanded else { log("FAIL: open-close did not expand"); return }
+                    beginBenchmarkPhase("close")
+                    model.send(.escapePressed)
+                    model.send(.pointerExited)
+                    try? await Task.sleep(for: .seconds(1.5))
+                    endBenchmarkPhase("close")
+                    guard !model.machine.isExpanded else { log("FAIL: open-close did not collapse"); return }
+                }
+                endBenchmarkPhase("open-close")
+            } else if mode == "idle-compact" {
                 beginBenchmarkPhase("idle compact")
                 try? await Task.sleep(for: .seconds(seconds))
                 endBenchmarkPhase("idle compact")
