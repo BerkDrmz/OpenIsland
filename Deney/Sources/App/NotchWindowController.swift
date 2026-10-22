@@ -186,8 +186,17 @@ final class NotchWindowController {
     /// - Notch: üst kenar ekranın tepesine uzatılır (Fitts yasası). Çentik bandında menü öğesi olamaz.
     /// - Pill: yalnızca kapsülün kendisi (+4 pt). Menü çubuğu bandına uzatılmaz; aksi halde menü
     ///   çubuğunun ortasındaki öğelerin (uzun uygulama menüleri) tıklamaları yutulurdu.
-    private func hitRect(for layout: IslandLayout) -> CGRect {
+    /// Açık adanın altındaki hover payı (kullanıcı isteği, ana uygulamadan bilinçli fark): imleç alt kenarın biraz
+    /// altına inince ada kapanıp yeniden açılmaz. Ölçülen taşmalar 17–50 pt arasındaydı. Dinlenme hâlindeki sensör
+    /// alanı değişmez.
+    static let expandedHoverMargin: CGFloat = 40
+
+    private func hitRect(for layout: IslandLayout, hoverMargin: Bool = true) -> CGRect {
         var rect = islandRect(for: layout)
+        if hoverMargin, model.machine.isExpanded {
+            rect.origin.y -= Self.expandedHoverMargin
+            rect.size.height += Self.expandedHoverMargin
+        }
         if screen.hasNotch {
             rect.size.height = screen.frame.maxY - rect.minY
         } else {
@@ -201,7 +210,7 @@ final class NotchWindowController {
     /// WindowServer pencere çerçevesini tam noktaya yuvarladığı için (762,5 → 762,0) dikdörtgen dışa
     /// doğru tam noktaya genişletilir: iki kenar da .5 olduğundan genişleme simetrik kalır (762…948).
     private var restHitRect: CGRect {
-        hitRect(for: IslandLayoutEngine.layout(for: model.machine.basePresentation, metrics: model.metrics)).integral
+        hitRect(for: IslandLayoutEngine.layout(for: model.machine.basePresentation, metrics: model.metrics), hoverMargin: false).integral
     }
 
     /// Yalnızca gerçekten değiştiyse çerçeve atanır: ayar değişiklikleri (ör. kaydırıcı) her adımda
