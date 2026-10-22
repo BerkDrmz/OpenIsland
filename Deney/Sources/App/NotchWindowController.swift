@@ -62,8 +62,18 @@ final class NotchWindowController {
 
         panel.contentView = container
         panel.onEscape = { [weak model] in model?.send(.escapePressed) }
-        container.onPointerEntered = { [weak self] in self?.pointerDidEnter() }
-        container.onPointerExited = { [weak self] in self?.pointerDidExit() }
+        container.onPointerEntered = { [weak self] in FrameDriver.note("pointer enter: panel"); self?.pointerDidEnter() }
+        container.onPointerExited = { [weak self] in
+            if let self, FrameDriver.isLogging {
+                let m = NSEvent.mouseLocation
+                let top = NSWindow.windowNumber(at: m, belowWindowWithWindowNumber: 0)
+                let owner = NSApp.windows.first { $0.windowNumber == top }
+                FrameDriver.note("pointer exit: panel mouse=\(m) hit=\(self.hitRect(for: self.targetLayout)) panel=\(self.panel.frame) "
+                    + "panelIgnores=\(self.panel.ignoresMouseEvents) sensor=\(self.sensor.frame) sensorIgnores=\(self.sensor.ignoresMouseEvents) "
+                    + "top=\(top) panelNo=\(self.panel.windowNumber) sensorNo=\(self.sensor.windowNumber) topOwner=\(owner.map { String(describing: type(of: $0)) } ?? "başka uygulama")")
+            }
+            self?.pointerDidExit()
+        }
         wireSensor()
         contextMenu.onClose = { [weak self] in self?.reconcilePointerExit() }
         model.onPhaseChange = { [weak self] old, new in self?.phaseDidChange(from: old, to: new) }
@@ -242,6 +252,7 @@ final class NotchWindowController {
     func reconcilePointerExit(mouseLocation: NSPoint? = nil) {
         let location = mouseLocation ?? NSEvent.mouseLocation
         guard isPointerInside, !hitRect(for: targetLayout).containsInclusive(location) else { return }
+        FrameDriver.note("pointer exit: reconcile mouse=\(location) hit=\(hitRect(for: targetLayout))")
         pointerDidExit()
     }
 
@@ -262,11 +273,15 @@ final class NotchWindowController {
 
         let sensorIgnores = (engaged && !watchesReentry) || interactionBlocked
         if sensor.ignoresMouseEvents != sensorIgnores { sensor.ignoresMouseEvents = sensorIgnores }
-        if panel.ignoresMouseEvents == panelAccepts { panel.ignoresMouseEvents = !panelAccepts }
+        if panel.ignoresMouseEvents == panelAccepts {
+            panel.ignoresMouseEvents = !panelAccepts
+            FrameDriver.note("routing panelIgnores=\(!panelAccepts) sensorIgnores=\(sensorIgnores) inside=\(isPointerInside)")
+        }
         if watchesReentry { startOutsideClickMonitor() } else { stopOutsideClickMonitor() }
     }
 
     private func pointerDidEnter() {
+        PointerProbe.note("enter mouse=\(NSEvent.mouseLocation) hit=\(hitRect(for: targetLayout)) phase=\(model.machine.phase)")
         guard !isPointerInside else { return }
         isPointerInside = true
         updateInputRouting()
@@ -274,6 +289,7 @@ final class NotchWindowController {
     }
 
     private func pointerDidExit() {
+        PointerProbe.note("exit mouse=\(NSEvent.mouseLocation) hit=\(hitRect(for: targetLayout)) phase=\(model.machine.phase)")
         guard isPointerInside else { return }
         isPointerInside = false
         updateInputRouting()
@@ -281,6 +297,7 @@ final class NotchWindowController {
     }
 
     private func phaseDidChange(from old: IslandPhase, to new: IslandPhase) {
+        PointerProbe.note("phase \(old) -> \(new) mouse=\(NSEvent.mouseLocation) layout=\(Int(targetLayout.size.width))x\(Int(targetLayout.size.height))")
         let wasExpanded = if case .expanded = old { true } else { false }
         panel.acceptsKeyFocus = model.machine.isExpanded
         if wasExpanded, !model.machine.isExpanded { panel.relinquishKeyFocus() }
@@ -299,6 +316,7 @@ final class NotchWindowController {
             let isReentry = self.model.machine.isEngaged
             let rect = isReentry ? self.hitRect(for: self.targetLayout) : self.sensor.frame
             guard rect.containsInclusive(NSEvent.mouseLocation) else { return }
+            FrameDriver.note("pointer enter: sensor reentry=\(isReentry)")
             self.pointerDidEnter()
             // Yükseltilmiş adaya sensör üzerinden geri dönüldü: panelin hover alanı "imleç içeride" varsayımıyla
             // yenilenir, sonraki çıkış oradan gelir.
@@ -308,6 +326,7 @@ final class NotchWindowController {
             // The sensor may have queued this exit just before input moved to the visual panel.
             // Keep it if the pointer really left; crossing only the old sensor edge is not an exit.
             guard let self, !self.hitRect(for: self.targetLayout).containsInclusive(NSEvent.mouseLocation) else { return }
+            FrameDriver.note("pointer exit: sensor")
             self.pointerDidExit()
         }
         view.onClick = { [weak self] in self?.model.send(.tapped) }

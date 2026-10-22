@@ -265,6 +265,7 @@ final class NotchWindowController {
     }
 
     private func pointerDidEnter() {
+        PointerProbe.note("enter mouse=\(NSEvent.mouseLocation) hit=\(hitRect(for: targetLayout)) phase=\(model.machine.phase)")
         guard !isPointerInside else { return }
         isPointerInside = true
         updateInputRouting()
@@ -272,6 +273,7 @@ final class NotchWindowController {
     }
 
     private func pointerDidExit() {
+        PointerProbe.note("exit mouse=\(NSEvent.mouseLocation) hit=\(hitRect(for: targetLayout)) phase=\(model.machine.phase)")
         guard isPointerInside else { return }
         isPointerInside = false
         updateInputRouting()
@@ -279,6 +281,7 @@ final class NotchWindowController {
     }
 
     private func phaseDidChange(from old: IslandPhase, to new: IslandPhase) {
+        PointerProbe.note("phase \(old) -> \(new) mouse=\(NSEvent.mouseLocation) layout=\(Int(targetLayout.size.width))x\(Int(targetLayout.size.height))")
         let wasExpanded = if case .expanded = old { true } else { false }
         panel.acceptsKeyFocus = model.machine.isExpanded
         if wasExpanded, !model.machine.isExpanded { panel.relinquishKeyFocus() }
