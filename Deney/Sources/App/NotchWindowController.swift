@@ -307,6 +307,11 @@ final class NotchWindowController {
 
     private func phaseDidChange(from old: IslandPhase, to new: IslandPhase) {
         PointerProbe.note("phase \(old) -> \(new) mouse=\(NSEvent.mouseLocation) layout=\(Int(targetLayout.size.width))x\(Int(targetLayout.size.height))")
+        if PointerProbe.isEnabled, case .expanded(let tab) = new {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                PointerProbe.note("census \(tab): \(PointerProbe.layerCensus(self?.panel))")
+            }
+        }
         let wasExpanded = if case .expanded = old { true } else { false }
         panel.acceptsKeyFocus = model.machine.isExpanded
         if wasExpanded, !model.machine.isExpanded { panel.relinquishKeyFocus() }

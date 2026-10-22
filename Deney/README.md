@@ -69,6 +69,49 @@ AX ağacı ve 2× ekran görüntüsü okunarak çıkarılmıştır (araçlar: `O
   (2π/response)², sönüm 4πζ/response), hedef değişince hız aktarılır, ölçek düğme merkezinden. Sekme tonu SwiftUI
   işlemiyle aynı: yerleşim değişirse `IslandMotion.resize`, değişmezse anında.
 
+## Performans: SwiftUI (K8c, H9) ile A/B/B/A (2026-10-23, son sürüm)
+
+Ölçüm: uygulamanın kendi denetimli kıyası (`OPENISLAND_BENCHMARK_V2`), faz sınırında `proc_pid_rusage` (talimat,
+çevrim, enerji tahmini, CPU, uyanma, ayak izi) ve WindowServer CPU'su; yalıtılmış test verisi. Araçlar ve ham sonuçlar:
+`OpenIsland-Evidence/20261021-appkit` (`tools/final.sh`, `runs/*-fts*`, `*-fic*`, `*-fie*`, `logs/wsvar.log`).
+Geçersiz koşu yok.
+
+Sekme geçişi (her hızda 4'er koşu; Δ = AppKit − SwiftUI):
+
+| Aralık | Talimat/seçim | Çevrim/seçim | CPU | Enerji/seçim | Ayak izi | Uyanma | WindowServer |
+|---|---|---|---|---|---|---|---|
+| 650 ms | −44% | −48% | −46% | −47% | −23% | ≈0 | −2% |
+| 300 ms | −41% | −48% | −46% | −44% | −27% | +2% | −2% |
+| 150 ms | −52% | −55% | −53% | −57% | −27% | ≈0 | +3,5% |
+| 80 ms | −48% | −52% | −41% | −70% | −27% | ≈0 | +10% |
+| 50 ms | −48% | −50% | −37% | −77% | −27% | −9% | +10% |
+
+Boşta (2'şer koşu, 325 s): kompakt — CPU −87%, uyanma 4,15 → 0,05/s, enerji −89%, WindowServer −11%, ayak izi
+**+6% (+1,3 MiB; bir sonraki açılış için saklanan içerik)**. Açık — CPU/enerji/WindowServer eşit, uyanma −86%,
+ayak izi −19%. Hover aç/kapat (8 döngü): uygulama CPU'su −47%.
+
+Açık kalemler (kurala göre "daha fazla kaynak"):
+- 80/50 ms hızlı geçişte WindowServer +8,5…10% (80 ms'de ayrı 4+4 koşu: SwiftUI %35,4, AppKit %38,4; maskesiz %38,9,
+  bulanıklıksız %40,0 → maske/bulanıklık değil). Katman sayımı: görünür katman benzer (70–129 / 71–105) ama içerik
+  taşıyan katman ~%80 fazla (her metin kendi dokusu). Aynı aralıkta uygulama CPU'su −17 yüzde puan, WindowServer +3
+  yüzde puan: sistem toplamı belirgin düşük. 650–150 ms gerçekçi hızlarda fark yok.
+- Boşta kompakt +1,3 MiB: açılışta kare kaybını önleyen saklanan içerik; kaldırılırsa ilk açılış ~40 ms donar.
+
+## Akıcılık (kullanıcı testinde bulunan ve giderilen sorunlar)
+
+| Sorun | Ölçüm | Çözüm |
+|---|---|---|
+| Açılışta 40–50 ms donma | Açılışta içerik kurulumu 17–33 ms + ilk çizim | Kapanan içerik saklanır ve yeniden kullanılır (`suspend`/`activate`: `didHide`/`didShow`, kaydırma/hover/odak sıfırlanır); yalnız ilk açılış için açılıştan sonra boşta uyku hâlinde ön kurulum |
+| Büyüme ortasında yerinde sayan kare | Ekran videosu karelere ayrıldı | Yeni kurulan içerikte açılış yayı ilk kare ekrana çıkınca başlar |
+| Arada bir "oyun lag'ı" | Kapanıştan hemen sonraki ön kurulum bir sonraki açılışın başına denk geliyordu (34–47 ms kare) | Ön kurulum yerine yeniden kullanım; 8 hızlı aç/kapa döngüsünde hareket içinde 0 kare kaybı |
+| Ada kendi kendine kapanıp açılıyor | İmleç açık adanın alt kenarının 17–50 pt altına iniyordu | Açık adanın altında 40 pt hover payı (kullanıcı isteği; ana uygulamadan bilinçli fark) |
+| Pencere sunucusu ek yükü | Core Image açılış bulanıklığı yarıçap 0'da takılı kalıyordu | Filtre yalnız bulanıklık sürerken takılı |
+| Nook açılışı pahalı | Kısayollar her açılışta yeniden kuruluyor, büyük simgeler küçültülüyordu | Değişmedikçe yeniden kurulmaz; 28 pt simgeler önbellekte; tarih metinleri gün başına |
+
+Tanı araçları (yalnız ortam değişkeniyle açılır, yoksa hiçbir şey yapmaz): `OPENISLAND_DENEY_FRAMELOG` (kare aralığı, tick süresi,
+run-loop yükü, model değişimleri), `OPENISLAND_POINTER_LOG` (imleç giriş/çıkış ve faz değişimleri), kıyas modu
+`OPENISLAND_BENCHMARK_V2=open-close` (`OPENISLAND_BENCHMARK_HOVER=1` ile hover yolu).
+
 ## Doğrulama
 
 `tools/vis.sh UYGULAMA ETİKET` her iki uygulamayı yalıtılmış test verisiyle başlatır (Deney'in standart tercih
