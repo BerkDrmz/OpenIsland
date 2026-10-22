@@ -41,15 +41,23 @@ final class NookPanelView: FlippedView, IslandPanel {
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
     func didShow() {
-        observer.start()
-        media.didShow(); calendar.didShow(); shortcuts.didShow()
-        if environment.preferences.nookLayout.showsReminders { reminders.didShow() }
+        func timed(_ name: String, _ body: () -> Void) {
+            let t0 = CACurrentMediaTime(); body()
+            if FrameDriver.isLogging { FrameDriver.note(String(format: "nook.didShow %@ %.2f ms", name, (CACurrentMediaTime() - t0) * 1000)) }
+        }
+        timed("observer") { observer.start() }
+        timed("media") { media.didShow() }
+        timed("calendar") { calendar.didShow() }
+        timed("shortcuts") { shortcuts.didShow() }
+        if environment.preferences.nookLayout.showsReminders { timed("reminders") { reminders.didShow() } }
     }
 
     func didHide() {
         observer.stop()
         media.didHide(); calendar.didHide(); reminders.didHide(); shortcuts.didHide()
     }
+
+    func prewarm() { calendar.prewarm(); shortcuts.prewarm() }
 
     override func layout() {
         super.layout()
@@ -212,6 +220,7 @@ private final class NookCalendarView: FlippedView {
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
     func didShow() { observer.start() }
+    func prewarm() { update() }
     func didHide() { observer.stop() }
 
     private func update() {
@@ -356,9 +365,20 @@ private final class DayCellView: PlainButton {
         let wasSelected = isSelected
         isSelected = offset == selectedOffset
         number.textColor = isToday ? .controlAccentColor : (isSelected ? Palette.primary : Palette.secondary)
-        setAccessibilityLabel(date.formatted(date: .complete, time: .omitted) + (isToday ? ", bugün" : ""))
+        setAccessibilityLabel(Self.completeDate(date) + (isToday ? ", bugün" : ""))
         setAccessibilitySelected(isSelected)
         updateCircle(animated: window != nil && wasSelected != isSelected) // gün seçimi `IslandMotion.control` içinde
+    }
+
+    /// `date.formatted(date: .complete, time: .omitted)` gün başına bir kez (her açılışta beş tarih biçimlendirilmez).
+    private static var dateCache: [Date: String] = [:]
+    private static func completeDate(_ date: Date) -> String {
+        let day = Calendar.current.startOfDay(for: date)
+        if let cached = dateCache[day] { return cached }
+        if dateCache.count > 64 { dateCache.removeAll() }
+        let text = date.formatted(date: .complete, time: .omitted)
+        dateCache[day] = text
+        return text
     }
 
     /// SwiftUI: daire `if seçili || hover` ile eklenir/kalkar (varsayılan opaklık geçişi); hover ve gün seçimi
@@ -456,21 +476,29 @@ private final class NookShortcutsView: FlippedView {
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
     func didShow() { observer.start() }
+    func prewarm() { update() }
     func didHide() { observer.stop() }
 
+    private var shownItems: [LauncherItem.ID] = []
+
+    /// Öğeler değişmedikçe düğmeler yeniden kurulmaz (açılışta ilk güncelleme bedava); simgeler hazır küçük görsel.
     private func update() {
         empty.isHidden = !launcher.items.isEmpty
+        let items = Array(launcher.items.prefix(8))
+        guard items.map(\.id) != shownItems else { return }
+        shownItems = items.map(\.id)
         grid.subviews.forEach { $0.removeFromSuperview() }
-        for item in launcher.items.prefix(8) {
+        for item in items {
             let button = PlainButton { [launcher] in launcher.launch(item) }
             let image = DecorativeImageView()
-            image.image = launcher.icon(for: item)
+            image.image = LauncherIconThumbnails.thumbnail(for: item, launcher: launcher)
             image.imageScaling = .scaleProportionallyUpOrDown
             image.setAccessibilityElement(false)
             button.addSubview(image)
-            button.toolTip = item.title
-            button.setAccessibilityLabel(item.title)
-            button.setAccessibilityHelp(item.title)
+            let title = launcher.title(for: item)
+            button.toolTip = title
+            button.setAccessibilityLabel(title)
+            button.setAccessibilityHelp(title)
             grid.addSubview(button)
         }
         needsLayout = true
@@ -494,5 +522,33 @@ private final class NookShortcutsView: FlippedView {
             button.frame = CGRect(x: x0 + CGFloat(col) * 38, y: CGFloat(row) * 36, width: 30, height: 28)
             button.subviews.first?.frame = CGRect(x: 1, y: 0, width: 28, height: 28)
         }
+    }
+}
+
+/// Başlatıcı simgeleri için 28 pt'lik hazır küçük görseller (2×, bir kez). Uygulama simgeleri çok çözünürlüklüdür;
+/// her açılışta büyük temsilden küçültmek ilk karenin çiziminde zaman alıyordu. Görünüm aynı (aynı en iyi temsilden
+/// yüksek kaliteli küçültme).
+@MainActor
+enum LauncherIconThumbnails {
+    private static var cache: [LauncherItem.ID: NSImage] = [:]
+
+    static func thumbnail(for item: LauncherItem, launcher: LauncherStore) -> NSImage {
+        if let cached = cache[item.id] { return cached }
+        let source = launcher.icon(for: item)
+        let side = 28 * 2
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else { return source }
+        rep.size = NSSize(width: 28, height: 28)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSGraphicsContext.current?.imageInterpolation = .high
+        source.draw(in: NSRect(x: 0, y: 0, width: 28, height: 28), from: .zero, operation: .copy, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        image.isTemplate = source.isTemplate
+        cache[item.id] = image
+        return image
     }
 }

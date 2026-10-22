@@ -245,7 +245,7 @@ final class IslandCanvasView: NSView {
         let finished = slots.filter { $0.isRemoving && $0.isFinished }
         finished.forEach { $0.view.removeFromSuperview() }
         slots.removeAll { slot in finished.contains { $0 === slot } }
-        if finished.contains(where: { $0.isExpanded }) { scheduleSpareExpanded() }
+        if finished.contains(where: { $0.isExpanded }) { scheduleSpareExpanded(after: 0.05) }
         applyFrame()
         return active || !finished.isEmpty
     }

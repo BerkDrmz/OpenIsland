@@ -41,8 +41,13 @@ final class ExpandedContentView: FlippedView, IslandContentView {
     func activate() {
         guard isDormant else { return }
         isDormant = false
+        let t0 = CACurrentMediaTime()
         refresh()
+        let t1 = CACurrentMediaTime()
         if let tab = activeTab { panels[tab]?.fadeIn(duration: 0) }
+        if FrameDriver.isLogging {
+            FrameDriver.note(String(format: "activate refresh %.2f ms, didShow %.2f ms", (t1 - t0) * 1000, (CACurrentMediaTime() - t1) * 1000))
+        }
     }
 
     /// Uyku halinde kurulum: başlık ve son sekmenin paneli yerleşir; panel görünür ama çalışmaz.
@@ -52,6 +57,7 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         let container = PanelContainer(panel: PanelFactory.make(tab, model: model, environment: environment))
         panels[tab] = container
         addSubview(container, positioned: .below, relativeTo: banner)
+        container.panel.prewarm()
         container.prepare()
     }
 
@@ -128,11 +134,14 @@ final class ExpandedContentView: FlippedView, IslandContentView {
 protocol IslandPanel: NSView {
     func didShow()
     func didHide()
+    /// Uyku hâlindeki ön kurulumda: yalnız mağazadaki mevcut veriden görsel hazırlık (gözlem/örnekleme başlatmaz).
+    func prewarm()
 }
 
 extension IslandPanel {
     func didShow() {}
     func didHide() {}
+    func prewarm() {}
 }
 
 /// Panelin solma geçişi (SwiftUI `.islandReveal(expanded: true)`: easeOut giriş, easeIn çıkış). Sönen panel kendi

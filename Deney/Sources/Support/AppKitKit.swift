@@ -82,6 +82,7 @@ final class TextLabel: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
+        if Self.asyncDrawing { layer?.drawsAsynchronously = true }
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityValue(text)
@@ -102,6 +103,7 @@ final class TextLabel: NSView {
     }
 
     var lineHeight: CGFloat { TextMetrics.lineHeight(for: font) }
+    static let asyncDrawing = ProcessInfo.processInfo.environment["OPENISLAND_DENEY_ASYNCTEXT"] != nil
 
     private var attributes: [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
