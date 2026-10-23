@@ -73,28 +73,49 @@ AX ağacı ve 2× ekran görüntüsü okunarak çıkarılmıştır (araçlar: `O
 
 Ölçüm: uygulamanın kendi denetimli kıyası (`OPENISLAND_BENCHMARK_V2`), faz sınırında `proc_pid_rusage` (talimat,
 çevrim, enerji tahmini, CPU, uyanma, ayak izi) ve WindowServer CPU'su; yalıtılmış test verisi. Araçlar ve ham sonuçlar:
-`OpenIsland-Evidence/20261021-appkit` (`tools/final.sh`, `runs/*-fts*`, `*-fic*`, `*-fie*`, `logs/wsvar.log`).
-Geçersiz koşu yok.
+`OpenIsland-Evidence/20261021-appkit` (`tools/final2.sh`, `runs/*-gts*`, `wsoc/goc-*`, `logs/final2.log`; önceki tur
+`tools/final.sh`, `runs/*-fts*`, `*-fic*`, `*-fie*`). Geçersiz koşu yok.
 
-Sekme geçişi (her hızda 4'er koşu; Δ = AppKit − SwiftUI):
+Sekme geçişi (her hızda 4'er koşu; Δ = AppKit − SwiftUI; parantezde mutlak uygulama CPU'su):
 
 | Aralık | Talimat/seçim | Çevrim/seçim | CPU | Enerji/seçim | Ayak izi | Uyanma | WindowServer |
 |---|---|---|---|---|---|---|---|
-| 650 ms | −44% | −48% | −46% | −47% | −23% | ≈0 | −2% |
-| 300 ms | −41% | −48% | −46% | −44% | −27% | +2% | −2% |
-| 150 ms | −52% | −55% | −53% | −57% | −27% | ≈0 | +3,5% |
-| 80 ms | −48% | −52% | −41% | −70% | −27% | ≈0 | +10% |
-| 50 ms | −48% | −50% | −37% | −77% | −27% | −9% | +10% |
+| 650 ms | −63% | −67% | −64% (18,9 → 6,8%) | −53% | −28% | +2% | −12% |
+| 300 ms | −62% | −69% | −64% (30,8 → 11,1%) | −51% | −28% | +7% | −6% |
+| 150 ms | −81% | −76% | −68% (42,9 → 13,9%) | −86% | −28% | +11% | −3% |
+| 80 ms | −79% | −73% | −58% (47,4 → 19,7%) | −90% | −28% | +8% | +1% |
+| 50 ms | −76% | −65% | −47% (50,2 → 26,7%) | −91% | −28% | +9% | +7% |
 
-Boşta (2'şer koşu, 325 s): kompakt — CPU −87%, uyanma 4,15 → 0,05/s, enerji −89%, WindowServer −11%, ayak izi
-**+6% (+1,3 MiB; bir sonraki açılış için saklanan içerik)**. Açık — CPU/enerji/WindowServer eşit, uyanma −86%,
-ayak izi −19%. Hover aç/kapat (8 döngü): uygulama CPU'su −47%.
+Hover aç/kapat (8 döngü, 4'er koşu): uygulama CPU süresi SwiftUI 1150 ms → AppKit 510 ms (−56%), WindowServer −5%.
+Boşta (önceki tur, 2'şer koşu, 325 s): kompakt — CPU −87%, uyanma 4,15 → 0,05/s, enerji −89%, WindowServer −11%, ayak
+izi **+6% (+1,3 MiB; bir sonraki açılış için saklanan içerik)**. Açık — CPU/enerji/WindowServer eşit, uyanma −86%, ayak
+izi −19%. Son turdan sonra boşta tekrar (önceki sürümle A/B/B/A, `logs/idle2.log`): kompakt ve açıkta CPU %0,001,
+uyanma 0/s, ayak izi aynı; boşta gerileme yok.
+
+Son turdaki CPU düşüşleri (her biri ayrı A/B ile kabul edildi; 80 ms'de uygulama CPU'su 35,1 → 19,7%, enerji/seçim
+2,58 → 1,13 mJ):
+
+| Bulgu (Time Profiler + `OPENISLAND_DENEY_IMGPROBE`) | Çözüm |
+|---|---|
+| Başlık kayma yayında her karede sembol çerçevesi değişiyordu; `NSImageView` her çerçeve değişiminde iç görüntü alt görünümünü güncelleyip sembolü yeniden rasterleştiriyordu (uygulama CPU'sunun ~%28'i) | Çerçeve yerinde, görünen kayma `sublayerTransform` (dururken birim dönüşüm). Yan etki: önceki sürüm kaymadan sonra kesirli konumda rasterleşmiş görüntüyü dururken de taşıyordu; şimdi başlık her sekmede SwiftUI referansına önceki kadar yakın (ilk sekmedeki taban farkta) |
+| `contentTintColor`'a aynı rengi atamak sembolü yeniden rasterleştiriyor | Yalnız renk değişince yazılır |
+| Kare sürücülerinin her biri ayrı Core Animation commit'i yapıyordu | `FrameClock`: penceredeki sürücüler tek ekran tazelemesi geri çağrısında, kare başına tek commit |
+| `needsLayout` her karede pencerenin bütün görünüm ağacını taratıyordu (başlık etiketi, kapak köşesi) | Doğrudan yerleştirme |
+| `isFlipped` @objc köprüsü her çağrıda ana aktör denetimi (~%3) | `nonisolated` |
+| `TextLabel` genişliği/yüksekliği her yerleşimde CoreText/TextKit ile yeniden ölçülüyordu (Pano satırları) | Metin/yazı tipi değişene kadar önbellek |
+| Nook takvim/anımsatıcı listeleri, Notlar menüsü, Pano satırları her gösterimde aynı veriyle yeniden kuruluyordu | Yalnız veri değişince |
+
+Reddedilen deney: gizlenen panelleri görünüm ağacından ayırmak (katman sayısını azaltır) uygulama CPU'sunu +%4,
+talimatı +%20 artırdı; WindowServer'da ölçülebilir kazanç yok.
 
 Açık kalemler (kurala göre "daha fazla kaynak"):
-- 80/50 ms hızlı geçişte WindowServer +8,5…10% (80 ms'de ayrı 4+4 koşu: SwiftUI %35,4, AppKit %38,4; maskesiz %38,9,
-  bulanıklıksız %40,0 → maske/bulanıklık değil). Katman sayımı: görünür katman benzer (70–129 / 71–105) ama içerik
-  taşıyan katman ~%80 fazla (her metin kendi dokusu). Aynı aralıkta uygulama CPU'su −17 yüzde puan, WindowServer +3
-  yüzde puan: sistem toplamı belirgin düşük. 650–150 ms gerçekçi hızlarda fark yok.
+- 50 ms geçişte WindowServer +%7 (80 ms'de fark gürültü içinde). Katman ağacı hazırlığı: içerik taşıyan katman sayısı
+  SwiftUI'den fazla. Aynı aralıkta uygulama CPU'su −23 yüzde puan, WindowServer +2,7 yüzde puan: sistem toplamı belirgin
+  düşük.
+- Hızlı geçişte uyanma +%2…11 (önceki sürümlerde de vardı; kare saati açık/kapalı aynı). Muhtemel kaynak: her geçişte
+  panel sönmesinin bitişi için kurulan zamanlayıcı; kaldırmak `didHide` zamanlamasını değiştirir.
+- Pano ve Mikser sekme simgelerinin seçim rengi animasyonu her karede yeniden rasterleşir: SwiftUI de bu iki simgede
+  renk animasyonu kullanır (üst üste binen alt yollar; `TabIconTintCheck`).
 - Boşta kompakt +1,3 MiB: açılışta kare kaybını önleyen saklanan içerik; kaldırılırsa ilk açılış ~40 ms donar.
 
 ## Akıcılık (kullanıcı testinde bulunan ve giderilen sorunlar)
@@ -109,8 +130,10 @@ Açık kalemler (kurala göre "daha fazla kaynak"):
 | Nook açılışı pahalı | Kısayollar her açılışta yeniden kuruluyor, büyük simgeler küçültülüyordu | Değişmedikçe yeniden kurulmaz; 28 pt simgeler önbellekte; tarih metinleri gün başına |
 
 Tanı araçları (yalnız ortam değişkeniyle açılır, yoksa hiçbir şey yapmaz): `OPENISLAND_DENEY_FRAMELOG` (kare aralığı, tick süresi,
-run-loop yükü, model değişimleri), `OPENISLAND_POINTER_LOG` (imleç giriş/çıkış ve faz değişimleri), kıyas modu
-`OPENISLAND_BENCHMARK_V2=open-close` (`OPENISLAND_BENCHMARK_HOVER=1` ile hover yolu).
+run-loop yükü, model değişimleri), `OPENISLAND_POINTER_LOG` (imleç giriş/çıkış ve faz değişimleri),
+`OPENISLAND_DENEY_IMGPROBE=dosya` (görüntü görünümü yeniden çizimleri görünüm yolu başına; `OPENISLAND_DENEY_IMGPROBE_STACKS=N`
+ile N çerçevelik çağrı yığınları), `OPENISLAND_DENEY_NOCLOCK` (karşılaştırma için sürücü başına ayrı ekran bağlantısı),
+kıyas modu `OPENISLAND_BENCHMARK_V2=open-close` (`OPENISLAND_BENCHMARK_HOVER=1` ile hover yolu).
 
 ## Doğrulama
 
