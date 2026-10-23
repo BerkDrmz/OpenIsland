@@ -308,6 +308,24 @@ final class SymbolView: NSImageView {
         set { if newValue != super.contentTintColor { super.contentTintColor = newValue } }
     }
 
+    /// Görünen yatay kayma (başlık satırının kayma animasyonu): çerçeve yerinde kalır, görüntü katmanı kaydırılır.
+    /// `NSImageView` her çerçeve değişiminde iç görüntü alt görünümünü güncelleyip sembolü yeniden rasterleştiriyordu
+    /// (sekme geçişinde uygulama CPU'sunun en büyük kalemi). Dururken ofset sıfırdır; görüntü değişmez.
+    func setVisualOffset(_ dx: CGFloat) {
+        guard dx != visualOffset || (dx != 0 && layer?.sublayerTransform.m41 != dx) else { return }
+        if FrameDriver.isLogging, let layer, layer.sublayerTransform.m41 != visualOffset {
+            FrameDriver.note("SymbolView \(symbol): sublayerTransform dışarıdan değişmiş (\(layer.sublayerTransform.m41) ≠ \(visualOffset))")
+        }
+        visualOffset = dx
+        wantsLayer = true
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer?.sublayerTransform = dx == 0 ? CATransform3DIdentity : CATransform3DMakeTranslation(dx, 0, 0)
+        CATransaction.commit()
+    }
+
+    private var visualOffset: CGFloat = 0
+
     override var intrinsicContentSize: NSSize { image?.size ?? .zero }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -511,6 +529,19 @@ enum ImageRedrawProbe {
 
     /// Yeniden çizimi isteyen çağrı yığınları (görüntü görünümünün `setNeedsDisplay…` çağrıları).
     private static func installInvalidationStacks(_ cls: AnyClass) {
+        for name in ["_updateImageSubview", "layout"] {
+            let selector = NSSelectorFromString(name)
+            guard let method = class_getInstanceMethod(NSImageView.self, selector) else { continue }
+            typealias Fn = @convention(c) (AnyObject, Selector) -> Void
+            let original = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+            let block: @convention(block) (AnyObject) -> Void = { object in
+                if let symbol = object as? SymbolView, MainActor.assumeIsolated({ symbol.symbolName }) == "timer" {
+                    recordImageView(symbol, "NSImageView." + name)
+                }
+                original(object, selector)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(block))
+        }
         for layerClass in [NSClassFromString("NSViewBackingLayer"), CALayer.self].compactMap({ $0 }) {
             let selector = NSSelectorFromString("setNeedsDisplay")
             guard let method = class_getInstanceMethod(layerClass, selector) else { continue }
@@ -558,6 +589,15 @@ enum ImageRedrawProbe {
                 method_setImplementation(method, imp_implementationWithBlock(block))
             }
         }
+    }
+
+    private nonisolated static func recordImageView(_ object: AnyObject, _ name: String) {
+        let frames = Thread.callStackSymbols.dropFirst(2).prefix(40).map { line -> String in
+            let parts = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
+            return parts.count > 3 ? String(parts[3].prefix(70)) : line
+        }
+        let key = "INVAL \(name) timer :: " + frames.joined(separator: " <- ")
+        MainActor.assumeIsolated { counts[key, default: 0] += 1 }
     }
 
     private nonisolated static func record(_ object: AnyObject, _ name: String) {

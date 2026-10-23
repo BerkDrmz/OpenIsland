@@ -213,8 +213,9 @@ final class TabButtonView: FlippedView {
         return self.colorAmount.isActive
     }
     private var unselectedAlpha: CGFloat { Palette.increasedContrast ? 0.7 : 0.48 }
-    /// Doğrudan yerleştirilir: `needsLayout` her karede pencerenin bütün görünüm ağacını taratıyordu.
-    var labelOffset: CGFloat = 0 { didSet { if labelOffset != oldValue { layoutIcon() } } }
+    /// Görünen kayma; sembolün çerçevesi değişmez (`SymbolView.setVisualOffset`). Doğrudan uygulanır: `needsLayout`
+    /// her karede pencerenin bütün görünüm ağacını taratıyordu.
+    var labelOffset: CGFloat = 0 { didSet { if labelOffset != oldValue { icon.setVisualOffset(labelOffset) } } }
 
     init(tab: ExpandedTab, action: @escaping () -> Void) {
         self.tab = tab
@@ -260,7 +261,9 @@ final class TabButtonView: FlippedView {
 
     private func layoutIcon() {
         // Kaydırma ofseti canlandırılır; SwiftUI'deki gibi yalnız taban konum piksele oturur.
-        icon.frame = icon.drawingFrame(centeredIn: bounds, halfPixelUp: true).offsetBy(dx: labelOffset, dy: 0)
+        let frame = icon.drawingFrame(centeredIn: bounds, halfPixelUp: true)
+        if icon.frame != frame { icon.frame = frame }
+        icon.setVisualOffset(labelOffset)
     }
 
     override func mouseDown(with event: NSEvent) {}
@@ -360,7 +363,9 @@ final class IconButtonView: FlippedView, TransientStateResettable {
     private func layoutContent() {
         circle.frame = bounds.offsetBy(dx: labelOffset, dy: 0)
         circle.layer?.cornerRadius = bounds.width / 2
-        icon.frame = icon.drawingFrame(centeredIn: bounds, halfPixelUp: inHeader).offsetBy(dx: labelOffset, dy: 0)
+        let frame = icon.drawingFrame(centeredIn: bounds, halfPixelUp: inHeader)
+        if icon.frame != frame { icon.frame = frame }
+        icon.setVisualOffset(labelOffset)
         if hover.target != 0 { hover.animate(to: hover.target, spec: nil) } // ölçek merkezi yeni sınırlara göre
     }
 
