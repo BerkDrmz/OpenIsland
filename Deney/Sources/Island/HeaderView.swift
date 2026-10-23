@@ -176,9 +176,21 @@ final class HeaderView: FlippedView {
 
     private var lastBodyWidth: CGFloat?
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if FrameDriver.isLogging {
+            FrameDriver.note("header window=\(window != nil) capsule attached=\(capsule.superlayer === layer) first=\(layer?.sublayers?.first === capsule) color=\(capsule.backgroundColor != nil)")
+        }
+    }
+
     private func setCapsuleFrame(_ rect: CGRect) {
         // Düğmeler yeniden kurulduğunda da en altta kalsın.
-        if layer?.sublayers?.first !== capsule { layer?.insertSublayer(capsule, at: 0) }
+        if layer?.sublayers?.first !== capsule {
+            if FrameDriver.isLogging {
+                FrameDriver.note("capsule reinsert attached=\(capsule.superlayer === layer) index=\(layer?.sublayers?.firstIndex(where: { $0 === capsule }) ?? -1)")
+            }
+            layer?.insertSublayer(capsule, at: 0)
+        }
         if let scale = window?.backingScaleFactor, capsule.contentsScale != scale { capsule.contentsScale = scale }
         guard capsule.frame != rect else { return }
         CATransaction.begin()
@@ -397,7 +409,10 @@ final class IconButtonView: FlippedView, TransientStateResettable {
     /// Görünen kayma daireye ve simgeye birlikte katman dönüşümüyle uygulanır; alt görünüm çerçeveleri yerinde kalır
     /// (kayma animasyonunda kare başına çerçeve değişimi izleme alanlarını kirletiyor, sembolü yeniden çizdiriyordu).
     private func applyLabelOffset() {
-        let transform = labelOffset == 0 ? CATransform3DIdentity : CATransform3DMakeTranslation(labelOffset, 0, 0)
+        // Simge piksel adımlarıyla kayar (bkz. `SymbolView.setVisualOffset`); piksel arası kaydırma titreme gibi görünür.
+        let scale = window?.backingScaleFactor ?? 2
+        let dx = (labelOffset * scale).rounded() / scale
+        let transform = dx == 0 ? CATransform3DIdentity : CATransform3DMakeTranslation(dx, 0, 0)
         if let layer, !CATransform3DEqualToTransform(layer.sublayerTransform, transform) {
             CATransaction.begin()
             CATransaction.setDisableActions(true)

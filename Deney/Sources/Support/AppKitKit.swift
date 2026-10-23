@@ -323,10 +323,15 @@ final class SymbolView: NSImageView {
         set { if newValue != super.contentTintColor { super.contentTintColor = newValue } }
     }
 
-    /// Görünen yatay kayma (başlık satırının kayma animasyonu): çerçeve yerinde kalır, görüntü katmanı kaydırılır.
+    /// Görünen yatay kayma (başlık satırının kayma animasyonu): çerçeve yerinde kalır, görüntü katmanı tam piksel
+    /// adımlarıyla kaydırılır.
     /// `NSImageView` her çerçeve değişiminde iç görüntü alt görünümünü güncelleyip sembolü yeniden rasterleştiriyordu
     /// (sekme geçişinde uygulama CPU'sunun en büyük kalemi). Dururken ofset sıfırdır; görüntü değişmez.
-    func setVisualOffset(_ dx: CGFloat) {
+    func setVisualOffset(_ offset: CGFloat) {
+        // Cihaz pikseline yuvarlanır: `NSImageView` görüntüsünü piksele oturtarak kaydırıyordu (keskin, piksel adımlı);
+        // piksel arası kaydırma kenarları her karede yumuşatıp keskinleştirir, kayma sırasında titreme gibi görünür.
+        let scale = window?.backingScaleFactor ?? 2
+        let dx = (offset * scale).rounded() / scale
         guard dx != visualOffset || (dx != 0 && layer?.sublayerTransform.m41 != dx) else { return }
         if FrameDriver.isLogging, let layer, layer.sublayerTransform.m41 != visualOffset {
             FrameDriver.note("SymbolView \(symbol): sublayerTransform dışarıdan değişmiş (\(layer.sublayerTransform.m41) ≠ \(visualOffset))")

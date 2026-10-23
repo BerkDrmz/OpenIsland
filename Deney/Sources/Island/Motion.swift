@@ -318,10 +318,12 @@ final class LayerSpring {
         stamp = now
         let from = CGFloat(spring.value), velocity = CGFloat(spring.velocity)
         let targets = apply(target)
+        // Model değeri ve yay animasyonu tek işlemde commit edilir. Ayrı commit'te yeni değer bir kare animasyonsuz
+        // ekrana çıkıyordu (hızlı sekme geçişinde seçilen simge bir an tam parlaklığa sıçrıyordu).
         CATransaction.begin()
+        defer { CATransaction.commit() }
         CATransaction.setDisableActions(true)
         for t in targets { t.layer.setValue(t.value, forKeyPath: t.keyPath) }
-        CATransaction.commit()
         guard let spec, from != target || velocity != 0 else {
             spring.set(Double(target))
             for t in targets { t.layer.removeAnimation(forKey: "spring." + t.keyPath) }
