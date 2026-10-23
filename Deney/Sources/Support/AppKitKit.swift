@@ -108,7 +108,10 @@ final class TextLabel: NSView {
     private var measuredWidth: CGFloat?
     private var measuredHeight: (width: CGFloat, height: CGFloat)?
 
-    var lineHeight: CGFloat { TextMetrics.lineHeight(for: font) }
+    /// SwiftUI metin stilleri (`.title2`, `.headline` …) aynı puntodaki sistem fontundan farklı satır yüksekliği
+    /// kullanır; ölçülen değer burada verilir.
+    var lineHeightOverride: CGFloat? { didSet { if lineHeightOverride != oldValue { invalidate() } } }
+    var lineHeight: CGFloat { lineHeightOverride ?? TextMetrics.lineHeight(for: font) }
 
 
     private var attributes: [NSAttributedString.Key: Any] {
