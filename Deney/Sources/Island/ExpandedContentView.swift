@@ -101,7 +101,21 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         return CGSize(width: max(canvas.width, layout.size.width), height: layout.size.height)
     }
 
+    /// Hızlı geçiş (kullanıcı isteği; SwiftUI'den bilinçli fark): bir sekme geçişi öncekinden `rapidInterval` içinde
+    /// gelirse başlık (kapsül, simge tonu, satır kayması) ve panel değişimi animasyonsuz son hâline geçer. Her tıklama
+    /// bir öncekinin yayını yarıda yeniden hedeflediğinde kapsül yolda yön değiştiriyor, simgeler yarı tonda kalıyor,
+    /// paneller yarı saydam üst üste biniyordu (SwiftUI sürümünde de aynı titreme). Tek geçişlerde animasyonlar aynı.
+    static let rapidInterval: CFTimeInterval = 0.35
+    private var lastTabSwitch: CFTimeInterval = -.infinity
+    private var rapidSwitch = false
+
     func refresh() {
+        if let tab = model.presentation.expandedTab, tab != activeTab, activeTab != nil {
+            let now = CACurrentMediaTime()
+            rapidSwitch = now - lastTabSwitch < Self.rapidInterval
+            lastTabSwitch = now
+        }
+        header.rapidSwitch = rapidSwitch
         header.refresh()
         banner.refresh()
         if let tab = model.presentation.expandedTab, tab != activeTab { select(tab) }
@@ -115,7 +129,7 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         let fadeOut = style == .reduced ? 0.06 : (lively ? 0.08 : 0.10)
         let isFirst = activeTab == nil
         if let previous = activeTab, let old = panels[previous] {
-            old.fadeOut(duration: fadeOut)
+            old.fadeOut(duration: rapidSwitch ? 0 : fadeOut)
         }
         activeTab = tab
         let container = panels[tab] ?? {
@@ -125,7 +139,7 @@ final class ExpandedContentView: FlippedView, IslandContentView {
             return c
         }()
         layoutPanel(container, tab: tab)
-        container.fadeIn(duration: isFirst ? 0 : fadeIn)
+        container.fadeIn(duration: isFirst || rapidSwitch ? 0 : fadeIn)
     }
 
     override func layout() {

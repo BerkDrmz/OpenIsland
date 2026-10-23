@@ -21,6 +21,8 @@ final class HeaderView: FlippedView {
     private var shift = Spring(0)
     private var capsuleX = Spring(0)
     private var lastLayoutTab: ExpandedTab?
+    /// Hızlı geçişte (bkz. `ExpandedContentView.rapidInterval`) seçim, kapsül ve satır kayması animasyonsuz.
+    var rapidSwitch = false
     private lazy var driver = FrameDriver(view: self) { [weak self] dt in
         guard let self else { return false }
         self.shift.step(dt); self.capsuleX.step(dt)
@@ -76,7 +78,7 @@ final class HeaderView: FlippedView {
             selectedTab = tab
             // SwiftUI: sekme geçişi yerleşimi değiştiriyorsa `IslandMotion.resize` işleminde, değilse animasyonsuz.
             var spec: SpringSpec?
-            if let old = previousTab, let tab, window != nil {
+            if let old = previousTab, let tab, window != nil, !rapidSwitch {
                 let metrics = model.metrics
                 if IslandLayoutEngine.layout(for: .expanded(old), metrics: metrics) != IslandLayoutEngine.layout(for: .expanded(tab), metrics: metrics) {
                     spec = DeneyMotion.resize(style: DeneyMotion.effectiveStyle(model.motionStyle))
@@ -124,7 +126,8 @@ final class HeaderView: FlippedView {
         let metrics = model.metrics
         let layout = IslandLayoutEngine.layout(for: .expanded(tab), metrics: metrics)
         let p = placement(bodyWidth: layout.size.width, boxWidth: frameWidth)
-        let boxX = (frameWidth - p.boxWidth) / 2 + p.shift
+        let rowShift = stableRowShift(frameWidth: frameWidth)
+        let boxX = (frameWidth - p.boxWidth) / 2 + rowShift
         let inner = p.boxWidth - 2 * p.padding
         let half = (inner - p.gap) / 2
         let size = IslandLayoutEngine.tabButtonSize
@@ -142,9 +145,12 @@ final class HeaderView: FlippedView {
         pinX = x
         // Yerleşim (isabet, odak, AX) hedefe tek adımda; görünen kayma ve kapsül yeniden boyutlama yayıyla.
         let style = DeneyMotion.effectiveStyle(model.motionStyle)
-        let animate = lastLayoutTab != nil && lastLayoutTab != tab && window != nil
-        let newShift = p.shift
-        if animate {
+        let tabChanged = lastLayoutTab != nil && lastLayoutTab != tab
+        let animate = tabChanged && window != nil && !rapidSwitch
+        let newShift = rowShift
+        if tabChanged && rapidSwitch {
+            shift.set(0) // görünen kayma yarıda kalmaz, etiketler doğrudan yeni yerleşimde
+        } else if animate {
             if newShift != shift.target {
                 let visible = shift.value
                 shift.set(visible - newShift) // etiketler eski görünür konumdan…
@@ -175,6 +181,24 @@ final class HeaderView: FlippedView {
     }
 
     private var lastBodyWidth: CGFloat?
+
+    /// Satır kayması bütün sekmelerde aynı (kullanıcı isteği; SwiftUI'den bilinçli fark): görünen sekmeler arasındaki en
+    /// dar gövdenin kayması. SwiftUI'de kayma sekmenin gövde genişliğine göre değişir; dar gövdeli (kompakt) adada her
+    /// geçişte bütün simge satırı birkaç punto sağa sola kayıyordu, hızlı geçişte titreme olarak görünüyordu. En dar
+    /// gövdeye sığan satır daha genişlerine de sığar; simgeler hiçbir geçişte yer değiştirmez.
+    private var stableShiftKey: (metrics: NotchMetrics, tabs: [ExpandedTab], width: CGFloat)?
+    private var stableShift: CGFloat = 0
+
+    private func stableRowShift(frameWidth: CGFloat) -> CGFloat {
+        let metrics = model.metrics
+        if let key = stableShiftKey, key.metrics == metrics, key.tabs == visibleTabs, key.width == frameWidth { return stableShift }
+        let narrowest = visibleTabs.min { IslandLayoutEngine.layout(for: .expanded($0), metrics: metrics).size.width
+            < IslandLayoutEngine.layout(for: .expanded($1), metrics: metrics).size.width }
+        let width = narrowest.map { IslandLayoutEngine.layout(for: .expanded($0), metrics: metrics).size.width } ?? frameWidth
+        stableShift = placement(bodyWidth: width, boxWidth: frameWidth).shift
+        stableShiftKey = (metrics, visibleTabs, frameWidth)
+        return stableShift
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
