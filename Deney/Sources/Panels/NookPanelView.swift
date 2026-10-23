@@ -233,7 +233,16 @@ private final class NookCalendarView: FlippedView {
         needsLayout = true
     }
 
+    /// Son kurulan etkinlik satırlarının girdisi: panel her gösterildiğinde aynı veriyle yeniden kurulmaz (yeni
+    /// görünümler ve sembol rasterleştirme her sekme geçişinde tekrar ediyordu).
+    private var eventsState: (hasAccess: Bool, events: [UpcomingEvent], times: [String])?
+
     private func rebuildEvents() {
+        let shown = Array(calendar.dayEvents.prefix(2))
+        let state = (hasAccess: calendar.hasAccess, events: calendar.dayEvents,
+                     times: shown.map { $0.isAllDay ? "" : $0.start.formatted(date: .omitted, time: .shortened) })
+        if let last = eventsState, last.hasAccess == state.hasAccess, last.events == state.events, last.times == state.times { return }
+        eventsState = state
         events.subviews.forEach { $0.removeFromSuperview() }
         if !calendar.hasAccess {
             let button = PlainButton { [calendar] in calendar.requestAccess() }

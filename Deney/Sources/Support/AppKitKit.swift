@@ -90,7 +90,7 @@ final class TextLabel: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
-    override var isFlipped: Bool { true }
+    nonisolated override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     func set(_ text: String) { if stringValue != text { stringValue = text } }
@@ -266,6 +266,7 @@ func pixelRect(_ r: CGRect, scale: CGFloat = 2) -> CGRect {
 /// SF Symbol görünümü. Sembol değişimi istenirse `.replace` içerik geçişiyle yapılır (SwiftUI `contentTransition`).
 final class SymbolView: NSImageView {
     private var symbol: String = ""
+    var symbolName: String { symbol }
     private var configuration: NSImage.SymbolConfiguration
 
     init(_ name: String, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor = Palette.primary,
@@ -298,6 +299,13 @@ final class SymbolView: NSImageView {
         let name = symbol
         symbol = ""
         set(name, animated: false)
+    }
+
+    /// Yalnız renk değişince yazılır: aynı rengi yeniden atamak bile sembolü baştan rasterleştirir (CoreUI glif
+    /// çözümlemesi dahil; sekme geçişinde uygulama CPU'sunun ~%20'si buydu).
+    override var contentTintColor: NSColor? {
+        get { super.contentTintColor }
+        set { if newValue != super.contentTintColor { super.contentTintColor = newValue } }
     }
 
     override var intrinsicContentSize: NSSize { image?.size ?? .zero }
@@ -420,12 +428,12 @@ class RoundedView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
-    override var isFlipped: Bool { true }
+    nonisolated override var isFlipped: Bool { true }
 
     var fill: NSColor = .clear { didSet { updateLayer() } }
     var stroke: (color: NSColor, width: CGFloat)? { didSet { updateLayer() } }
 
-    override var wantsUpdateLayer: Bool { true }
+    nonisolated override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         // Dinamik renkler (Kontrastı Artır) görünümün görünüşüyle çözülür.
         effectiveAppearance.performAsCurrentDrawingAppearance {
@@ -452,5 +460,121 @@ extension NSColor {
         guard digits.count == 6, let value = UInt32(digits, radix: 16) else { return nil }
         self.init(srgbRed: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
                   blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+    }
+}
+
+/// Geliştirici tanısı (OPENISLAND_DENEY_IMGPROBE=dosya): görüntü görünümlerinin katman yeniden çizimleri (AppKit'in iç
+/// `_NSSimpleImageView.updateLayer` çağrısı) görünüm yolu ve sembol başına sayılır, 2 s'de bir dosyaya yazılır.
+@MainActor
+enum ImageRedrawProbe {
+    private static var counts: [String: Int] = [:]
+    private static var installed = false
+
+    static func install() {
+        guard !installed, let path = ProcessInfo.processInfo.environment["OPENISLAND_DENEY_IMGPROBE"],
+              let cls = NSClassFromString("_NSSimpleImageView"),
+              let method = class_getInstanceMethod(cls, NSSelectorFromString("updateLayer")) else { return }
+        installed = true
+        typealias Fn = @convention(c) (AnyObject, Selector) -> Void
+        let original = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+        let selector = NSSelectorFromString("updateLayer")
+        let block: @convention(block) (AnyObject) -> Void = { object in
+            if let view = object as? NSView {
+                var parts: [String] = []
+                var v = view.superview
+                if let symbol = v as? SymbolView { parts.append(symbol.symbolName) }
+                while let current = v, parts.count < 6 {
+                    parts.append(String(describing: type(of: current)))
+                    v = current.superview
+                }
+                MainActor.assumeIsolated { counts[parts.joined(separator: " < "), default: 0] += 1 }
+                if parts.first == "timer", ProcessInfo.processInfo.environment["OPENISLAND_DENEY_IMGPROBE_STACKS"] != nil {
+                    record(object, "updateLayer")
+                }
+            }
+            original(object, selector)
+        }
+        method_setImplementation(method, imp_implementationWithBlock(block))
+        if ProcessInfo.processInfo.environment["OPENISLAND_DENEY_IMGPROBE_STACKS"] != nil { installInvalidationStacks(cls) }
+        FileManager.default.createFile(atPath: path, contents: nil)
+        let handle = FileHandle(forWritingAtPath: path)
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard !counts.isEmpty else { return }
+                var text = String(format: "--- %.1f\n", CACurrentMediaTime())
+                for (k, n) in counts.sorted(by: { $0.value > $1.value }) { text += "\(n)\t\(k)\n" }
+                handle?.write(Data(text.utf8))
+                counts.removeAll()
+            }
+        }
+    }
+
+    /// Yeniden çizimi isteyen çağrı yığınları (görüntü görünümünün `setNeedsDisplay…` çağrıları).
+    private static func installInvalidationStacks(_ cls: AnyClass) {
+        for layerClass in [NSClassFromString("NSViewBackingLayer"), CALayer.self].compactMap({ $0 }) {
+            let selector = NSSelectorFromString("setNeedsDisplay")
+            guard let method = class_getInstanceMethod(layerClass, selector) else { continue }
+            typealias Fn = @convention(c) (AnyObject, Selector) -> Void
+            let original = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+            let block: @convention(block) (AnyObject) -> Void = { object in
+                if let layer = object as? CALayer, let delegate = layer.delegate as? NSObject, delegate.isMember(of: cls) {
+                    record(delegate, "layer.setNeedsDisplay0")
+                }
+                original(object, selector)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(block))
+            break
+        }
+        if let method = class_getInstanceMethod(NSClassFromString("NSViewBackingLayer") ?? CALayer.self, NSSelectorFromString("setNeedsDisplayInRect:")) {
+            let selector = NSSelectorFromString("setNeedsDisplayInRect:")
+            typealias Fn = @convention(c) (AnyObject, Selector, CGRect) -> Void
+            let original = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+            let block: @convention(block) (AnyObject, CGRect) -> Void = { object, rect in
+                if let layer = object as? CALayer, let delegate = layer.delegate as? NSObject, delegate.isMember(of: cls) {
+                    record(delegate, "layer.setNeedsDisplay")
+                }
+                original(object, selector, rect)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(block))
+        }
+        for name in ["setNeedsDisplayInRect:", "setNeedsDisplay:"] {
+            let selector = NSSelectorFromString(name)
+            guard let method = class_getInstanceMethod(cls, selector) else { continue }
+            if name == "setNeedsDisplay:" {
+                typealias Fn = @convention(c) (AnyObject, Selector, Bool) -> Void
+                let original = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+                let block: @convention(block) (AnyObject, Bool) -> Void = { object, flag in
+                    if flag { record(object, name) }
+                    original(object, selector, flag)
+                }
+                method_setImplementation(method, imp_implementationWithBlock(block))
+            } else {
+                typealias Fn = @convention(c) (AnyObject, Selector, NSRect) -> Void
+                let original = unsafeBitCast(method_getImplementation(method), to: Fn.self)
+                let block: @convention(block) (AnyObject, NSRect) -> Void = { object, rect in
+                    record(object, name)
+                    original(object, selector, rect)
+                }
+                method_setImplementation(method, imp_implementationWithBlock(block))
+            }
+        }
+    }
+
+    private nonisolated static func record(_ object: AnyObject, _ name: String) {
+        nonisolated(unsafe) let object = object // yalnız ana iş parçacığında çağrılır
+        let symbol = MainActor.assumeIsolated { () -> String in
+            let view = object as? NSView
+            if let symbolView = view?.superview as? SymbolView { return symbolView.symbolName }
+            let chain = [view?.superview, view?.superview?.superview, view?.superview?.superview?.superview]
+                .map { $0.map { String(describing: type(of: $0)) } ?? "-" }.joined(separator: "<")
+            return "[\(chain) w=\(view?.window.map { String(describing: type(of: $0)) } ?? "-")]"
+        }
+        let depth = Int(ProcessInfo.processInfo.environment["OPENISLAND_DENEY_IMGPROBE_STACKS"] ?? "") ?? 9
+        let frames = Thread.callStackSymbols.dropFirst(2).prefix(depth).map { line -> String in
+            let parts = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
+            return parts.count > 3 ? String(parts[3].prefix(70)) : line
+        }
+        let key = "INVAL \(name) \(symbol) :: " + frames.joined(separator: " <- ")
+        MainActor.assumeIsolated { counts[key, default: 0] += 1 }
     }
 }

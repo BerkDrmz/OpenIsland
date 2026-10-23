@@ -179,7 +179,8 @@ final class HeaderView: FlippedView {
         let size = IslandLayoutEngine.tabButtonSize
         // Hareket sırasında kesirli konum (SwiftUI şekli de ara karelerde piksele oturmaz); dururken piksel ızgarası.
         let rect = CGRect(x: capsuleX.value + dx, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
-        capsule.frame = shift.isActive || capsuleX.isActive ? rect : pixelRect(rect)
+        let capsuleFrame = shift.isActive || capsuleX.isActive ? rect : pixelRect(rect)
+        if capsule.frame != capsuleFrame { capsule.frame = capsuleFrame }
         CATransaction.commit()
     }
 }
@@ -212,7 +213,8 @@ final class TabButtonView: FlippedView {
         return self.colorAmount.isActive
     }
     private var unselectedAlpha: CGFloat { Palette.increasedContrast ? 0.7 : 0.48 }
-    var labelOffset: CGFloat = 0 { didSet { if labelOffset != oldValue { needsLayout = true; layoutIcon() } } }
+    /// Doğrudan yerleştirilir: `needsLayout` her karede pencerenin bütün görünüm ağacını taratıyordu.
+    var labelOffset: CGFloat = 0 { didSet { if labelOffset != oldValue { layoutIcon() } } }
 
     init(tab: ExpandedTab, action: @escaping () -> Void) {
         self.tab = tab

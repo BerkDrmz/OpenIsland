@@ -30,6 +30,9 @@ final class IslandCanvasView: NSView {
     private var pendingOpening: DispatchWorkItem?
 
     private var slots: [ContentSlot] = []
+    private var lastShapeKey: [CGFloat] = []
+    private var lastRelaxScale: CGFloat = -1
+    private var lastRelaxHeight: CGFloat = -1
     var spareExpanded: ExpandedContentView?
     var didWarmDrawing = false
     /// Sürükleme sırasında etkin bölge (SwiftUI `@State dropZone`).
@@ -62,6 +65,7 @@ final class IslandCanvasView: NSView {
         appearance = NSAppearance(named: .darkAqua)
         registerForDraggedTypes(Self.draggedTypes)
         FrameDriver.installRunLoopProbe()
+        ImageRedrawProbe.install()
         wantsLayer = true
         layerContentsRedrawPolicy = .never
         layer?.masksToBounds = false
@@ -99,7 +103,7 @@ final class IslandCanvasView: NSView {
                                                  "opacity": NSNull(), "transform": NSNull(), "frame": NSNull(),
                                                  "contents": NSNull(), "hidden": NSNull(), "filters": NSNull()]
 
-    override var isFlipped: Bool { true }
+    nonisolated override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -287,14 +291,22 @@ final class IslandCanvasView: NSView {
         let shape = IslandShape(style: metrics.style, topRadius: topRadius.value, bottomRadius: bottomRadius.value)
         let rect = CGRect(x: canvas.width / 2 - surfaceSize.width / 2, y: inset, width: surfaceSize.width, height: surfaceSize.height)
         // SwiftUI yolu y-aşağı koordinatta üretir; görünüm de çevrilmiş (flipped).
-        let path = shape.path(in: rect).cgPath
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        surfaceView.shapeLayer.path = path
-        maskLayer.path = path
+        // Yalnız değişince yazılır: aynı yolu yeniden atamak bile katmanı kirletir; maske yolu değişince maskelenen
+        // bütün içerik pencere sunucusunda ekran dışında yeniden birleştirilir.
+        let shapeKey: [CGFloat] = [rect.minX, rect.minY, rect.width, rect.height, CGFloat(topRadius.value), CGFloat(bottomRadius.value), metrics.style == .notch ? 1 : 0]
+        if shapeKey != lastShapeKey {
+            lastShapeKey = shapeKey
+            let path = shape.path(in: rect).cgPath
+            surfaceView.shapeLayer.path = path
+            maskLayer.path = path
+        }
         // Gevşeme: bütün ada (yüzey + içerik) üst kenara sabit küçülür (SwiftUI `scaleEffect(anchor: .top)`).
         let s = CGFloat(relax.value)
-        if let root = layer {
+        if let root = layer, s != lastRelaxScale || root.bounds.height != lastRelaxHeight {
+            lastRelaxScale = s
+            lastRelaxHeight = root.bounds.height
             if s == 1 {
                 root.sublayerTransform = CATransform3DIdentity
             } else {
@@ -308,10 +320,11 @@ final class IslandCanvasView: NSView {
         }
         for slot in slots {
             let size = slot.view.fittingFrameSize(canvas: canvas, metrics: metrics)
-            slot.view.frame = CGRect(x: (canvas.width - size.width) / 2, y: inset, width: size.width, height: size.height)
+            let frame = CGRect(x: (canvas.width - size.width) / 2, y: inset, width: size.width, height: size.height)
+            if slot.view.frame != frame { slot.view.frame = frame }
             slot.apply()
         }
-        media.frame = contentView.bounds
+        if media.frame != contentView.bounds { media.frame = contentView.bounds }
         media.apply(surfaceWidth: surfaceSize.width, canvasWidth: canvas.width, topInset: inset)
         CATransaction.commit()
     }
@@ -409,15 +422,19 @@ final class ContentSlot {
         let p = max(0, min(1, progress.value))
         // Açılacak genişletilmiş içerik görünmeden önce de çok düşük opaklıkla birleştirilir (%0,4, göz ayırt etmez):
         // ilk doku yüklemesi yüzey hareketinden önce olur, hareketin ortasında kare kaçmaz.
-        view.layer?.opacity = Float(isExpanded && !isRemoving ? max(p, 0.004) : p)
+        let opacity = Float(isExpanded && !isRemoving ? max(p, 0.004) : p)
+        if let layer = view.layer, layer.opacity != opacity { layer.opacity = opacity }
         if blurs, !isRemoving { RevealBlur.apply(radius: (1 - p) * 6, to: view.layer) }
-        view.isHidden = p <= 0.001 && isRemoving
+        let hidden = p <= 0.001 && isRemoving
+        if view.isHidden != hidden { view.isHidden = hidden }
     }
 }
 
 /// y-aşağı koordinatlı düz kap.
 class FlippedView: NSView {
-    override var isFlipped: Bool { true }
+    /// `nonisolated`: AppKit bunu her koordinat dönüşümünde sorar; ana aktöre bağlı @objc köprüsü her çağrıda çalışma
+    /// zamanı yürütücü denetimi yapıyordu (sekme geçişinde uygulama CPU'sunun ~%3'ü).
+    nonisolated override var isFlipped: Bool { true }
 }
 
 /// Katmanı `CAShapeLayer` olan, y-aşağı koordinatlı görünüm.
@@ -434,7 +451,7 @@ final class ShapeView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
-    override var isFlipped: Bool { true }
+    nonisolated override var isFlipped: Bool { true }
     override func makeBackingLayer() -> CALayer { CAShapeLayer() }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

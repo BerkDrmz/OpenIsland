@@ -133,10 +133,13 @@ private struct SlotItem {
 
     func apply(to view: NSView, offset: CGPoint, radius: ((CGFloat) -> Void)?) {
         let p = max(0, min(1, progress.value))
-        view.frame = CGRect(x: offset.x + x.value, y: offset.y + y.value, width: max(w.value, 0), height: max(h.value, 0))
-        view.layer?.opacity = Float(p)
+        let hidden = p <= 0.001
+        if view.isHidden != hidden { view.isHidden = hidden }
+        guard !hidden else { return } // görünmeyen katmana yazılmaz
+        let frame = CGRect(x: offset.x + x.value, y: offset.y + y.value, width: max(w.value, 0), height: max(h.value, 0))
+        if view.frame != frame { view.frame = frame }
+        if let layer = view.layer, layer.opacity != Float(p) { layer.opacity = Float(p) }
         RevealBlur.apply(radius: hasSlot ? (1 - p) * 6 : 0, to: view.layer)
-        view.isHidden = p <= 0.001
         radius?(r.value)
     }
 }
@@ -184,7 +187,8 @@ final class ArtworkLayerView: NSView {
         }
     }
 
-    var cornerRadius: CGFloat = 0 { didSet { if cornerRadius != oldValue { needsLayout = true; layoutLayers() } } }
+    /// Doğrudan yerleştirilir (`layout()` yok): `needsLayout` kare başına pencere yerleşim geçişi tetikliyordu.
+    var cornerRadius: CGFloat = 0 { didSet { if cornerRadius != oldValue { layoutLayers() } } }
     var shadowColor: NSColor = .clear { didSet { layer?.shadowColor = shadowColor.cgColor } }
     var shadowOpacity: Float = 0 { didSet { layer?.shadowOpacity = shadowOpacity } }
 

@@ -281,7 +281,15 @@ final class RemindersListView: FlippedView, NSTextFieldDelegate {
         draft.stringValue = ""
     }
 
+    /// Son kurulan içeriğin girdisi: panel her gösterildiğinde aynı veriyle yeniden kurulmaz.
+    private var builtState: (hasAccess: Bool, items: [ReminderItem], error: String?, day: Date)?
+
     private func rebuild() {
+        let state = (hasAccess: reminders.hasAccess, items: Array(reminders.items.prefix(limit)), error: reminders.lastError,
+                     day: Calendar.current.startOfDay(for: Date()))
+        if let last = builtState, last.hasAccess == state.hasAccess, last.items == state.items, last.error == state.error,
+           last.day == state.day { return }
+        builtState = state
         content.forEach { $0.removeFromSuperview() }
         content.removeAll()
         if !reminders.hasAccess {

@@ -148,11 +148,14 @@ struct Spring {
     }
 }
 
-/// Ekran tazelemesine bağlı kare sürücüsü. Yalnız etkin yay varken çalışır; boşta uyanma yok.
+/// Ekran tazelemesine bağlı kare sürücüsü. Yalnız etkin yay varken çalışır; boşta uyanma yok. Aynı penceredeki
+/// sürücüler tek `FrameClock` bağlantısıyla, tek Core Animation işleminde ilerler (kare başına tek commit).
 @MainActor
 final class FrameDriver: NSObject {
     private weak var view: NSView?
+    /// Pencere dışındaki görünüm için kendi bağlantısı (pencereye bağlı saat yokken).
     private var link: CADisplayLink?
+    private weak var clock: FrameClock?
     private var lastTimestamp: CFTimeInterval?
     private let tick: (Double) -> Bool
 
@@ -162,7 +165,7 @@ final class FrameDriver: NSObject {
         self.tick = tick
     }
 
-    var isRunning: Bool { link != nil }
+    var isRunning: Bool { link != nil || clock != nil }
 
     /// `body`, şu anki işlemin içeren karesi ekrana çıktıktan sonra (iki ekran tazelemesi) bir kez çalışır.
     static func afterPresentedFrame(of view: NSView, _ body: @escaping @MainActor () -> Void) {
@@ -172,10 +175,16 @@ final class FrameDriver: NSObject {
     }
 
     func start() {
-        guard link == nil, let view else { return }
-        let link = view.displayLink(target: self, selector: #selector(step(_:)))
-        link.add(to: .main, forMode: .common)
-        self.link = link
+        guard !isRunning, let view else { return }
+        if !FrameClock.isDisabled, let window = view.window {
+            let clock = FrameClock.shared(for: window)
+            clock.add(self)
+            self.clock = clock
+        } else {
+            let link = view.displayLink(target: self, selector: #selector(step(_:)))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
         // Animasyon şimdi başladı: ilk kare, şimdiden o karenin gösterim anına kadar ilerler.
         lastTimestamp = CACurrentMediaTime()
     }
@@ -183,10 +192,12 @@ final class FrameDriver: NSObject {
     func stop() {
         link?.invalidate()
         link = nil
+        clock?.remove(self)
+        clock = nil
         lastTimestamp = nil
     }
 
-    @objc private func step(_ link: CADisplayLink) {
+    @objc fileprivate func step(_ link: CADisplayLink) {
         let now = link.targetTimestamp
         let dt = lastTimestamp.map { min(max(now - $0, 0), 0.05) } ?? (1.0 / 60)
         lastTimestamp = now
@@ -231,6 +242,54 @@ final class FrameDriver: NSObject {
             if start > 0, busy > 6 { note(String(format: "runloop busy=%.2f ms", busy)) }
         }
         CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+    }
+}
+
+/// Bir penceredeki etkin kare sürücülerinin ortak ekran tazelemesi bağlantısı. Sürücüler tek geri çağrıda ve tek açık
+/// Core Animation işleminde ilerler: sürücülerin kendi `CATransaction` blokları iç içe kalır, ayrı commit yapmaz
+/// (her biri ayrı yerleşim/çizim geçişi ve pencere sunucusunda ayrı işlem demekti). Etkin sürücü kalmayınca bağlantı
+/// kapanır; boşta uyanma yok.
+@MainActor
+final class FrameClock: NSObject {
+    /// Karşılaştırma ölçümü için (OPENISLAND_DENEY_NOCLOCK): sürücü başına ayrı bağlantı (önceki davranış).
+    static let isDisabled = ProcessInfo.processInfo.environment["OPENISLAND_DENEY_NOCLOCK"] != nil
+    private static var clocks: [ObjectIdentifier: FrameClock] = [:]
+    private weak var window: NSWindow?
+    private var link: CADisplayLink?
+    private var drivers: [FrameDriver] = []
+
+    static func shared(for window: NSWindow) -> FrameClock {
+        let key = ObjectIdentifier(window)
+        if let clock = clocks[key], clock.window === window { return clock }
+        let clock = FrameClock(window: window)
+        clocks[key] = clock
+        return clock
+    }
+
+    private init(window: NSWindow) { self.window = window }
+
+    func add(_ driver: FrameDriver) {
+        drivers.append(driver)
+        guard link == nil, let window else { return }
+        let link = window.displayLink(target: self, selector: #selector(fire(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    func remove(_ driver: FrameDriver) {
+        drivers.removeAll { $0 === driver }
+        if drivers.isEmpty {
+            link?.invalidate()
+            link = nil
+        }
+    }
+
+    @objc private func fire(_ link: CADisplayLink) {
+        CATransaction.begin()
+        // Kopya üzerinde: bir sürücünün adımı başkasını durdurabilir (durdurulan bu karede ilerlemez) ya da yenisini
+        // başlatabilir (yenisi sonraki karede ilerler; ayrı bağlantıda da öyleydi).
+        for driver in drivers where drivers.contains(where: { $0 === driver }) { driver.step(link) }
+        CATransaction.commit()
     }
 }
 

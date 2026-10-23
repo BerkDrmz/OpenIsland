@@ -96,7 +96,13 @@ final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
         if notes.text != textView.string { notes.text = textView.string }
     }
 
+    /// Menü yalnız kısayol listesi değişince yeniden kurulur: yeni menü atamak açılır düğmenin simgesini her
+    /// gösterimde yeniden rasterleştiriyordu.
+    private var menuShortcuts: [String]?
+
     private func rebuildMenu() {
+        guard menuShortcuts != launcher.availableShortcuts else { return }
+        menuShortcuts = launcher.availableShortcuts
         let menu = NSMenu()
         let symbol = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         symbol.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?
@@ -117,7 +123,7 @@ final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
         shortcuts.submenu = sub
         menu.addItem(shortcuts)
         addButton.menu = menu
-        addButton.contentTintColor = Palette.primary
+        if addButton.contentTintColor != Palette.primary { addButton.contentTintColor = Palette.primary }
     }
 
     private func rebuildTiles() {
