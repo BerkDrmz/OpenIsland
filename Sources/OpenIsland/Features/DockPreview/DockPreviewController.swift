@@ -385,12 +385,17 @@ final class DockPreviewController {
             panel.acceptsMouseMovedEvents = true
             self.panel = panel
         }
+        #if OPENISLAND_DENEY
+        // AppKit deneyi: aynı model ve yerleşimle AppKit paneli (Deney/Sources/Panels/DockPreviewPanelView.swift).
+        panel?.contentView = DockPreviewPanelView(model: model, size: frame.size)
+        #else
         let hosting = NSHostingView(rootView: DockPreviewPanel(model: model).frame(width: frame.width, height: frame.height))
         // A wrapping permission message must not replace our screen-clamped panel geometry
         // with SwiftUI's unconstrained intrinsic height.
         hosting.sizingOptions = []
         hosting.frame = CGRect(origin: .zero, size: frame.size)
         panel?.contentView = hosting
+        #endif
         panel?.setFrame(frame, display: false)
         panel?.orderFrontRegardless()
     }

@@ -23,6 +23,7 @@ final class DeneyAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // Dock simgesi yok (LSUIElement ile aynı)
+        if DockPreviewParityHarness.runIfRequested() { return }
         let settings = SettingsWindowController(environment: environment)
         self.settings = settings
         environment.settingsAction = { [weak settings] in settings?.show() }

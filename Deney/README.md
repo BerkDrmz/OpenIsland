@@ -41,7 +41,8 @@ davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım Swif
 | Genişletilmiş kabuk: sekmeler, seçim kapsülü, iğne, başlık kayması, HUD şeridi | AppKit |
 | Dokuz panel (Medya, Nook, Raf, Pano, Ses Mikseri, Odak, Notlar, Ayna, Sistem) | AppKit |
 | Sürükle-bırak hedefi (Raf / AirDrop bölgeleri) | AppKit |
-| Ayarlar, Araçlar, Dock önizlemeleri | SwiftUI barındırılıyor (istek üzerine açılan pencereler) |
+| Dock önizlemeleri | AppKit (`DockPreviewPanelView`; denetleyici ortak, içerik `#if OPENISLAND_DENEY`). SwiftUI ile yan yana koşum (`OPENISLAND_DENEY_DOCKPARITY`): bütün öğe sınır kutuları ve AX ağacı/çerçeveleri birebir, kalan piksel farkı 1–2 düzey (ölçeklenen önizlemede tek sütun ≤39); gösterim başına CPU 5,3 → 3,3 ms |
+| Ayarlar, Araçlar | SwiftUI barındırılıyor (istek üzerine açılan pencereler) |
 
 ## Eşdeğerlik kuralları (SwiftUI'den çalışma anında ölçülmüştür)
 
