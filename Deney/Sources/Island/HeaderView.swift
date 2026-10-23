@@ -297,7 +297,7 @@ final class IconButtonView: FlippedView, TransientStateResettable {
     private let isProminent: Bool
     private var hoverArea: NSTrackingArea?
     private var isHovering = false { didSet { if isHovering != oldValue { updateHover(animated: true) } } }
-    var labelOffset: CGFloat = 0 { didSet { if labelOffset != oldValue { layoutContent() } } }
+    var labelOffset: CGFloat = 0 { didSet { if labelOffset != oldValue { applyLabelOffset() } } }
     /// Başlık satırındaki düğme (iğne): sembolün yarım piksel yuvarlaması başlık kuralıyla.
     var inHeader = false
     /// Hover miktarı (0…1): dolgu ve 1,06 ölçek aynı `IslandMotion.control` yayıyla, düğme merkezi çevresinde
@@ -361,12 +361,24 @@ final class IconButtonView: FlippedView, TransientStateResettable {
     }
 
     private func layoutContent() {
-        circle.frame = bounds.offsetBy(dx: labelOffset, dy: 0)
+        if circle.frame != bounds { circle.frame = bounds }
         circle.layer?.cornerRadius = bounds.width / 2
         let frame = icon.drawingFrame(centeredIn: bounds, halfPixelUp: inHeader)
         if icon.frame != frame { icon.frame = frame }
-        icon.setVisualOffset(labelOffset)
-        if hover.target != 0 { hover.animate(to: hover.target, spec: nil) } // ölçek merkezi yeni sınırlara göre
+        applyLabelOffset()
+    }
+
+    /// Görünen kayma daireye ve simgeye birlikte katman dönüşümüyle uygulanır; alt görünüm çerçeveleri yerinde kalır
+    /// (kayma animasyonunda kare başına çerçeve değişimi izleme alanlarını kirletiyor, sembolü yeniden çizdiriyordu).
+    private func applyLabelOffset() {
+        let transform = labelOffset == 0 ? CATransform3DIdentity : CATransform3DMakeTranslation(labelOffset, 0, 0)
+        if let layer, !CATransform3DEqualToTransform(layer.sublayerTransform, transform) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.sublayerTransform = transform
+            CATransaction.commit()
+        }
+        if hover.target != 0 { hover.animate(to: hover.target, spec: nil) } // ölçek merkezi yeni sınırlara/kaymaya göre
     }
 
     override func updateTrackingAreas() {

@@ -100,6 +100,7 @@ private final class ClipListView: NSScrollView {
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
     func set(items newItems: [ClipItem]) {
+        guard newItems != items else { return } // panel her gösterildiğinde aynı liste gelir
         items = newItems
         let ids = Set(items.map(\.id))
         for (id, row) in rows where !ids.contains(id) { row.removeFromSuperview(); rows[id] = nil; pool.append(row) }
@@ -196,6 +197,7 @@ private final class ClipRowView: RoundedView, TransientStateResettable {
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
     func configure(_ item: ClipItem) {
+        guard item != self.item else { return }
         let changed = self.item?.id != item.id
         self.item = item
         if changed { resetWork?.cancel(); didCopy = false; isHovering = false }

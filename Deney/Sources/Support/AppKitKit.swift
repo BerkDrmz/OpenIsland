@@ -96,10 +96,17 @@ final class TextLabel: NSView {
     func set(_ text: String) { if stringValue != text { stringValue = text } }
 
     private func invalidate() {
+        measuredWidth = nil
+        measuredHeight = nil
         needsDisplay = true
         invalidateIntrinsicContentSize()
         setAccessibilityValue(stringValue)
     }
+
+    /// Ölçüm önbellekleri (metin ya da yazı tipi değişince silinir): yerleşim geçişleri her seferinde CoreText/TextKit
+    /// ölçümü yapıyordu (Pano satırlarında sekme geçişinin en büyük yerleşim kalemi).
+    private var measuredWidth: CGFloat?
+    private var measuredHeight: (width: CGFloat, height: CGFloat)?
 
     var lineHeight: CGFloat { TextMetrics.lineHeight(for: font) }
 
@@ -114,7 +121,12 @@ final class TextLabel: NSView {
     /// Doğal tek satır genişliği.
     var naturalWidth: CGFloat { ceil(exactWidth) }
     /// Yuvarlanmamış tek satır genişliği.
-    var exactWidth: CGFloat { (stringValue as NSString).size(withAttributes: [.font: font]).width }
+    var exactWidth: CGFloat {
+        if let measuredWidth { return measuredWidth }
+        let width = (stringValue as NSString).size(withAttributes: [.font: font]).width
+        measuredWidth = width
+        return width
+    }
 
     override var intrinsicContentSize: NSSize { NSSize(width: naturalWidth, height: lineHeight) }
 
@@ -135,9 +147,12 @@ final class TextLabel: NSView {
     /// Verilen genişlikte gereken yükseklik (çok satırlı metin için): satır sayısı × SwiftUI satır yüksekliği.
     func height(forWidth width: CGFloat) -> CGFloat {
         guard maximumLines != 1 else { return lineHeight }
+        if let measuredHeight, measuredHeight.width == width { return measuredHeight.height }
         var lines = TextMetrics.layout(stringValue, attributes: attributes, width: width).lines
         if maximumLines > 0 { lines = min(lines, maximumLines) }
-        return CGFloat(max(lines, 1)) * lineHeight
+        let height = CGFloat(max(lines, 1)) * lineHeight
+        measuredHeight = (width, height)
+        return height
     }
 
     /// AX çerçevesi SwiftUI `Text` gibi metnin kapladığı alandır: genişlik piksele (0,5 pt) yukarı yuvarlanır, hizalamaya
