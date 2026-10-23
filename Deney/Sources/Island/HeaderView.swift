@@ -10,7 +10,11 @@ final class HeaderView: FlippedView {
     private let environment: AppEnvironment
     private var buttons: [ExpandedTab: TabButtonView] = [:]
     private let pin: IconButtonView
-    private let capsule = RoundedView(radius: 7, fill: Palette.fillHover)
+    /// Seçim kapsülü başlığın kendi katmanında, düğme katmanlarının altında düz bir katmandır (`RoundedView` ile aynı
+    /// özellikler: sürekli köşe eğrisi, görünüşe göre çözülen dolgu). Kayma ve yeniden boyutlama yayı her karede yalnız
+    /// katman çerçevesini yazar; kapsül görünümü taşınırken her kare görünüm geometrisi ve pencerenin izleme alanı
+    /// hesabı yenileniyordu.
+    private let capsule = CALayer()
     private var visibleTabs: [ExpandedTab] = []
     private var selectedTab: ExpandedTab?
     /// Görünen kayma (etiketler); yerleşim hedefe tek adımda geçer.
@@ -33,8 +37,10 @@ final class HeaderView: FlippedView {
         }
         super.init(frame: .zero)
         pin.inHeader = true
-        capsule.layer?.cornerRadius = IslandLayoutEngine.tabButtonSize.width / 2
-        addSubview(capsule)
+        wantsLayer = true
+        capsule.cornerRadius = IslandLayoutEngine.tabButtonSize.width / 2
+        capsule.cornerCurve = .continuous
+        layer?.insertSublayer(capsule, at: 0)
         rebuildButtons()
         addSubview(pin)
     }
@@ -161,7 +167,7 @@ final class HeaderView: FlippedView {
             } else {
                 capsuleX.set(sx)
             }
-            capsule.frame = pixelRect(CGRect(x: capsuleX.value, y: y, width: size.width, height: size.height))
+            setCapsuleFrame(pixelRect(CGRect(x: capsuleX.value, y: y, width: size.width, height: size.height)))
         }
         lastBodyWidth = layout.size.width
         applyVisualOffsets()
@@ -169,6 +175,26 @@ final class HeaderView: FlippedView {
     }
 
     private var lastBodyWidth: CGFloat?
+
+    private func setCapsuleFrame(_ rect: CGRect) {
+        // Düğmeler yeniden kurulduğunda da en altta kalsın.
+        if layer?.sublayers?.first !== capsule { layer?.insertSublayer(capsule, at: 0) }
+        if let scale = window?.backingScaleFactor, capsule.contentsScale != scale { capsule.contentsScale = scale }
+        guard capsule.frame != rect else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        capsule.frame = rect
+        CATransaction.commit()
+    }
+
+    nonisolated override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        // Dinamik renk (Kontrastı Artır) görünümün görünüşüyle çözülür; görünüş değişince AppKit yeniden çağırır.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        effectiveAppearance.performAsCurrentDrawingAppearance { capsule.backgroundColor = Palette.fillHover.cgColor }
+        CATransaction.commit()
+    }
 
     private func applyVisualOffsets() {
         CATransaction.begin()
@@ -180,7 +206,7 @@ final class HeaderView: FlippedView {
         // Hareket sırasında kesirli konum (SwiftUI şekli de ara karelerde piksele oturmaz); dururken piksel ızgarası.
         let rect = CGRect(x: capsuleX.value + dx, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
         let capsuleFrame = shift.isActive || capsuleX.isActive ? rect : pixelRect(rect)
-        if capsule.frame != capsuleFrame { capsule.frame = capsuleFrame }
+        setCapsuleFrame(capsuleFrame)
         CATransaction.commit()
     }
 }

@@ -104,6 +104,7 @@ Son turdaki CPU düşüşleri (her biri ayrı A/B ile kabul edildi; 80 ms'de uyg
 | `isFlipped` @objc köprüsü her çağrıda ana aktör denetimi (~%3) | `nonisolated` |
 | `TextLabel` genişliği/yüksekliği her yerleşimde CoreText/TextKit ile yeniden ölçülüyordu (Pano satırları) | Metin/yazı tipi değişene kadar önbellek |
 | Nook takvim/anımsatıcı listeleri, Notlar menüsü, Pano satırları her gösterimde aynı veriyle yeniden kuruluyordu | Yalnız veri değişince |
+| Seçim kapsülü görünümü kayma/yeniden boyutlama yayında her karede taşınıyor, pencerenin izleme alanı hesabını yeniliyordu | Kapsül başlık katmanında düz `CALayer` (aynı katman özellikleri; görüntü ve AX birebir aynı); talimat/seçim −%4,7, WindowServer'da tutarlı fark yok (`logs/wsm.log`) |
 
 Reddedilen deney: gizlenen panelleri görünüm ağacından ayırmak (katman sayısını azaltır) uygulama CPU'sunu +%4,
 talimatı +%20 artırdı; WindowServer'da ölçülebilir kazanç yok.
