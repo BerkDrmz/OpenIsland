@@ -120,8 +120,10 @@ class PlainButton: FlippedView {
         if isEnabled, bounds.contains(convert(event.locationInWindow, from: nil)) { action?() }
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override var acceptsFirstResponder: Bool { isEnabled }
-    override var canBecomeKeyView: Bool { isEnabled }
+    /// `NSButton` ve SwiftUI düğmesi gibi: klavye odağı yalnız "Klavyeyle gezinme" açıkken. Kapalıyken tıklanan düğme
+    /// odağı almaz (odak halkası belirmez, metin alanındaki odak korunur).
+    override var acceptsFirstResponder: Bool { isEnabled && NSApp.isFullKeyboardAccessEnabled }
+    override var canBecomeKeyView: Bool { isEnabled && NSApp.isFullKeyboardAccessEnabled }
     override func accessibilityPerformPress() -> Bool { action?(); return action != nil }
     override func keyDown(with event: NSEvent) {
         if event.charactersIgnoringModifiers == " " { action?() } else { super.keyDown(with: event) }
