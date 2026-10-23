@@ -23,6 +23,7 @@ final class HeaderView: FlippedView {
     private var lastLayoutTab: ExpandedTab?
     /// Hızlı geçişte (bkz. `ExpandedContentView.rapidInterval`) seçim, kapsül ve satır kayması animasyonsuz.
     var rapidSwitch = false
+    private var lastRowShift: CGFloat = 0
     private lazy var driver = FrameDriver(view: self) { [weak self] dt in
         guard let self else { return false }
         self.shift.step(dt); self.capsuleX.step(dt)
@@ -150,13 +151,13 @@ final class HeaderView: FlippedView {
         let newShift = rowShift
         if tabChanged && rapidSwitch {
             shift.set(0) // görünen kayma yarıda kalmaz, etiketler doğrudan yeni yerleşimde
-        } else if animate {
-            if newShift != shift.target {
-                let visible = shift.value
-                shift.set(visible - newShift) // etiketler eski görünür konumdan…
-                shift.animate(to: 0, spec: DeneyMotion.resize(style: style)) // …yeni yerleşime kayar
-            }
+        } else if animate, newShift != lastRowShift {
+            // Yalnız kayma gerçekten değişince: etiketler eski görünür konumdan yeni yerleşime kayar. (Önceden yeni kayma
+            // yayın hedefiyle (0) karşılaştırılıyordu; sıfırdan farklı kaymada satır her geçişte sıçrayıp geri kayıyordu.)
+            shift.set(shift.value + lastRowShift - newShift)
+            shift.animate(to: 0, spec: DeneyMotion.resize(style: style))
         }
+        lastRowShift = newShift
         lastLayoutTab = tab
         for (t, button) in buttons {
             guard let bx = layoutPositions[t] else { continue }
