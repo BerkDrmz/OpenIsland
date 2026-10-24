@@ -171,7 +171,8 @@ final class TextLabel: NSView {
         if maximumLines == 1 {
             used = exactWidth
         } else {
-            used = TextMetrics.layout(stringValue, attributes: attributes, width: bounds.width).usedWidth
+            // SwiftUI çok satırlı metin kutusu kaydırılan satırın sonundaki boşluğu da kapsar (ölçüldü); çizim etkilenmez.
+            used = TextMetrics.widthIncludingTrailingSpaces(stringValue, attributes: attributes, width: bounds.width)
             height = bounds.height
         }
         let width = min(pixelCeil(used), bounds.width)
@@ -254,6 +255,32 @@ enum TextMetrics {
     }
 
     /// Verilen genişlikte satır sayısı ve en geniş satırın kullanılan genişliği (TextKit ile, sözcük kaydırma).
+    /// En geniş satırın genişliği, satır sonundaki boşluklar dahil (yalnız AX çerçevesi için).
+    static func widthIncludingTrailingSpaces(_ text: String, attributes: [NSAttributedString.Key: Any], width: CGFloat) -> CGFloat {
+        var attributes = attributes
+        if let paragraph = (attributes[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle {
+            paragraph.alignment = .left
+            attributes[.paragraphStyle] = paragraph
+        }
+        let storage = NSTextStorage(string: text, attributes: attributes)
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        var result: CGFloat = 0
+        var index = 0
+        while index < manager.numberOfGlyphs {
+            var range = NSRange()
+            _ = manager.lineFragmentRect(forGlyphAt: index, effectiveRange: &range)
+            let characters = manager.characterRange(forGlyphRange: range, actualGlyphRange: nil)
+            let line = (text as NSString).substring(with: characters).trimmingCharacters(in: .newlines)
+            result = max(result, (line as NSString).size(withAttributes: attributes).width)
+            index = NSMaxRange(range)
+        }
+        return min(result, width)
+    }
+
     static func layout(_ text: String, attributes: [NSAttributedString.Key: Any], width: CGFloat) -> (lines: Int, usedWidth: CGFloat) {
         let storage = NSTextStorage(string: text, attributes: attributes)
         let manager = NSLayoutManager()

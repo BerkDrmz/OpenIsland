@@ -1105,7 +1105,7 @@ extension TextLabel {
     /// `.onSetNeedsDisplay` boyut değişiminde yeniden çizmez: genişliği değişen (kırpılan) satır yeniden çizilir.
     /// Paylaşılan `setFrameSize` geçersiz kılması adada CPU'yu %2–5 artırdığı için yalnız burada (ölçüldü).
     func setFrameRedrawing(_ rect: CGRect) {
-        let resized = rect.width != frame.width
+        let resized = rect.size != frame.size
         frame = rect
         if resized { needsDisplay = true }
     }

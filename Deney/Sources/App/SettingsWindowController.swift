@@ -1,8 +1,6 @@
 import AppKit
-import SwiftUI
 
-/// Ayarlar penceresi. GEÇİCİ: ilk aşamada mevcut SwiftUI `SettingsView` bir AppKit penceresinde barındırılıyor;
-/// AppKit sürümü sonraki aşamada (bkz. Deney/README.md → Durum).
+/// Ayarlar penceresi: AppKit (`SettingsWindowFactory`, Deney/Sources/Settings). İlk açılışta kurulur, kapanınca saklanır.
 @MainActor
 final class SettingsWindowController {
     private let environment: AppEnvironment
@@ -14,10 +12,7 @@ final class SettingsWindowController {
 
     func show() {
         if window == nil {
-            let controller = NSHostingController(rootView: SettingsView(environment: environment))
-            let window = NSWindow(contentViewController: controller)
-            window.title = "OpenIsland Deney Ayarları"
-            window.styleMask = [.titled, .closable, .miniaturizable]
+            let window = SettingsWindowFactory.makeWindow(environment: environment)
             window.isReleasedWhenClosed = false
             window.center()
             self.window = window

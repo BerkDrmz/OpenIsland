@@ -153,6 +153,10 @@ final class IconLabelView: FlippedView {
     let icon: SymbolView
     let text: TextLabel
     let symbolName: String
+    /// Simge pencerenin piksel ızgarasına oturur (kesirli konumdaki etikette SwiftUI gibi; varsayılan kapalı).
+    var snapsIconToWindow = false { didSet { if snapsIconToWindow != oldValue { needsLayout = true } } }
+    /// Simge ile metin arası (SwiftUI `Label` varsayılanı 8; ölçülmüş yerlerde farklı).
+    var spacing: CGFloat = 8 { didSet { if spacing != oldValue { needsLayout = true } } }
     /// Metnin simgeye göre dikey ek kaydırması (yalnız ölçülmüş yerlerde; varsayılan 0).
     var textNudge: CGFloat = 0 { didSet { if textNudge != oldValue { needsLayout = true } } }
 
@@ -183,7 +187,7 @@ final class IconLabelView: FlippedView {
     }
 
     override var fittingSize: NSSize {
-        NSSize(width: icon.layoutSize.width + 8 + pixelCeil(text.exactWidth), height: vertical.height)
+        NSSize(width: icon.layoutSize.width + spacing + pixelCeil(text.exactWidth), height: vertical.height)
     }
 
     override func layout() {
@@ -191,7 +195,10 @@ final class IconLabelView: FlippedView {
         let v = vertical
         let iw = icon.layoutSize.width
         icon.frame = icon.drawingFrame(layoutOrigin: CGPoint(x: 0, y: v.iconTop))
-        text.frame = CGRect(x: iw + 8, y: v.textTop + textNudge, width: pixelCeil(text.exactWidth), height: text.lineHeight)
+        if snapsIconToWindow {
+            icon.frame = backingAlignedRect(icon.frame, options: [.alignMinXNearest, .alignMinYNearest, .alignWidthNearest, .alignHeightNearest])
+        }
+        text.frame = CGRect(x: iw + spacing, y: v.textTop + textNudge, width: pixelCeil(text.exactWidth), height: text.lineHeight)
     }
 
     override func accessibilityFrame() -> NSRect {

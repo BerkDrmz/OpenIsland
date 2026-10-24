@@ -43,7 +43,7 @@ davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım Swif
 | Sürükle-bırak hedefi (Raf / AirDrop bölgeleri) | AppKit |
 | Dock önizlemeleri | AppKit (`DockPreviewPanelView`; denetleyici ortak, içerik `#if OPENISLAND_DENEY`). SwiftUI ile yan yana koşum (`OPENISLAND_DENEY_DOCKPARITY`): bütün öğe sınır kutuları ve AX ağacı/çerçeveleri birebir, kalan piksel farkı 1–2 düzey (ölçeklenen önizlemede tek sütun ≤39); gösterim başına CPU 5,3 → 3,3 ms |
 | Araçlar penceresi (Kaldırıcı, Önbellek temizleyici, Uygulama güncelleyici) | AppKit (`Deney/Sources/Tools/MaintenanceWindowView.swift`; denetleyici ortak, içerik `#if OPENISLAND_DENEY`). Ayrıntı: aşağıda "Araçlar penceresi" |
-| Ayarlar | SwiftUI barındırılıyor (istek üzerine açılan pencere) |
+| Ayarlar penceresi (Genel, Modüller, Sistem Erişimi; ada önizlemesi dahil) | AppKit (`Deney/Sources/Settings`). Ayrıntı: aşağıda "Ayarlar penceresi" |
 
 ## Eşdeğerlik kuralları (SwiftUI'den çalışma anında ölçülmüştür)
 
@@ -178,6 +178,45 @@ Kırpılan etiket: `TextLabel` (`.onSetNeedsDisplay`) yalnız boyutu değişince
 belirip satır daralınca kırpılmış metin eski genişlikteki hâliyle kalıyordu. Güncelleyici satırında genişlik
 değişince yeniden çizilir. Aynı düzeltme paylaşılan `TextLabel.setFrameSize` içinde denendi ve reddedildi: adada
 sekme geçişinde talimat/seçim değişmedi (+%0,1…2), ama uygulama CPU'su her hızda %2–5 arttı (`runs/*-tlbl*`).
+
+## Ayarlar penceresi
+
+Eşdeğerlik koşumu `OPENISLAND_DENEY_SETTINGSPARITY=klasör` (`tools/settingspair.sh ETİKET SEKME`): SwiftUI ve AppKit
+pencerelerini sırayla **aynı konumda** açar (form zemini duvar kâğıdından ton alır, konuma bağlıdır), sekmeyi AX ile
+seçer; ekran görüntüsü ve AX çerçeveleri alınır. `MODE=light|dark` görünümü, `HOVER="x y"` önizlemenin açık
+durumunu, `DUMP=s` görünüm ağacı dökümünü (`tree.txt`: sınıf, çerçeve, katman rengi/köşe/kenarlık) açar.
+
+Sonuç (koyu ve açık görünüm):
+- **Modüller, Sistem Erişimi:** >8 düzey fark yok, AX ağacı birebir.
+- **Genel:** bölümler ve satırlar aynı. Ada önizlemesi kompakt ve açık durumda yakın: açıkta >96 düzey fark yok,
+  kompaktta 86 piksel (nabız çubuklarının kenar yumuşatması). AX'te metinler 0,1 pt farklı: SwiftUI metin AX'ini
+  yuvarlanmamış önizleme yüksekliğinden (94,3) konumlar, kutuları yuvarlar (94,5).
+
+Ölçülen SwiftUI kuralları (görünüm ağacından):
+- Sekmeler gerçek `NSTabView` (−7, −10, 574 × 616); sekme grubunun AX çerçevesi barındırıcınınki.
+- Gruplu form zemini pencere zemini malzemesinin kopyası: gri katman (sRGB 0,9647 / 0,1961) + `CAChameleonLayer`
+  (%5 / %10). AppKit'te aynı sonuç `NSVisualEffectView(.windowBackground, .withinWindow, .active)` ile. Kendi kurulan
+  bukalemun katmanı tonu sistemle aynı vermedi. Gri değeri genel gri uzayında verilince sRGB'de 0,2559'a kayıyor.
+- Kutu: 6 pt sürekli köşe, dolgu siyah/beyaz α0,015, 0,5 pt kenarlık siyah α0,06 / beyaz α0,12. Ayırıcı 1 pt,
+  siyah/beyaz α0,047, kutunun 10 pt içinden. Bölümler arası 30 pt, başlık (13 pt yarı kalın) + 10 pt, kutu + 10 pt
+  açıklama. Açıklama kutunun sol kenarından sağdan 10 pt içeriye kayar ve sağa hizalıdır.
+- İçerik tam genişlikte; eski tarz kaydırma çubuğu içeriğin üstünde (kırpma görünümü daralmaz).
+- Anahtar: küçük `NSSwitch` 28 × 16, AX onay kutusu 26 × 15. Parçalı seçici içeriğin %55'i (eşit dilimler), satır
+  40 pt. Menü seçicisi seçili öğenin genişliğinde.
+- İzin satırı: düğme kutusu 22 pt (NSButton hizalaması 20), başlığın 1 pt üstünden; caption `Label`'da simge ile
+  metin arası 12 pt; simge pencere piksel ızgarasına oturur. Satır AX'te tek öğe (düğme varsa düğme).
+- Çok satırlı metnin AX genişliği kaydırılan satırın sonundaki boşluğu da kapsar.
+- Önizleme: bütün canlanan değerler tek ilerleme yayıyla iki yerleşim arasında; yaprak katmanlar (kapak, nabız
+  çubukları) ölçekten sonra pencere pikseline oturur (köken ve genişlik en yakın, yükseklik aşağı).
+
+Performans (süreç içi A/B/B/A, `OPENISLAND_DENEY_SETTINGSPARITY_BENCH=20`, ölçülen sırada yalnız bir görünüm bağlı;
+`settingsparity/sb2`):
+
+| İşlem | SwiftUI | AppKit |
+|---|---|---|
+| Pencere içeriğini kur, yerleştir, çiz | 74,1–76,6 ms | 23,3–23,4 ms (−69%) |
+| Sekme geçişi | 14,6–14,8 ms | 11,3 ms (−23%) |
+| Tercih değişince güncelleme (Genel açıkken bir anahtar) | 9,4–9,6 ms | 3,8–3,9 ms (−59%) |
 
 ## Akıcılık (kullanıcı testinde bulunan ve giderilen sorunlar)
 
