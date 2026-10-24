@@ -73,14 +73,7 @@ final class MaintenanceController: NSObject, NSWindowDelegate {
         window.delegate = self
         #if OPENISLAND_DENEY
         // AppKit deneyi: aynı denetleyiciyle AppKit görünümü (Deney/Sources/Tools/MaintenanceWindowView.swift).
-        // Dosya listesi ve güncelleyici tamamlanana kadar yalnız geliştirici bayrağıyla.
-        if ProcessInfo.processInfo.environment["OPENISLAND_DENEY_APPKIT_TOOLS"] != nil {
-            window.contentView = MaintenanceWindowView(controller: self)
-        } else {
-            let hosting = NSHostingView(rootView: MaintenanceView(controller: self))
-            hosting.sizingOptions = []
-            window.contentView = hosting
-        }
+        window.contentView = MaintenanceWindowView(controller: self)
         #else
         let hosting = NSHostingView(rootView: MaintenanceView(controller: self))
         // AppKit owns this resizable window's size; SwiftUI's ideal List height must not

@@ -153,6 +153,8 @@ final class IconLabelView: FlippedView {
     let icon: SymbolView
     let text: TextLabel
     let symbolName: String
+    /// Metnin simgeye göre dikey ek kaydırması (yalnız ölçülmüş yerlerde; varsayılan 0).
+    var textNudge: CGFloat = 0 { didSet { if textNudge != oldValue { needsLayout = true } } }
 
     init(_ title: String, symbol: String, font: NSFont = Fonts.caption, color: NSColor = Palette.primary) {
         symbolName = symbol
@@ -189,7 +191,7 @@ final class IconLabelView: FlippedView {
         let v = vertical
         let iw = icon.layoutSize.width
         icon.frame = icon.drawingFrame(layoutOrigin: CGPoint(x: 0, y: v.iconTop))
-        text.frame = CGRect(x: iw + 8, y: v.textTop, width: pixelCeil(text.exactWidth), height: text.lineHeight)
+        text.frame = CGRect(x: iw + 8, y: v.textTop + textNudge, width: pixelCeil(text.exactWidth), height: text.lineHeight)
     }
 
     override func accessibilityFrame() -> NSRect {

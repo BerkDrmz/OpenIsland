@@ -114,10 +114,14 @@ final class TextLabel: NSView {
     var lineHeight: CGFloat { lineHeightOverride ?? TextMetrics.lineHeight(for: font) }
 
 
+    /// Çok satırlı SwiftUI `Text` son satırda tek sözcük bırakmaz (`.standard`: pushOut); gerektiği yerde verilir.
+    var lineBreakStrategy: NSParagraphStyle.LineBreakStrategy = [] { didSet { if lineBreakStrategy != oldValue { invalidate() } } }
+
     private var attributes: [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = alignment
         paragraph.lineBreakMode = maximumLines == 1 ? lineBreakMode : .byWordWrapping
+        paragraph.lineBreakStrategy = lineBreakStrategy
         return [.font: font, .foregroundColor: textColor, .paragraphStyle: paragraph]
     }
 
@@ -273,6 +277,9 @@ enum TextMetrics {
 
 /// Piksele (2× ekranda 0,5 pt) yukarı yuvarlar; SwiftUI metin çerçevesi genişliği.
 func pixelCeil(_ v: CGFloat, scale: CGFloat = 2) -> CGFloat { ceil(v * scale) / scale }
+
+/// SwiftUI gibi en yakın piksele (yarım değerler yukarı) yuvarlar.
+func pixelRound(_ v: CGFloat, scale: CGFloat = 2) -> CGFloat { (v * scale + 0.5).rounded(.down) / scale }
 
 /// SwiftUI gibi kenarları piksel ızgarasına (2× ekranda 0,5 pt) yuvarlar.
 func pixelRect(_ r: CGRect, scale: CGFloat = 2) -> CGRect {

@@ -42,7 +42,8 @@ davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım Swif
 | Dokuz panel (Medya, Nook, Raf, Pano, Ses Mikseri, Odak, Notlar, Ayna, Sistem) | AppKit |
 | Sürükle-bırak hedefi (Raf / AirDrop bölgeleri) | AppKit |
 | Dock önizlemeleri | AppKit (`DockPreviewPanelView`; denetleyici ortak, içerik `#if OPENISLAND_DENEY`). SwiftUI ile yan yana koşum (`OPENISLAND_DENEY_DOCKPARITY`): bütün öğe sınır kutuları ve AX ağacı/çerçeveleri birebir, kalan piksel farkı 1–2 düzey (ölçeklenen önizlemede tek sütun ≤39); gösterim başına CPU 5,3 → 3,3 ms |
-| Ayarlar, Araçlar | SwiftUI barındırılıyor (istek üzerine açılan pencereler) |
+| Araçlar penceresi (Kaldırıcı, Önbellek temizleyici, Uygulama güncelleyici) | AppKit (`Deney/Sources/Tools/MaintenanceWindowView.swift`; denetleyici ortak, içerik `#if OPENISLAND_DENEY`). Ayrıntı: aşağıda "Araçlar penceresi" |
+| Ayarlar | SwiftUI barındırılıyor (istek üzerine açılan pencere) |
 
 ## Eşdeğerlik kuralları (SwiftUI'den çalışma anında ölçülmüştür)
 
@@ -119,6 +120,64 @@ Açık kalemler (kurala göre "daha fazla kaynak"):
 - Pano ve Mikser sekme simgelerinin seçim rengi animasyonu her karede yeniden rasterleşir: SwiftUI de bu iki simgede
   renk animasyonu kullanır (üst üste binen alt yollar; `TabIconTintCheck`).
 - Boşta kompakt +1,3 MiB: açılışta kare kaybını önleyen saklanan içerik; kaldırılırsa ilk açılış ~40 ms donar.
+
+## Araçlar penceresi
+
+Eşdeğerlik koşumu `OPENISLAND_DENEY_TOOLSPARITY=klasör` (`tools/toolsparity.sh ETİKET BÖLÜM`): aynı denetleyiciye bağlı
+AppKit ve SwiftUI pencerelerini yan yana açar; ekran görüntüsü ve AX çerçeveleri alınır. Güncelleyicide ağ
+kullanılmaz (paket kimliğinden türetilen deneme sürüm sonuçları). `tools/toolsflow.sh` AppKit penceresinde AX ile
+satır seçimi, onay kutuları, "Tümünü seç", süzgeç ve "Tüm sonuçları göster" adımlarını yürütür; her adımda iki pencere
+aynı durumu gösterir.
+
+Sonuç (koyu ve açık görünüm, üç bölüm, taranmış listelerle): kenar çubuğu, başlık, düğmeler, onay kutuları, liste
+satırları, ayırıcılar ve devre dışı satır renkleri piksel piksel aynı; AX çerçeveleri birebir (metinde ≤0,3 pt).
+Kalan farklar:
+- Glif kenarlarında alt piksel kenar yumuşatması (düğme başlıkları, >96 düzey fark yok, koyu görünümde).
+- SwiftUI `List` henüz çizilmemiş satırları 24 pt sayar; kaydırma çubuğu düğmesi bu yüzden daha büyük görünür ve
+  kaydırdıkça boyu değişir. AppKit gerçek satır yüksekliğini kullanır.
+
+Ölçülen SwiftUI kuralları:
+- `List` (`ListCoreScrollView`): kaydırma görünümü ve anahat zemini `controlBackgroundColor`, kaydırma çubukları
+  otomatik gizlenir. Güncelleyici satırı 52 pt; seçim zemini liste koordinatlarında satırın 16 pt içinden, içerik
+  zeminden 6 pt içeriden başlar. Ayırıcı metnin başından zeminin sağ kenarına uzanır.
+- Bölümün sıkıştırılamayan içeriği pencereye sığmazsa ana sütun taşar ve ortalanır (güncelleyicide 8,5 pt taşma: her
+  şey 4,25 pt yukarı).
+- Düğme başlığının kökeni piksele yukarı yuvarlanır. Simgeli düğmede simge ile başlık arası NSButton'dakinden 3 pt
+  geniştir.
+- `Toggle(.checkbox)`: AX kutusu 14 pt kutu + 5 pt + kesirli metin genişliği. `.font(.caption)` yalnız başlığı küçültür.
+  Devre dışıyken yalnız birincil renkli metin `tertiaryLabelColor` olur; ikincil ve renkli metinler aynı kalır.
+- `.title3.bold()` yarı kalın (semibold) çizilir. Çok satırlı `Text` son satırda tek sözcük bırakmaz
+  (`lineBreakStrategy .standard`).
+- Kenar çubuğu `Label`: yükseklik piksele aşağı yuvarlanır (16,625 → 16,5). Metin yuvarlanmış yüksekliğin dibine
+  oturur. `.headline` simgesi kalın çizilir ve metne göre 0,5 pt aşağıdadır.
+- `NSTextField` (yuvarlak kenarlı) AX çerçevesini kenarlığın 1 pt dışında bildirir. SwiftUI alanın çerçevesini bildirir.
+
+Performans (süreç içi A/B/B/A, `OPENISLAND_DENEY_TOOLSPARITY_BENCH=20`, aynı denetleyici, ölçülen sırada yalnız bir
+görünüm bağlı; `toolsparity/bench10`):
+
+| İşlem | SwiftUI | AppKit |
+|---|---|---|
+| Pencere içeriğini kur, yerleştir, çiz | 44,4–44,6 ms | 16,0–16,3 ms (−64%) |
+| Bölüm değiştirme (ortalama) | 27,7–29,1 ms | 9,9–10,0 ms (−65%) |
+| Güncelleme taraması (21 uygulama, uygulama başına durum değişir) | 182–187 ms | 113–116 ms (−38%) |
+
+Bu ölçümle bulunan ve giderilen maliyetler:
+- Bölüm görünümü her geçişte yeniden kuruluyordu ve SwiftUI'den pahalıydı (70 ms'ye karşı 57 ms). Artık kurulan
+  bölümler saklanıyor, geçişte yalnız gizlenip gösteriliyor.
+- Düğme `fittingSize` her yerleşimde yerleşim motorunu çalıştırıyordu. Artık ölçüler başlık/yazı tipi değişene kadar
+  önbellekte.
+- Liste her değişimde `reloadData` ile tüm satırları yeniden kuruyordu. Artık fark (ekle/sil) uygulanıyor.
+- `ManagedApplication.id` (`url.path`) her çağrıda yeniden hesaplanıyor. Görünür/güncellenebilir uygulamalar güncelleme
+  başına tek geçişte süzülüyor.
+
+Ölçümün kendisinde bulunan hata: koşum ana kuyruktaki bir bloktan çalışınca AppKit görünümünün gözlem güncellemeleri
+(`DispatchQueue.main.async`) iç içe döngüde çalışamıyordu ve AppKit sahte biçimde ucuz görünüyordu. Ölçüm artık
+çalışma döngüsü zamanlayıcısından başlıyor ve her adımda görünen başlığı doğruluyor (60/60).
+
+Kırpılan etiket: `TextLabel` (`.onSetNeedsDisplay`) yalnız boyutu değişince yeniden çizilmez. Kaydırma çubuğu
+belirip satır daralınca kırpılmış metin eski genişlikteki hâliyle kalıyordu. Güncelleyici satırında genişlik
+değişince yeniden çizilir. Aynı düzeltme paylaşılan `TextLabel.setFrameSize` içinde denendi ve reddedildi: adada
+sekme geçişinde talimat/seçim değişmedi (+%0,1…2), ama uygulama CPU'su her hızda %2–5 arttı (`runs/*-tlbl*`).
 
 ## Akıcılık (kullanıcı testinde bulunan ve giderilen sorunlar)
 
