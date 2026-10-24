@@ -71,30 +71,39 @@ AX ağacı ve 2× ekran görüntüsü okunarak çıkarılmıştır (araçlar: `O
   (2π/response)², sönüm 4πζ/response), hedef değişince hız aktarılır, ölçek düğme merkezinden. Sekme tonu SwiftUI
   işlemiyle aynı: yerleşim değişirse `IslandMotion.resize`, değişmezse anında.
 
-## Performans: SwiftUI (K8c, H9) ile A/B/B/A (2026-10-23, son sürüm)
+## Performans: SwiftUI ile A/B/B/A (2026-10-24, son sürüm: ada, paneller, Dock, Araçlar ve Ayarlar AppKit)
 
 Ölçüm: uygulamanın kendi denetimli kıyası (`OPENISLAND_BENCHMARK_V2`), faz sınırında `proc_pid_rusage` (talimat,
-çevrim, enerji tahmini, CPU, uyanma, ayak izi) ve WindowServer CPU'su; yalıtılmış test verisi. Araçlar ve ham sonuçlar:
-`OpenIsland-Evidence/20261021-appkit` (`tools/final2.sh`, `runs/*-gts*`, `wsoc/goc-*`, `logs/final2.log`; önceki tur
-`tools/final.sh`, `runs/*-fts*`, `*-fic*`, `*-fie*`). Geçersiz koşu yok.
+çevrim, enerji tahmini, CPU, uyanma, ayak izi) ve WindowServer CPU'su; yalıtılmış test verisi, ölçüm sırasında başka
+Deney örneği kapalı. Araçlar ve ham sonuçlar: `OpenIsland-Evidence/20261021-appkit` (`tools/final3.sh`,
+`apps/AKZ.app`, `runs/*-hts*`, `runs/*-hic*`, `runs/*-hie*`, `wsoc/hoc-*`, `logs/final3.log`). Geçersiz koşu yok.
 
 Sekme geçişi (her hızda 4'er koşu; Δ = AppKit − SwiftUI; parantezde mutlak uygulama CPU'su):
 
 | Aralık | Talimat/seçim | Çevrim/seçim | CPU | Enerji/seçim | Ayak izi | Uyanma | WindowServer |
 |---|---|---|---|---|---|---|---|
-| 650 ms | −63% | −67% | −64% (18,9 → 6,8%) | −53% | −28% | +2% | −12% |
-| 300 ms | −62% | −69% | −64% (30,8 → 11,1%) | −51% | −28% | +7% | −6% |
-| 150 ms | −81% | −76% | −68% (42,9 → 13,9%) | −86% | −28% | +11% | −3% |
-| 80 ms | −79% | −73% | −58% (47,4 → 19,7%) | −90% | −28% | +8% | +1% |
-| 50 ms | −76% | −65% | −47% (50,2 → 26,7%) | −91% | −28% | +9% | +7% |
+| 650 ms | −69% | −72% | −72% (10,4 → 2,9%) | −67% | −28% | 0% | −9% |
+| 300 ms | −72% | −77% | −77% (18,9 → 4,3%) | −70% | −29% | −5% | −16% |
+| 150 ms | −87% | −85% | −85% (27,2 → 4,2%) | −85% | −29% | −9% | −16% |
+| 80 ms | −84% | −82% | −82% (35,9 → 6,4%) | −84% | −29% | −2% | −14% |
+| 50 ms | −82% | −80% | −80% (46,2 → 9,3%) | −85% | −29% | −20% | −15% |
 
-Hover aç/kapat (8 döngü, 4'er koşu): uygulama CPU süresi SwiftUI 1150 ms → AppKit 510 ms (−56%), WindowServer −5%.
-Boşta (önceki tur, 2'şer koşu, 325 s): kompakt — CPU −87%, uyanma 4,15 → 0,05/s, enerji −89%, WindowServer −11%, ayak
-izi **+6% (+1,3 MiB; bir sonraki açılış için saklanan içerik)**. Açık — CPU/enerji/WindowServer eşit, uyanma −86%, ayak
-izi −19%. Son turdan sonra boşta tekrar (önceki sürümle A/B/B/A, `logs/idle2.log`): kompakt ve açıkta CPU %0,001,
-uyanma 0/s, ayak izi aynı; boşta gerileme yok.
+Enerji/saniye de her hızda −67…−85% (80 ms'de 121 → 19,8 mW). Önceki turdaki 50 ms'de WindowServer +%7 ve hızlı
+geçişte uyanma +%2…11 artık yok: WindowServer her hızda −9…−16%, uyanma 0…−20%.
 
-Son turdaki CPU düşüşleri (her biri ayrı A/B ile kabul edildi; 80 ms'de uygulama CPU'su 35,1 → 19,7%, enerji/seçim
+Hover aç/kapat (8 döngü, 4'er koşu): uygulama CPU süresi SwiftUI 590–620 ms → AppKit 250 ms (−59%), WindowServer
+5820–6240 → 5690–5860 ms (−3%).
+
+Boşta (1'er çift, 325 s): uygulamanın kendi CPU'su ikisinde de ≈0 (kompakt %0,05 → %0,04, açık %0,20 → %0,13),
+uyanma kompakt 1,4 → 0,1/s, açık 4,9 → 0,45/s, ayak izi açıkta −17%. Bu turda boştaki WindowServer yorumlanamaz:
+ölçüm boyunca `appstoreagent` %92–97 CPU'daydı, iki koşuda Chrome oluşturucusu da çalışıyordu. Boştaki
+WindowServer yüzdesi bu yüke göre 4,5…25 arasında, koşu sırasından bağımsız oynadı. Sakin sistemdeki önceki turda
+(`logs/idle2.log`) kompakt −%11, açık eşitti.
+
+Araçlar ve Ayarlar pencereleri (süreç içi A/B/B/A; ayrıntı aşağıdaki bölümlerde): açılış −64% / −69%, bölüm ya da
+sekme geçişi −65% / −23%, güncelleme taraması −38%, tercih güncellemesi −59%.
+
+2026-10-23 turundaki CPU düşüşleri (her biri ayrı A/B ile kabul edildi; 80 ms'de uygulama CPU'su 35,1 → 19,7%, enerji/seçim
 2,58 → 1,13 mJ):
 
 | Bulgu (Time Profiler + `OPENISLAND_DENEY_IMGPROBE`) | Çözüm |
@@ -112,11 +121,8 @@ Reddedilen deney: gizlenen panelleri görünüm ağacından ayırmak (katman say
 talimatı +%20 artırdı; WindowServer'da ölçülebilir kazanç yok.
 
 Açık kalemler (kurala göre "daha fazla kaynak"):
-- 50 ms geçişte WindowServer +%7 (80 ms'de fark gürültü içinde). Katman ağacı hazırlığı: içerik taşıyan katman sayısı
-  SwiftUI'den fazla. Aynı aralıkta uygulama CPU'su −23 yüzde puan, WindowServer +2,7 yüzde puan: sistem toplamı belirgin
-  düşük.
-- Hızlı geçişte uyanma +%2…11 (önceki sürümlerde de vardı; kare saati açık/kapalı aynı). Muhtemel kaynak: her geçişte
-  panel sönmesinin bitişi için kurulan zamanlayıcı; kaldırmak `didHide` zamanlamasını değiştirir.
+- Önceki turdaki 50 ms'de WindowServer +%7 ve hızlı geçişte uyanma +%2…11, son turda ölçülmüyor (−15% ve −20%).
+- Boştaki WindowServer'ın sakin sistemde yeniden ölçülmesi gerekiyor (son turda arka plan yükü yüzünden yorumlanamadı).
 - Pano ve Mikser sekme simgelerinin seçim rengi animasyonu her karede yeniden rasterleşir: SwiftUI de bu iki simgede
   renk animasyonu kullanır (üst üste binen alt yollar; `TabIconTintCheck`).
 - Boşta kompakt +1,3 MiB: açılışta kare kaybını önleyen saklanan içerik; kaldırılırsa ilk açılış ~40 ms donar.
