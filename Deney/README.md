@@ -94,11 +94,21 @@ geçişte uyanma +%2…11 artık yok: WindowServer her hızda −9…−16%, uya
 Hover aç/kapat (8 döngü, 4'er koşu): uygulama CPU süresi SwiftUI 590–620 ms → AppKit 250 ms (−59%), WindowServer
 5820–6240 → 5690–5860 ms (−3%).
 
-Boşta (1'er çift, 325 s): uygulamanın kendi CPU'su ikisinde de ≈0 (kompakt %0,05 → %0,04, açık %0,20 → %0,13),
-uyanma kompakt 1,4 → 0,1/s, açık 4,9 → 0,45/s, ayak izi açıkta −17%. Bu turda boştaki WindowServer yorumlanamaz:
-ölçüm boyunca `appstoreagent` %92–97 CPU'daydı, iki koşuda Chrome oluşturucusu da çalışıyordu. Boştaki
-WindowServer yüzdesi bu yüke göre 4,5…25 arasında, koşu sırasından bağımsız oynadı. Sakin sistemdeki önceki turda
-(`logs/idle2.log`) kompakt −%11, açık eşitti.
+Boşta (2'şer çift, 325 s; `tools/idle3.sh`, `runs/*-hic2*`, `runs/*-hie2*`, `logs/idle3.log`). Her koşudan önce sakinlik
+kapısı: `launchd`, WindowServer ve ölçüm boyunca sabit ~%95 tek çekirdek kullanan `appstoreagent` dışındaki her süreç
+60 sn boyunca %15'in altında. Koşu sırasında başka bir süreç örneklerin %10'undan fazlasında %20'yi aşarsa koşu
+tekrarlanır (en çok 2 kez). Üç koşu Chrome etkinliği yüzünden tekrarlandı. Sistem 01:51'den sonra tamamen durgundu.
+
+| Durum | Uygulama CPU'su | Talimat/s | Uyanma | Enerji | Ayak izi | WindowServer |
+|---|---|---|---|---|---|---|
+| Açık (4 + 4 koşu) | %0,002 → %0,001 | 0,103 → 0,046 M (−55%) | 0,1 → 0,1/s | 0,01 → 0,01 mW | 29,3 → 23,3 MiB (−20%) | %6,905 → %6,897 (−0,1%) |
+| Kompakt (ikinci çift) | %0,003 → %0,002 | 0,054 → 0,045 M (−17%) | 0,15 → 0,1/s | 0,010 → 0,005 mW | 21,2 → 21,5 MiB (+1,8%) | %11,62 → %11,65 (+0,3%) |
+
+Kompakttaki ilk çiftte bir AppKit koşusu, tekrar hakkı bittiği için gürültülü hâliyle kaldı (Chrome oluşturucusu
+örneklerin %20'sinde %20'nin üstünde; WindowServer %27). O çift kompakt WindowServer karşılaştırmasına katılmadı.
+Sakin dönemdeki iki kompakt koşu da eşit: %6,89 ve %6,90. Boşta ölçülen WindowServer sistemin taban yükü (≈%6,9); iki
+sürüm arasında fark yok. Kompaktta ayak izi +0,4 MiB (önceki turda +1,3 MiB): bir sonraki açılış için saklanan
+içerik (aşağıda "Açık kalemler").
 
 Araçlar ve Ayarlar pencereleri (süreç içi A/B/B/A; ayrıntı aşağıdaki bölümlerde): açılış −64% / −69%, bölüm ya da
 sekme geçişi −65% / −23%, güncelleme taraması −38%, tercih güncellemesi −59%.
@@ -122,10 +132,10 @@ talimatı +%20 artırdı; WindowServer'da ölçülebilir kazanç yok.
 
 Açık kalemler (kurala göre "daha fazla kaynak"):
 - Önceki turdaki 50 ms'de WindowServer +%7 ve hızlı geçişte uyanma +%2…11, son turda ölçülmüyor (−15% ve −20%).
-- Boştaki WindowServer'ın sakin sistemde yeniden ölçülmesi gerekiyor (son turda arka plan yükü yüzünden yorumlanamadı).
+- Boşta kompakt ayak izi +0,4 MiB (+1,8%): açılışta kare kaybını önleyen saklanan içerik; kaldırılırsa ilk açılış
+  ~40 ms donar.
 - Pano ve Mikser sekme simgelerinin seçim rengi animasyonu her karede yeniden rasterleşir: SwiftUI de bu iki simgede
   renk animasyonu kullanır (üst üste binen alt yollar; `TabIconTintCheck`).
-- Boşta kompakt +1,3 MiB: açılışta kare kaybını önleyen saklanan içerik; kaldırılırsa ilk açılış ~40 ms donar.
 
 ## Araçlar penceresi
 
