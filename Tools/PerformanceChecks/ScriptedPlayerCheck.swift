@@ -11,6 +11,7 @@ import IslandCore
     var duration: Int32 = 230000
     var refreshDuration: Int32 = 240000
     var position: Double = 10
+    var delayedSeekAcknowledgement = false
     var state = "playing"
     var coverURL = ""
     var includeRefreshID = true
@@ -56,7 +57,9 @@ import IslandCore
         } else if let value = source.components(separatedBy: "set player position to ").last,
                   source.contains("set player position to "), let time = Double(value) {
             precondition(!cacheResult, "Seek scripts must not be cached")
-            position = time
+            if delayedSeekAcknowledgement {
+                Task { try? await Task.sleep(for: .milliseconds(20)); self.position = time }
+            } else { position = time }
             result = .init(boolean: true)
         } else { result = .init(boolean: true) }
         return .init(value: transform(result), errorCode: nil)
@@ -553,7 +556,31 @@ import IslandCore
         await settle(settleSource)
         precondition(positionReads() == notifiedReads, "Notified command still issued a read")
         settleSource.stop()
+        // A successful Spotify Apple Event can acknowledge before position is
+        // applied. Live same-event reads returned the old position in 4/4 seeks.
+        runner.state = "paused"; runner.position = 30; runner.refreshDuration = 100000
+        runner.duration = 100000; runner.trackID = "spotify:track:DeferredSeek"
+        let delayed = ScriptedPlayerSource(player: metadataPlayer, isRunning: { true }, positionTiming: clickTiming,
+                                          downloadArtwork: { _ in nil })
+        delayed.onUpdate = { latest = $0 }
+        delayed.start(); await delayed.pendingUpdate?.value
+        runner.delayedSeekAcknowledgement = true
+        let delayedAccepted = await delayed.seek(to: 0)
+        precondition(delayedAccepted, "Deferred seek rejected")
+        guard latest?.elapsed == 0 else { print("FAIL: successful seek published pre-seek position before Spotify applied it"); exit(1) }
+        let firstSeek = Task { await delayed.seek(to: 20) }
+        try? await Task.sleep(for: .milliseconds(5))
+        let secondSeek = Task { await delayed.seek(to: 60) }
+        _ = await firstSeek.value; _ = await secondSeek.value
+        precondition(latest?.elapsed == 60, "Superseded seek completion won over newest intent")
+        let stoppedSeek = Task { await delayed.seek(to: 10) }
+        try? await Task.sleep(for: .milliseconds(5)); delayed.stop()
+        let stoppedValue = latest
+        _ = await stoppedSeek.value
+        precondition(latest == stoppedValue, "Stopped source published a deferred seek completion")
+        runner.delayedSeekAcknowledgement = false
         runner.syncDuration = nil
+        print("PASS Spotify seek: asynchronous acknowledgement settles once; superseded and stopped completions cannot publish")
         print("PASS Spotify settle: late duration correction published once per new track; app-command restart resynced; notified commands read nothing")
         print("PASS Media matrix: same-track restart, delayed metadata, stopped, quit, wake recovery; Music position read, click resync and title mismatch")
         print("PASS Spotify position: unnotified backward/forward scrub corrected; no read at playback start; bounded end checks; paused/denied/mismatch safe")

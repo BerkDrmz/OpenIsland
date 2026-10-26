@@ -258,9 +258,21 @@ final class ScriptedPlayerSource: MediaSource {
     /// Başarılıysa gerçek konum tek bir sorguyla doğrulanır (oynatıcılar seek'te bildirim göndermeyebilir).
     func seek(to time: TimeInterval) async -> Bool {
         guard isRunning else { return false }
+        // Spotify acknowledges the Apple Event before applying the position.
+        // Retire earlier reads and let only the newest seek verify once, after
+        // the same bounded settling interval used by explicit player commands.
+        // The controller still publishes the optimistic position immediately.
+        if usesSpotifyIdentity { cancelPendingWork() }
+        let expectedGeneration = generation
         prepareUserRetry()
         let accepted = await script("tell application \"\(player.appName)\" to set player position to \(time)", cacheResult: false) { _ in true } ?? false
-        if accepted { await refresh() }
+        if accepted {
+            if usesSpotifyIdentity {
+                try? await Task.sleep(for: .seconds(positionTiming.commandSettle))
+                guard isActive(expectedGeneration) else { return accepted }
+            }
+            await refresh()
+        }
         return accepted
     }
 
