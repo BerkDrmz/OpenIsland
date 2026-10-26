@@ -125,6 +125,16 @@ final class NotchPanel: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        #if OPENISLAND_DENEY
+        // Opt-in diagnostics only; no tracking or formatting in normal use.
+        if FrameDriver.isLogging, event.type == .leftMouseDown || event.type == .keyDown {
+            let hit = contentView?.hitTest(event.locationInWindow)
+            FrameDriver.note("input type=\(event.type) hit=\(hit.map { String(describing: type(of: $0)) } ?? "nil") key=\(isKeyWindow) canKey=\(canBecomeKey) first=\(firstResponder.map { String(describing: type(of: $0)) } ?? "nil") needsPanel=\(hit?.needsPanelToBecomeKey ?? false)")
+        }
+        #endif
+        #if OPENISLAND_DENEY
+        if NativeEditingCommands.route(event, in: self) { return }
+        #endif
         // 48 = Tab (kVK_Tab); Shift/Control ile birlikte de aynı tuş kodu.
         if event.type == .keyDown, event.keyCode == 48 { refreshKeyViewLoopIfStale() }
         super.sendEvent(event)

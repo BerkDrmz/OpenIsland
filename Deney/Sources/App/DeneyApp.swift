@@ -24,6 +24,7 @@ final class DeneyAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // Dock simgesi yok (LSUIElement ile aynı)
+        NativeEditingCommands.install()
         if DockPreviewParityHarness.runIfRequested() { return }
         if ToolsParityHarness.runIfRequested(environment) { return }
         if SettingsParityHarness.runIfRequested(environment) { return }
