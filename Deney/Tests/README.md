@@ -43,3 +43,13 @@ All full-code tests require **all three** of `OPENISLAND_DIAGNOSTICS` (absolute 
 Full-app validation identities begin `io.github.openisland.validation.`. They must fail closed before services even if double-clicked **without** fixture environment. Provide the marked, owned `OPENISLAND_TEST_ROOT`, explicit `OPENISLAND_TEST_DEFAULTS`, `OPENISLAND_TEST_SUPPORT` and `OPENISLAND_DIAGNOSTICS` together. All standard-defaults consumers, storage, Shelf cache and Clipboard must be private. Validation bundles neither request nor deliver system notifications; this is test containment, not a credited product performance change. Normal bundle identities retain their original behavior.
 
 Interactive tests must record their executable hash and independently verify readiness, focus and owned hit-test targets. Reject concurrent pointer activity. Do not restore an old foreground app over another user's/agent's newly focused app. A unit/private-board copy test is not permission to touch the user's general clipboard. Hardware/permission tests and tests blocked by environment stay NOT_TESTED.
+
+## Native media seek regression
+
+`python3 Deney/Tests/check-media-scrubber.py` extracts the **unchanged actual**
+`MediaScrubberView` into a deterministic native check with service/render spies.
+It verifies back-to-back accessibility increments/decrements without yielding to
+Observation, endpoint clamping, immediately readable optimistic AX values, and
+source disappearance/seek-eligibility changes. No Apple Events, hardware access,
+user preferences or clipboard are used. This is not a real Spotify, visual or
+energy acceptance test.

@@ -240,8 +240,11 @@ final class MediaScrubberView: FlippedView, TransientStateResettable {
         guard canSeek, let info else { return }
         if let dragProgress, info.duration > 0 { media.seek(to: dragProgress * info.duration) }
         dragProgress = nil
-        applyTiming()
-        update(info: info, tint: tint, canSeek: canSeek)
+        // seek publishes its optimistic position synchronously. Do not restore
+        // the pre-drag rendering snapshot while Observation's callback is queued.
+        if let current = media.nowPlaying {
+            update(info: current, tint: tint, canSeek: media.canSeek)
+        }
     }
 
     private func drag(_ event: NSEvent) {
@@ -258,8 +261,13 @@ final class MediaScrubberView: FlippedView, TransientStateResettable {
     override func accessibilityPerformDecrement() -> Bool { step(-10) }
 
     private func step(_ delta: TimeInterval) -> Bool {
-        guard canSeek, let info else { return false }
+        // Consecutive AX actions can arrive before the asynchronous Observation
+        // callback. Accumulate intent from the current model, not cached UI info.
+        guard media.canSeek, let info = media.nowPlaying else { return false }
         media.seek(to: min(max(info.elapsed(at: .now) + delta, 0), info.duration))
+        if let current = media.nowPlaying {
+            update(info: current, tint: tint, canSeek: media.canSeek)
+        }
         return true
     }
 }
