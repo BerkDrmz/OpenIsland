@@ -47,6 +47,13 @@ import Darwin
             exit(3)
         }
         let selections = min(5000, max(100, Int(ProcessInfo.processInfo.environment["OPENISLAND_CAPSULE_TEST_SELECTIONS"] ?? "100") ?? 100))
+        func requireUnlocked() {
+            let current = (CGSessionCopyCurrentDictionary() as? [String:Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
+            guard current else { return }
+            let data:[String:Any] = ["status":"NOT_TESTED","reason":"Session locked during the lifecycle run; partial checks are not accepted as an unlocked run.","partialChecks":checks]
+            try! JSONSerialization.data(withJSONObject:data,options:[.prettyPrinted,.sortedKeys]).write(to:URL(fileURLWithPath:CommandLine.arguments[1]))
+            exit(3)
+        }
         let window = NSPanel(contentRect: CGRect(x: 40, y: 70, width: 470, height: 38),
                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -72,6 +79,7 @@ import Darwin
             var maxCount = 0
             var longest = 0.0
             for selection in 0..<selections {
+                requireUnlocked()
                 let x = [350.0, 73, 201, 410, 65, 7][selection % 6]
                 driver!.move(to: CGRect(x: x - 7, y: 4, width: 14, height: 24), spec: spec)
                 let keys = (layer.animationKeys() ?? []).filter { $0.hasPrefix(NativeCapsuleMotion.keyPrefix) }
@@ -99,6 +107,7 @@ import Darwin
             }
             check(maxCount <= Int(ceil(longest / 0.05)) + 2, "\(name): native responses accumulate beyond lifetime bound")
             try? await Task.sleep(for: .seconds(longest + 0.15))
+            requireUnlocked()
             let cachedBeforeFlush = (layer.animationKeys() ?? []).filter { $0.hasPrefix(NativeCapsuleMotion.keyPrefix) }.count
             let finalTarget = [350.0, 73, 201, 410, 65, 7][(selections - 1) % 6]
             check(abs((layer.presentation()?.position.x ?? -999) - finalTarget) < 0.025,

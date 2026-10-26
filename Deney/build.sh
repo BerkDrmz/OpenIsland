@@ -6,6 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
+INFO="${OPENISLAND_BUILD_INFO_PLIST:-$ROOT/Support/Info.plist}"
 OUT="$ROOT/Deney/.build"
 APP="$ROOT/Deney/build/OpenIsland Deney.app"
 mkdir -p "$OUT"
@@ -31,14 +32,14 @@ echo "▸ OpenIsland Deney (${#SOURCES[@]} dosya)"
 # Üretim SwiftUI ikilisi (`swift build`) LC_BUILD_VERSION'da "sdk 14.0" taşır; AppKit/SwiftUI denetimleri bu yüzden
 # Sonoma görünümüyle çizilir (yuvarlak kaydırıcı düğmesi vb.). Görsel eşdeğerlik için aynı platform sürümü yazılır.
 swiftc "${FLAGS[@]}" -parse-as-library -module-name OpenIslandDeney -I "$OUT" -L "$OUT" -lIslandCore \
-  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$ROOT/Support/Info.plist" \
+  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$INFO" \
   -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker 14.0 \
   "${SOURCES[@]}" -o "$OUT/OpenIslandDeney"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$OUT/OpenIslandDeney" "$APP/Contents/MacOS/OpenIslandDeney"
-cp Support/Info.plist "$APP/Contents/Info.plist"
+cp "$INFO" "$APP/Contents/Info.plist"
 plutil -replace CFBundleIdentifier -string io.github.openisland.deney "$APP/Contents/Info.plist"
 plutil -replace CFBundleExecutable -string OpenIslandDeney "$APP/Contents/Info.plist"
 plutil -replace CFBundleName -string "OpenIsland Deney" "$APP/Contents/Info.plist"

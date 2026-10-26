@@ -16,6 +16,7 @@ import IslandCore
         // when the harness forgot that opt-in; never fall back to user data.
         let values=ProcessInfo.processInfo.environment
         guard let diagnostics=values["OPENISLAND_DIAGNOSTICS"],diagnostics.hasPrefix("/"),
+              Bundle.main.bundleIdentifier?.hasPrefix("io.github.openisland.validation.") == true,
               let suite=values["OPENISLAND_TEST_DEFAULTS"],suite.hasPrefix("io.github.openisland.motion."),
               let support=values["OPENISLAND_TEST_SUPPORT"],support.hasPrefix("/"),support != "/",
               !support.contains("/Library/Application Support/") else {
@@ -38,6 +39,42 @@ import IslandCore
         let panel=NSPanel(contentRect:CGRect(x:60,y:60,width:900,height:400),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
         panel.isReleasedWhenClosed=false;panel.ignoresMouseEvents=true;panel.backgroundColor = .black
         let root=FlippedView(frame:CGRect(x:0,y:0,width:900,height:400));panel.contentView=root
+        // Actual Cocoa text system and stores, but private clipboard and injected
+        // shortcut data. These are NOT global keyboard/VoiceOver commands.
+        let fixture="OpenIsland K8c fixture\nİkinci satır • 123"
+        let notes=NotesStore();notes.text=fixture
+        let launcher=LauncherStore(fetchShortcuts:{ .success(["OpenIsland fixture shortcut"]) })
+        let notePanel=NotesPanelView(notes:notes,launcher:launcher)
+        notePanel.frame=CGRect(x:0,y:0,width:600,height:220);root.addSubview(notePanel);notePanel.didShow()
+        notePanel.layoutSubtreeIfNeeded()
+        func textView(in view:NSView)->NSTextView? {
+            if let editor=view as? NSTextView{return editor}
+            for child in view.subviews {if let editor=textView(in:child){return editor}}
+            return nil
+        }
+        if let editor=textView(in:notePanel) {
+            check(editor.string==fixture,"Notes initial text differs from private store")
+            let range=NSRange(location:4,length:7);editor.setSelectedRange(range)
+            await launcher.refreshShortcutsIfNeeded()
+            try? await Task.sleep(for:.milliseconds(20))
+            check(editor.selectedRange()==range,"unrelated launcher update reset Notes selection")
+            let board=NSPasteboard(name:.init("OpenIsland.private-notes-"+UUID().uuidString))
+            check(editor.writeSelection(to:board,types:editor.writablePasteboardTypes),"native Notes private-board copy failed")
+            check(board.string(forType:.string)==(fixture as NSString).substring(with:range),"native Notes selection text differs")
+            board.releaseGlobally()
+            check(notes.text==fixture,"selection/copy changed Notes store")
+        } else {check(false,"native Notes NSTextView missing")}
+        notePanel.didHide();notePanel.removeFromSuperview();launcher.shutdown();notes.flush()
+        for tab in ExpandedTab.allCases {
+            let model=IslandViewModel(metrics:NotchMetrics(notchSize:CGSize(width:192,height:33.5),style:.notch),configuration:.init(),hapticPerformer:{_ in})
+            let content=PanelFactory.make(tab,model:model,environment:env)
+            content.frame=CGRect(x:0,y:0,width:760,height:240);root.addSubview(content);content.layoutSubtreeIfNeeded()
+            check(content.bounds.width>0 && content.bounds.height>0,"dormant panel geometry missing for \(tab)")
+            // Never didShow Mirror/Mixer: mounting is not permission to capture.
+            content.removeFromSuperview();model.cancelPendingEffects()
+        }
+        check(!env.system.isRunning,"dormant nine-panel construction started System worker")
+        check(env.audioMixer.activeRouteCount==0,"dormant nine-panel construction started audio routing")
         // Deliberately not orderFront: this is not a claim about visible UI.
         // Test-fixture switch only: run the identical ownership reproduction
         // against an archived old source without coupling it to header changes.

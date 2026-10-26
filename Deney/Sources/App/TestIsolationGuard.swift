@@ -15,6 +15,7 @@ enum TestIsolationGuard {
               let support = values["OPENISLAND_TEST_SUPPORT"], support.hasPrefix("/"),
               let log = values["OPENISLAND_DIAGNOSTICS"], log.hasPrefix("/"),
               let suite = values["OPENISLAND_TEST_DEFAULTS"], suite.hasPrefix("io.github.openisland.validation."),
+              Bundle.main.bundleIdentifier?.hasPrefix("io.github.openisland.validation.") == true,
               canonical(rawRoot) != "/", canonical(rawRoot) != NSHomeDirectory(),
               !canonical(rawRoot).hasPrefix(NSHomeDirectory() + "/Library/"),
               canonical(support).hasPrefix(canonical(rawRoot) + "/"),
