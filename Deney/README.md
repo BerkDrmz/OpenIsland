@@ -4,6 +4,13 @@ Amaç: OpenIsland'ın arayüzünü SwiftUI yerine AppKit + Core Animation ile, *
 davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım SwiftUI sürümüyle (K8c) gerçek A/B/B/A
 ölçümüyle karşılaştırılır; daha fazla kaynak harcayan mimari değişiklik kabul edilmez.
 
+## 27 Ekim 2026 — yerel aday değişikliği
+
+- Araçlar yalnızca **Kaldırıcı** ve **Önbellek temizleyici** içerir. Uygulama güncelleyicisinin AppKit/SwiftUI arayüzü, tarama görevleri, sürüm katalogları ve ağ istemcisi kaldırılmıştır.
+- Dock önizlemesinin 280 ms yapay hover beklemesi kaldırılmıştır. Pencere kartları ekran görüntüsü kataloğu beklenmeden açılır; küçük resimler hazır oldukça gelir.
+- Ekran kenarı olay sınırı, tek karelik küçük resimler ve en çok iki eşzamanlı capture korunur. Boşta yeni polling/timer yoktur.
+- Aşağıdaki eski tarihli performans ve eşdeğerlik sonuçları tarihsel kayıttır; bu adayın ölçümü değildir. Kurulu uygulama bu kaynak düzenlemesiyle değiştirilmez.
+
 ## Mimari
 
 - **Ortak katman:** `Sources/IslandCore` (durum makinesi, yerleşim motoru) ve `Sources/OpenIsland` altındaki
@@ -42,7 +49,7 @@ davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım Swif
 | Dokuz panel (Medya, Nook, Raf, Pano, Ses Mikseri, Odak, Notlar, Ayna, Sistem) | AppKit |
 | Sürükle-bırak hedefi (Raf / AirDrop bölgeleri) | AppKit |
 | Dock önizlemeleri | AppKit (`DockPreviewPanelView`; denetleyici ortak, içerik `#if OPENISLAND_DENEY`). SwiftUI ile yan yana koşum (`OPENISLAND_DENEY_DOCKPARITY`): bütün öğe sınır kutuları ve AX ağacı/çerçeveleri birebir, kalan piksel farkı 1–2 düzey (ölçeklenen önizlemede tek sütun ≤39); gösterim başına CPU 5,3 → 3,3 ms |
-| Araçlar penceresi (Kaldırıcı, Önbellek temizleyici, Uygulama güncelleyici) | AppKit (`Deney/Sources/Tools/MaintenanceWindowView.swift`; denetleyici ortak, içerik `#if OPENISLAND_DENEY`). Ayrıntı: aşağıda "Araçlar penceresi" |
+| Araçlar penceresi (Kaldırıcı, Önbellek temizleyici) | AppKit (`Deney/Sources/Tools/MaintenanceWindowView.swift`; denetleyici ortak, içerik `#if OPENISLAND_DENEY`). Ayrıntı: aşağıda "Araçlar penceresi" |
 | Ayarlar penceresi (Genel, Modüller, Sistem Erişimi; ada önizlemesi dahil) | AppKit (`Deney/Sources/Settings`). Ayrıntı: aşağıda "Ayarlar penceresi" |
 
 ## Eşdeğerlik kuralları (SwiftUI'den çalışma anında ölçülmüştür)

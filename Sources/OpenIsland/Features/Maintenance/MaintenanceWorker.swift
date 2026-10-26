@@ -8,10 +8,7 @@ struct ManagedApplication: Identifiable, Sendable, Equatable {
     let bundleID: String
     let name: String
     let version: String
-    let build: String
     let bundleName: String
-    let appcast: URL?
-    let isStore: Bool
 }
 
 struct MaintenanceFile: Identifiable, Sendable {
@@ -27,28 +24,16 @@ struct MaintenanceFile: Identifiable, Sendable {
     var containsPersonalData: Bool { kind == .data }
 }
 
-struct MaintenanceUpdate: Sendable {
-    enum Status: Sendable { case current, available, unsupported, failed }
-    let status: Status
-    let message: String
-    let destination: URL?
-}
-
 /// All enumeration and size measurement are user-initiated, serial, cancellable and off the UI thread.
 actor MaintenanceWorker {
     let home: URL
     let appRoots: [URL]
     let protectedBundleID: String
-    private var nextStoreRequest: ContinuousClock.Instant?
-    private let sourceLoader: (@Sendable (URL) async throws -> Data)?
-
     init(home: URL = FileManager.default.homeDirectoryForCurrentUser,
-         appRoots: [URL]? = nil, protectedBundleID: String = Bundle.main.bundleIdentifier ?? "io.github.openisland.OpenIsland",
-         sourceLoader: (@Sendable (URL) async throws -> Data)? = nil) {
+         appRoots: [URL]? = nil, protectedBundleID: String = Bundle.main.bundleIdentifier ?? "io.github.openisland.OpenIsland") {
         self.home = home
         self.appRoots = appRoots ?? [URL(fileURLWithPath: "/Applications"), home.appendingPathComponent("Applications")]
         self.protectedBundleID = protectedBundleID
-        self.sourceLoader = sourceLoader
     }
 
     func applications() throws -> [ManagedApplication] {
@@ -142,108 +127,6 @@ actor MaintenanceWorker {
         return destination as URL?
     }
 
-    func checkUpdate(_ app: ManagedApplication) async throws -> MaintenanceUpdate {
-        try Task.checkCancellation()
-        if app.isStore {
-            // Pace only this user-triggered scan; no polling or persistent timer. Apple's
-            // catalog API permits approximately 20 requests/minute, including manual checks.
-            if let nextStoreRequest, nextStoreRequest > .now {
-                try await Task.sleep(until: nextStoreRequest, clock: .continuous)
-            }
-            try Task.checkCancellation()
-            nextStoreRequest = .now + .milliseconds(3100)
-            var components = URLComponents(string: "https://itunes.apple.com/lookup")!
-            components.queryItems = [.init(name: "bundleId", value: app.bundleID), .init(name: "entity", value: "macSoftware"),
-                                    .init(name: "country", value: Locale.current.region?.identifier ?? "US")]
-            let data = try await fetch(components.url!)
-            guard let match = MaintenanceCatalog.storeRelease(from: data, bundleID: app.bundleID),
-                  let comparison = ReleaseVersion.compare(match.version, app.version) else {
-                return try await checkCatalog(app)
-            }
-            return .init(status: comparison == .orderedDescending ? .available : .current,
-                         message: comparison == .orderedDescending ? "Yeni sürüm: \(match.version)" : "Güncel: \(app.version)",
-                         destination: match.destination)
-        }
-        guard let feed = app.appcast, feed.scheme == "https" else {
-            return try await checkCatalog(app)
-        }
-        let data = try await fetch(feed)
-        let os = ProcessInfo.processInfo.operatingSystemVersion
-        let osVersion = "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
-        let releases = MaintenanceAppcast.releases(from: data).filter {
-            if let minimum = $0.minimumOS {
-                guard let comparison = ReleaseVersion.compare(osVersion, minimum), comparison != .orderedAscending else { return false }
-            }
-            if let maximum = $0.maximumOS {
-                guard let comparison = ReleaseVersion.compare(osVersion, maximum), comparison != .orderedDescending else { return false }
-            }
-            if let hardware = $0.hardware {
-                #if arch(arm64)
-                guard hardware == "arm64" else { return false }
-                #else
-                return false
-                #endif
-            }
-            return true
-        }
-        guard let newest = releases.max(by: {
-            ReleaseVersion.compare($0.build.isEmpty ? $0.version : $0.build, $1.build.isEmpty ? $1.version : $1.build) == .orderedAscending
-        }) else { return .init(status: .unsupported, message: "Uyumlu kararlı sürüm bilgisi bulunamadı.", destination: nil) }
-        let latest = newest.build.isEmpty ? newest.version : newest.build
-        let installed = newest.build.isEmpty ? app.version : app.build
-        guard let comparison = ReleaseVersion.compare(latest, installed) else {
-            return .init(status: .unsupported, message: "Sürüm biçimi karşılaştırılamadı; uygulamada denetle.", destination: nil)
-        }
-        return .init(status: comparison == .orderedDescending ? .available : .current,
-                     message: comparison == .orderedDescending ? "Yeni sürüm: \(newest.version)" : "Güncel: \(app.version)",
-                     destination: comparison == .orderedDescending ? newest.url : nil)
-    }
-
-    private func checkCatalog(_ app: ManagedApplication) async throws -> MaintenanceUpdate {
-        let unsupported = MaintenanceUpdate(status: .unsupported,
-            message: "Sürüm doğrulanamadı; uygulamanın kendi güncelleyicisinde denetle.", destination: nil)
-        guard let token = MaintenanceCatalog.token(bundleID: app.bundleID, filename: app.url.deletingPathExtension().lastPathComponent),
-              let source = URL(string: "https://formulae.brew.sh/api/cask/\(token).json") else { return unsupported }
-        let data: Data
-        do { data = try await fetch(source) }
-        catch MaintenanceError.sourceNotFound { return unsupported }
-        let os = ProcessInfo.processInfo.operatingSystemVersion
-        #if arch(arm64)
-        let architecture = "arm64"
-        #else
-        let architecture = "x86_64"
-        #endif
-        guard let release = MaintenanceCatalog.caskRelease(from: data, token: token, bundleID: app.bundleID,
-              osVersion: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)", architecture: architecture),
-              let comparison = ReleaseVersion.compare(release.version, app.version) else { return unsupported }
-        return .init(status: comparison == .orderedDescending ? .available : .current,
-            message: comparison == .orderedDescending ? "Yeni sürüm: \(release.version) · Homebrew kataloğu" : "Güncel: \(app.version) · Homebrew kataloğu",
-            destination: comparison == .orderedDescending ? release.destination : nil)
-    }
-
-    private func fetch(_ url: URL) async throws -> Data {
-        if let sourceLoader { return try await sourceLoader(url) }
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 20
-        let session = URLSession(configuration: config)
-        defer { session.invalidateAndCancel() }
-        var request = URLRequest(url: url)
-        request.setValue("OpenIsland-UpdateCheck", forHTTPHeaderField: "User-Agent")
-        // Bounded download; malformed or enormous feeds cannot balloon memory.
-        let (bytes, response) = try await session.bytes(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode == 404 { throw MaintenanceError.sourceNotFound }
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200, http.url?.scheme == "https",
-              response.expectedContentLength <= 2_000_000 else { throw MaintenanceError.invalidFeed }
-        var data = Data()
-        for try await byte in bytes {
-            if data.count % 16_384 == 0 { try Task.checkCancellation() }
-            guard data.count < 2_000_000 else { throw MaintenanceError.invalidFeed }
-            data.append(byte)
-        }
-        return data
-    }
-
     private func application(at url: URL) -> ManagedApplication? {
         // Read metadata without loading executable code or opening a package's child apps.
         guard let data = try? Data(contentsOf: url.appendingPathComponent("Contents/Info.plist")),
@@ -251,10 +134,9 @@ actor MaintenanceWorker {
               let bundleID = info["CFBundleIdentifier"] as? String, MaintenanceRules.validComponent(bundleID) else { return nil }
         let filename = url.deletingPathExtension().lastPathComponent
         let bundleName = info["CFBundleName"] as? String ?? filename
-        let feed = (info["SUFeedURL"] as? String).flatMap(URL.init(string:))
         return .init(url: url, bundleID: bundleID, name: info["CFBundleDisplayName"] as? String ?? bundleName,
-                     version: info["CFBundleShortVersionString"] as? String ?? "—", build: info["CFBundleVersion"] as? String ?? "—",
-                     bundleName: bundleName, appcast: feed, isStore: FileManager.default.fileExists(atPath: url.appendingPathComponent("Contents/_MASReceipt/receipt").path))
+                     version: info["CFBundleShortVersionString"] as? String ?? "—",
+                     bundleName: bundleName)
     }
 
     private func identity(_ url: URL) throws -> stat {
@@ -311,14 +193,12 @@ actor MaintenanceWorker {
 }
 
 enum MaintenanceError: LocalizedError {
-    case protectedApplication, unreadable, changed, invalidFeed, sourceNotFound
+    case protectedApplication, unreadable, changed
     var errorDescription: String? {
         switch self {
         case .protectedApplication: "Bu uygulama korunuyor veya klasöre yazma izni yok."
         case .unreadable: "Klasör okunamadı. İzinleri ve dosyanın hâlâ mevcut olduğunu denetle."
         case .changed: "Dosya veya uygulama taramadan sonra değişti. Yeniden tara."
-        case .invalidFeed: "Güncelleme kaynağı okunamadı veya güvenli bir HTTPS kaynağı değil."
-        case .sourceNotFound: "Uygulamanın güncelleme kaynağı bulunamadı."
         }
     }
 }

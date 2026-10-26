@@ -76,6 +76,28 @@ import IslandCore
             check(control != nil && control?.accessibilityLabel()==label,"native settings control has no accessible name: \(label)")
         }
 
+        // Removing the updater must leave two usable native tools, not just hide
+        // a menu entry while leaving a third section or its tasks reachable.
+        let maintenance=MaintenanceController()
+        let tools=MaintenanceWindowView(controller:maintenance)
+        tools.frame=CGRect(x:0,y:0,width:880,height:590);root.addSubview(tools)
+        func toolLabels(_ view:NSView)->[String] {
+            [view.accessibilityLabel()].compactMap{$0} + view.subviews.flatMap(toolLabels)
+        }
+        check(MaintenanceController.Section.allCases == [.uninstaller,.cleaner],"removed updater remains a reachable tools section")
+        for section in MaintenanceController.Section.allCases {
+            maintenance.select(section)
+            try? await Task.sleep(for:.milliseconds(20))
+            tools.layoutSubtreeIfNeeded()
+            let labels=toolLabels(tools)
+            check(labels.contains("Kaldırıcı") && labels.contains("Önbellek temizleyici"),"remaining native tool buttons missing")
+            check(!labels.contains("Uygulama güncelleyici"),"removed updater remains in native AX tree")
+            check(maintenance.section==section && !maintenance.hasActiveTask && maintenance.observerCount==0,
+                  "dormant tool selection started background work or lost selection")
+            check(tools.bounds.size==CGSize(width:880,height:590),"remaining tool section changed window content size")
+        }
+        tools.removeFromSuperview();maintenance.shutdown()
+
         for tab in ExpandedTab.allCases {
             let model=IslandViewModel(metrics:NotchMetrics(notchSize:CGSize(width:192,height:33.5),style:.notch),configuration:.init(),hapticPerformer:{_ in})
             let content=PanelFactory.make(tab,model:model,environment:env)

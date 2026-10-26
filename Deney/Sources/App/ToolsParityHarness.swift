@@ -2,36 +2,16 @@ import AppKit
 import SwiftUI
 
 /// Geliştirici eşdeğerlik koşumu (OPENISLAND_DENEY_TOOLSPARITY=klasör): Araçlar penceresini açar, istenen bölüme geçer
-/// (OPENISLAND_DENEY_TOOLSPARITY_SECTION=uninstaller|cleaner|updater) ve pencere numaralarını `klasör/windows.txt`
+/// (OPENISLAND_DENEY_TOOLSPARITY_SECTION=uninstaller|cleaner) ve pencere numaralarını `klasör/windows.txt`
 /// dosyasına yazar. Uygulama listesi yalnız okunur; hiçbir dosya taşınmaz. Ada kurulmaz.
-/// Güncelleyicide ağ kullanılmaz: sürüm denetimi paket kimliğinden türetilen deneme sonuçlarıdır.
-/// OPENISLAND_DENEY_TOOLSPARITY_ALL=1: tüm sonuçlar (filtre kapalı); _SEARCH=metin: arama alanı.
 @MainActor
 enum ToolsParityHarness {
     private static var retained: NSWindow?
-    private static var retainedController: MaintenanceController?
 
-    /// Deneme sürüm denetimi: aynı uygulamaya hep aynı sonuç (güncelleme, güncel, desteklenmiyor, denetlenemedi).
-    private static let sampleUpdate: @Sendable (ManagedApplication) async throws -> MaintenanceUpdate = { app in
-        switch app.bundleID.unicodeScalars.reduce(0, { $0 &+ Int($1.value) }) % 5 {
-        case 0, 1:
-            return MaintenanceUpdate(status: .available, message: "Yeni sürüm hazır: \(app.version) → deneme sürümü. İndirme sayfası onayla açılır.",
-                                     destination: URL(string: "https://example.invalid/\(app.bundleID)"))
-        case 2: return MaintenanceUpdate(status: .current, message: "Kurulu sürüm güncel.", destination: nil)
-        case 3: return MaintenanceUpdate(status: .unsupported, message: "Bu uygulama için güncelleme kaynağı bulunamadı.", destination: nil)
-        default: return MaintenanceUpdate(status: .failed, message: "Sürüm bilgisi alınamadı.", destination: nil)
-        }
-    }
     static func runIfRequested(_ environment: AppEnvironment) -> Bool {
         let env = ProcessInfo.processInfo.environment
         guard let dir = env["OPENISLAND_DENEY_TOOLSPARITY"] else { return false }
-        let controller: MaintenanceController
-        if env["OPENISLAND_DENEY_TOOLSPARITY_SECTION"] == "updater" {
-            controller = MaintenanceController(updateChecker: sampleUpdate)
-            retainedController = controller
-        } else {
-            controller = environment.maintenance
-        }
+        let controller = environment.maintenance
         controller.open()
         // Karşılaştırma: aynı denetleyiciye bağlı SwiftUI penceresi, AppKit penceresinin aynı boyutunda.
         if let appKitWindow = NSApp.windows.first(where: { $0.identifier?.rawValue == "OpenIslandMaintenance" }) {
@@ -51,13 +31,8 @@ enum ToolsParityHarness {
         }
         switch env["OPENISLAND_DENEY_TOOLSPARITY_SECTION"] {
         case "cleaner": controller.select(.cleaner)
-        case "updater":
-            controller.select(.updater) // açılıştaki yüklemeyi iptal eder; liste yeniden okunur, ardından denetim başlar
-            controller.loadApplications()
         default: break
         }
-        if env["OPENISLAND_DENEY_TOOLSPARITY_ALL"] == "1" { controller.onlyAvailableUpdates = false }
-        if let search = env["OPENISLAND_DENEY_TOOLSPARITY_SEARCH"] { controller.search = search }
         if env["OPENISLAND_DENEY_TOOLSPARITY_SCAN"] == "1" {
             // Salt okunur tarama (önbellek ya da seçili uygulamanın kalıntıları); hiçbir dosya taşınmaz.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { MainActor.assumeIsolated { controller.scan() } }
@@ -97,18 +72,11 @@ enum ToolsParityHarness {
         if let seconds = ProcessInfo.processInfo.environment["OPENISLAND_DENEY_TOOLSPARITY_PROFILE"].flatMap(Double.init) {
             sui.contentView = NSView()
             ak.contentView = make("ak")
-            let sections: [MaintenanceController.Section] = [.cleaner, .updater, .uninstaller]
+            let sections: [MaintenanceController.Section] = [.cleaner, .uninstaller]
             let end = Date().addingTimeInterval(seconds)
             var index = 0
-            let scan = ProcessInfo.processInfo.environment["OPENISLAND_DENEY_TOOLSPARITY_PROFILEMODE"] == "scan"
-            if scan { controller.select(.updater) }
             while Date() < end {
-                if scan {
-                    controller.checkAllUpdates(force: true)
-                    while controller.isScanningUpdates { spin(0.005) }
-                } else {
-                    controller.select(sections[index % 3])
-                }
+                controller.select(sections[index % sections.count])
                 index += 1
                 spin(0.02)
                 ak.displayIfNeeded()
@@ -128,7 +96,7 @@ enum ToolsParityHarness {
             }
             result.append(String(format: "açılış %@ %.3f ms", name, (cpuTime() - start) * 1000 / Double(count)))
         }
-        let sections: [MaintenanceController.Section] = [.cleaner, .updater, .uninstaller]
+        let sections: [MaintenanceController.Section] = [.cleaner, .uninstaller]
         for name in ["sui", "ak", "ak", "sui"] {
             let (window, other) = name == "sui" ? (sui, ak) : (ak, sui)
             other.contentView = NSView()
@@ -143,50 +111,31 @@ enum ToolsParityHarness {
             var checked: Double = 0
             var perSection: [MaintenanceController.Section: Double] = [:]
             let start = cpuTime()
-            for index in 0..<(count * 3) {
+            for index in 0..<(count * sections.count) {
                 let sectionStart = cpuTime()
-                controller.select(sections[index % 3])
+                controller.select(sections[index % sections.count])
                 spin(0.02)
                 window.displayIfNeeded()
                 CATransaction.flush()
-                perSection[sections[index % 3], default: 0] += cpuTime() - sectionStart
+                perSection[sections[index % sections.count], default: 0] += cpuTime() - sectionStart
                 if name == "ak" {
                     let c = cpuTime()
                     if title(window.contentView!) == controller.section.rawValue { correct += 1 }
                     checked += cpuTime() - c
                 }
             }
-            let elapsed = (cpuTime() - start - checked) * 1000 / Double(count * 3)
+            let elapsed = (cpuTime() - start - checked) * 1000 / Double(count * sections.count)
             // Taban: aynı döngü, bölüm değişmeden (yalnız çalışma döngüsü + çizim denetimi).
             let idleStart = cpuTime()
-            for _ in 0..<(count * 3) {
+            for _ in 0..<(count * sections.count) {
                 spin(0.02)
                 window.displayIfNeeded()
                 CATransaction.flush()
             }
-            let idle = (cpuTime() - idleStart) * 1000 / Double(count * 3)
-            let shown = name == "ak" ? "\(correct)/\(count * 3)" : "-"
+            let idle = (cpuTime() - idleStart) * 1000 / Double(count * sections.count)
+            let shown = name == "ak" ? "\(correct)/\(count * sections.count)" : "-"
             result.append(String(format: "bölüm %@ %.3f ms (taban %.3f ms, başlık %@)", name, elapsed, idle, shown))
             result.append("   " + sections.map { String(format: "%@ %.1f ms", $0.rawValue, (perSection[$0] ?? 0) * 1000 / Double(count)) }.joined(separator: " · "))
-        }
-        // Güncelleme taraması (deneme denetimi, ağ yok): her uygulamada durum metni ve sonuçlar değişir.
-        controller.select(.updater)
-        for name in ["sui", "ak", "ak", "sui"] {
-            let (window, other) = name == "sui" ? (sui, ak) : (ak, sui)
-            other.contentView = NSView()
-            window.contentView = make(name)
-            spin(0.3)
-            var total: Double = 0
-            for _ in 0..<count {
-                let start = cpuTime()
-                controller.checkAllUpdates(force: true)
-                while controller.isScanningUpdates { spin(0.005) }
-                spin(0.05)
-                window.displayIfNeeded()
-                CATransaction.flush()
-                total += cpuTime() - start
-            }
-            result.append(String(format: "tarama %@ %.3f ms (%d uygulama)", name, total * 1000 / Double(count), controller.applications.count))
         }
         try? (result.joined(separator: "\n") + "\n").write(toFile: dir + "/bench.txt", atomically: true, encoding: .utf8)
     }
