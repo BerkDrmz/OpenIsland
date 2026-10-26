@@ -35,6 +35,7 @@ import QuartzCore
             print("NOT_TESTED: session locked; no owned window or animation created")
             exit(3)
         }
+        let selections = min(5000, max(100, Int(ProcessInfo.processInfo.environment["OPENISLAND_CAPSULE_TEST_SELECTIONS"] ?? "100") ?? 100))
         let window = NSPanel(contentRect: CGRect(x: 40, y: 70, width: 470, height: 38),
                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -56,7 +57,7 @@ import QuartzCore
             driver!.move(to: CGRect(x: 0, y: 4, width: 14, height: 24), spec: nil)
             var maxCount = 0
             var longest = 0.0
-            for selection in 0..<100 {
+            for selection in 0..<selections {
                 let x = [350.0, 73, 201, 410, 65, 7][selection % 6]
                 driver!.move(to: CGRect(x: x - 7, y: 4, width: 14, height: 24), spec: spec)
                 let keys = (layer.animationKeys() ?? []).filter { $0.hasPrefix(NativeCapsuleMotion.keyPrefix) }
@@ -78,12 +79,23 @@ import QuartzCore
             }
             check(maxCount <= Int(ceil(longest / 0.05)) + 2, "\(name): native responses accumulate beyond lifetime bound")
             try? await Task.sleep(for: .seconds(longest + 0.15))
+            let cachedBeforeFlush = (layer.animationKeys() ?? []).filter { $0.hasPrefix(NativeCapsuleMotion.keyPrefix) }.count
+            let finalTarget = [350.0, 73, 201, 410, 65, 7][(selections - 1) % 6]
+            check(abs((layer.presentation()?.position.x ?? -999) - finalTarget) < 0.025,
+                  "\(name): presentation did not settle at the last real target")
+            // animationKeys reads the client-side transaction state. On macOS
+            // both a plain CABasicAnimation and our native spring retain expired
+            // keys until this state is synchronized, even with visible windows.
+            // Flush only in this diagnostic assertion, NEVER add an idle flush
+            // loop to the app. CapsuleRetirementDiagnostic records the control.
+            CATransaction.flush()
             check((layer.animationKeys() ?? []).allSatisfy { !$0.hasPrefix(NativeCapsuleMotion.keyPrefix) },
                   "\(name): native responses did not retire")
             check(layer.animation(forKey: "fixture.foreign") != nil, "\(name): removed an unrelated animation")
             driver = nil
             check(retired == nil, "\(name): motion owner retained after release")
-            phases.append(["style": name, "selections": 100, "maxActiveAnimations": maxCount, "longestResponseSeconds": longest])
+            phases.append(["style": name, "selections": selections, "maxActiveAnimations": maxCount,
+                           "clientCachedKeysBeforeFlush": cachedBeforeFlush, "longestResponseSeconds": longest])
         }
         window.close()
         let result: [String: Any] = ["checks": checks, "failures": failures, "phases": phases,
