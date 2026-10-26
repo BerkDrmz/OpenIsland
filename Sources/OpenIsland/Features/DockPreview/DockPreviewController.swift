@@ -27,6 +27,7 @@ final class DockPreviewController {
     private var captureWindows: [UUID: SCWindow] = [:]
     private var captureQueue: [UUID] = []
     private var requestedImages: Set<UUID> = []
+    private var resolvingCaptureWindows = false
     private var generation: UInt64 = 0
     private var lastProbeTime: TimeInterval = 0
     private var panel: NSPanel?
@@ -37,6 +38,7 @@ final class DockPreviewController {
     private var previewEdge: DockPreviewRules.Edge?
     private let accessibilityTrusted: () -> Bool
     private let screenCaptureAllowed: () -> Bool
+    private let captureCatalog: @MainActor (pid_t) async throws -> [SCWindow]
     var onRequestScreenAccess: (() -> Void)?
 
     // Lifecycle diagnostics used by the native regression check, never periodically sampled.
@@ -54,9 +56,11 @@ final class DockPreviewController {
     private(set) var dismissalCount = 0
 
     init(accessibilityTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
-         screenCaptureAllowed: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() }) {
+         screenCaptureAllowed: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
+         captureCatalog: @escaping @MainActor (pid_t) async throws -> [SCWindow] = DockPreviewController.loadCaptureCatalog) {
         self.accessibilityTrusted = accessibilityTrusted
         self.screenCaptureAllowed = screenCaptureAllowed
+        self.captureCatalog = captureCatalog
     }
 
     private var dismissMonitor: Any?
@@ -139,6 +143,7 @@ final class DockPreviewController {
         captureQueue.removeAll()
         captureWindows.removeAll()
         requestedImages.removeAll()
+        resolvingCaptureWindows = false
         target = nil
         previewEdge = nil
         panel?.orderOut(nil)
@@ -266,7 +271,9 @@ final class DockPreviewController {
         attachDismissMonitor()
         let token = generation
         showTask = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(DockPreviewRules.hoverDelay)) } catch { return }
+            if DockPreviewRules.hoverDelay > 0 {
+                do { try await Task.sleep(for: .seconds(DockPreviewRules.hoverDelay)) } catch { return }
+            }
             guard let self else { return }
             defer { if self.generation == token { self.showTask = nil } }
             guard !Task.isCancelled, self.enabled, self.generation == token,
@@ -338,23 +345,11 @@ final class DockPreviewController {
 
     private func present(_ target: Target, token: UInt64) async {
         let windows = readWindows(target.app)
-        guard !windows.isEmpty else { return }
-        var available: [SCWindow] = []
-        if screenAccess {
-            do {
-                let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
-                available = content.windows.filter { $0.owningApplication?.processID == target.app.processIdentifier && $0.windowLayer == 0 }
-                    .sorted { $0.isOnScreen && !$1.isOnScreen }
-            } catch { /* Keep actionable window cards when macOS refuses a snapshot. */ }
-        }
-        guard !Task.isCancelled, enabled, generation == token, !target.app.isTerminated,
+        guard !windows.isEmpty, !Task.isCancelled, enabled, generation == token, !target.app.isTerminated,
               let screen = screen(containing: target.anchor) else { return }
-        for window in windows {
-            if let index = DockPreviewRules.captureIndex(for: .init(title: window.title, frame: window.frame),
-                candidates: available.map { .init(title: $0.title ?? "", frame: $0.frame) }) {
-                captureWindows[window.id] = available.remove(at: index)
-            }
-        }
+        // Window cards are actionable immediately. A slow ScreenCaptureKit catalogue
+        // must not delay the panel; visible-card requests wait for this one lookup.
+        resolvingCaptureWindows = screenAccess
         model.applicationName = target.app.localizedName ?? "Uygulama"
         model.applicationIcon = target.app.icon
         model.windows = windows
@@ -398,11 +393,35 @@ final class DockPreviewController {
         #endif
         panel?.setFrame(frame, display: false)
         panel?.orderFrontRegardless()
+
+        guard screenAccess else { return }
+        let availableWindows = (try? await captureCatalog(target.app.processIdentifier)) ?? []
+        guard !Task.isCancelled, enabled, generation == token, !target.app.isTerminated else { return }
+        var available = availableWindows
+        for window in windows {
+            if let index = DockPreviewRules.captureIndex(for: .init(title: window.title, frame: window.frame),
+                candidates: available.map { .init(title: $0.title ?? "", frame: $0.frame) }) {
+                captureWindows[window.id] = available.remove(at: index)
+            }
+        }
+        resolvingCaptureWindows = false
+        for id in requestedImages { enqueueImage(id) }
+    }
+
+    private static func loadCaptureCatalog(for pid: pid_t) async throws -> [SCWindow] {
+        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
+        return content.windows.filter { $0.owningApplication?.processID == pid && $0.windowLayer == 0 }
+            .sorted { $0.isOnScreen && !$1.isOnScreen }
     }
 
     private func requestImage(_ id: UUID) {
         guard !requestedImages.contains(id), enabled else { return }
         requestedImages.insert(id)
+        guard !resolvingCaptureWindows else { return }
+        enqueueImage(id)
+    }
+
+    private func enqueueImage(_ id: UUID) {
         guard captureWindows[id] != nil else { model.unavailable.insert(id); return }
         captureQueue.append(id)
         startCaptures()
