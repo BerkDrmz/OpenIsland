@@ -98,6 +98,33 @@ import IslandCore
         }
         tools.removeFromSuperview();maintenance.shutdown()
 
+        // Exercise the actual native row/menu/copy route on a named PRIVATE
+        // pasteboard. Never read or change the user's general clipboard.
+        let linkBoard=NSPasteboard(name:.init("OpenIsland.private-link-cleaner-"+UUID().uuidString))
+        let linkHistory=ClipboardHistory(storeURL:AppPaths.support.appendingPathComponent("link-cleaner-fixture.json"),pasteboard:linkBoard)
+        let originalLink="https://example.invalid/p%2f?utm_source=fixture&id=42&x=1&x=2#keep"
+        let cleanLink="https://example.invalid/p%2f?id=42&x=1&x=2#keep"
+        let originalItem=ClipItem(content:.text(originalLink),date:Date(),sourceApp:"Private fixture")
+        linkHistory.copy(originalItem)
+        let clips=ClipboardPanelView(history:linkHistory,colors:ColorPickerService())
+        clips.frame=CGRect(x:0,y:0,width:760,height:220);root.addSubview(clips);clips.didShow();clips.layoutSubtreeIfNeeded()
+        func clipRow(_ view:NSView,_ label:String)->NSView? {
+            if view.accessibilityLabel()==label {return view}
+            return view.subviews.lazy.compactMap{clipRow($0,label)}.first
+        }
+        if let row=clipRow(clips,originalLink),let event=NSEvent.mouseEvent(with:.rightMouseDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:panel.windowNumber,context:nil,eventNumber:1,clickCount:1,pressure:1),
+           let menu=row.menu(for:event),let index=menu.items.firstIndex(where:{$0.title=="Takipsiz bağlantıyı kopyala"}) {
+            check(row.accessibilityCustomActions()?.contains{$0.name=="Takipsiz bağlantıyı kopyala"} == true,"link cleanup missing from native AX actions")
+            menu.performActionForItem(at:index)
+            check(linkBoard.string(forType:.string)==cleanLink,"native clean-link menu did not write exact cleaned URL to private board")
+            check(linkHistory.items.contains{$0.id==originalItem.id && $0.content == .text(originalLink)},"clean-link copy mutated or lost the original history entry")
+            check(linkHistory.items.first?.content == .text(cleanLink),"cleaned URL was not added as a separate history entry")
+            let count=linkBoard.changeCount
+            _ = row.accessibilityCustomActions()
+            check(linkBoard.changeCount==count,"querying link actions performed a clipboard write")
+        } else {check(false,"actual native tracked-link context menu missing")}
+        clips.didHide();clips.removeFromSuperview();linkHistory.stop();linkBoard.releaseGlobally()
+
         for tab in ExpandedTab.allCases {
             let model=IslandViewModel(metrics:NotchMetrics(notchSize:CGSize(width:192,height:33.5),style:.notch),configuration:.init(),hapticPerformer:{_ in})
             let content=PanelFactory.make(tab,model:model,environment:env)

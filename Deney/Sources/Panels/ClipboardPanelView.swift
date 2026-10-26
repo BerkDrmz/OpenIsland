@@ -169,6 +169,8 @@ private final class ClipRowView: RoundedView, TransientStateResettable {
     private var isHovering = false { didSet { if isHovering != oldValue { updateState(animated: true) } } }
     private var didCopy = false { didSet { if didCopy != oldValue { updateState(animated: true) } } }
     private var resetWork: DispatchWorkItem?
+    private var didResolveCleanLink = false
+    private var cleanLink: String?
 
     init(history: ClipboardHistory) {
         self.history = history
@@ -200,6 +202,8 @@ private final class ClipRowView: RoundedView, TransientStateResettable {
         guard item != self.item else { return }
         let changed = self.item?.id != item.id
         self.item = item
+        didResolveCleanLink = false
+        cleanLink = nil
         if changed { resetWork?.cancel(); didCopy = false; isHovering = false }
         switch item.content {
         case .text(let value):
@@ -251,6 +255,28 @@ private final class ClipRowView: RoundedView, TransientStateResettable {
     private func copyItem() {
         guard let item else { return }
         history.copy(item)
+        confirmCopy()
+    }
+
+    // Resolve only when the user opens the menu or queries this row's AX actions,
+    // not on hover, panel animation frames, or in a clipboard/background monitor.
+    private func resolvedCleanLink() -> String? {
+        if !didResolveCleanLink {
+            didResolveCleanLink = true
+            if let item, case .text(let value) = item.content { cleanLink = TrackingURLCleaner.clean(value) }
+        }
+        return cleanLink
+    }
+
+    @discardableResult
+    private func copyCleanLink() -> Bool {
+        guard let item, let value = resolvedCleanLink() else { return false }
+        history.copy(ClipItem(content: .text(value), date: Date(), sourceApp: item.sourceApp))
+        confirmCopy()
+        return true
+    }
+
+    private func confirmCopy() {
         didCopy = true
         resetWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.didCopy = false }
@@ -311,9 +337,22 @@ private final class ClipRowView: RoundedView, TransientStateResettable {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func accessibilityPerformPress() -> Bool { copyItem(); return true }
 
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        var actions = super.accessibilityCustomActions() ?? []
+        if resolvedCleanLink() != nil {
+            actions.append(NSAccessibilityCustomAction(name: "Takipsiz bağlantıyı kopyala") { [weak self] in
+                self?.copyCleanLink() ?? false
+            })
+        }
+        return actions
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
         menu.addItem(StatusMenuItem(title: "Kopyala", keyEquivalent: "") { [weak self] in self?.copyItem() })
+        if resolvedCleanLink() != nil {
+            menu.addItem(StatusMenuItem(title: "Takipsiz bağlantıyı kopyala", keyEquivalent: "") { [weak self] in self?.copyCleanLink() })
+        }
         menu.addItem(StatusMenuItem(title: "Geçmişten sil", keyEquivalent: "") { [weak self] in self?.delete() })
         return menu
     }

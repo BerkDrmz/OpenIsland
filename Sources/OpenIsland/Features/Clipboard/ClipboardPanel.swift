@@ -30,7 +30,9 @@ struct ClipboardPanel: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 4) {
                         ForEach(history.items) { item in
-                            ClipRow(item: item) { history.copy(item) } onDelete: { history.remove(item) }
+                            ClipRow(item: item) { history.copy(item) } onDelete: { history.remove(item) } onCopyCleanLink: { link in
+                                history.copy(ClipItem(content: .text(link), date: Date(), sourceApp: item.sourceApp))
+                            }
                         }
                     }
                 }
@@ -106,6 +108,7 @@ private struct ClipRow: View {
     let item: ClipItem
     let onCopy: () -> Void
     let onDelete: () -> Void
+    let onCopyCleanLink: (String) -> Void
     @State private var isHovering = false
     @State private var didCopy = false
 
@@ -136,8 +139,16 @@ private struct ClipRow: View {
         // Silme düğmesi yalnızca hover'da görünür; klavye, VoiceOver ve sağ tık için aynı eylemler her zaman açık.
         .accessibilityAction(.default, copy)
         .accessibilityAction(named: "Geçmişten sil", onDelete)
+        .accessibilityActions {
+            if let link = cleanedLink {
+                Button("Takipsiz bağlantıyı kopyala") { copyCleanLink(link) }
+            }
+        }
         .contextMenu {
             Button("Kopyala", action: copy)
+            if let link = cleanedLink {
+                Button("Takipsiz bağlantıyı kopyala") { copyCleanLink(link) }
+            }
             Button("Geçmişten sil", role: .destructive, action: onDelete)
         }
         .onTapGesture(perform: copy)
@@ -154,6 +165,16 @@ private struct ClipRow: View {
         withAnimation(IslandMotion.control) { didCopy = true }
         // The view-scoped task is cancelled when this row disappears.
 
+    }
+
+    private var cleanedLink: String? {
+        guard case .text(let text) = item.content else { return nil }
+        return TrackingURLCleaner.clean(text)
+    }
+
+    private func copyCleanLink(_ link: String) {
+        onCopyCleanLink(link)
+        withAnimation(IslandMotion.control) { didCopy = true }
     }
 
     @ViewBuilder

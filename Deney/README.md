@@ -9,7 +9,8 @@ davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım Swif
 - Araçlar yalnızca **Kaldırıcı** ve **Önbellek temizleyici** içerir. Uygulama güncelleyicisinin AppKit/SwiftUI arayüzü, tarama görevleri, sürüm katalogları ve ağ istemcisi kaldırılmıştır.
 - Dock önizlemesinin 280 ms yapay hover beklemesi kaldırılmıştır. Pencere kartları ekran görüntüsü kataloğu beklenmeden açılır; küçük resimler hazır oldukça gelir.
 - Ekran kenarı olay sınırı, tek karelik küçük resimler ve en çok iki eşzamanlı capture korunur. Boşta yeni polling/timer yoktur.
-- Aşağıdaki eski tarihli performans ve eşdeğerlik sonuçları tarihsel kayıttır; bu adayın ölçümü değildir. Kurulu uygulama bu kaynak düzenlemesiyle değiştirilmez.
+- Pano satırının sağ tık menüsü ve AX eyleminde **Takipsiz bağlantıyı kopyala**: yalnız açıkça tanımlı takip parametrelerini, kullanıcı istediğinde çevrimdışı temizler. Özgün geçmiş kaydı korunur; yeni polling yoktur.
+- Aşağıdaki eski tarihli performans ve eşdeğerlik sonuçları tarihsel kayıttır; bu adayın ölçümü değildir. Günlük AppKit güncellemesi kullanıcı onayıyla, mevcut paket kimliği ve yerel sertifika korunarak yapılır; `/Applications/OpenIsland.app` bu çalışmanın hedefi değildir.
 
 ## Mimari
 
