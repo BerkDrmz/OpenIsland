@@ -11,13 +11,18 @@ struct StorageVolume: Identifiable, Equatable, Sendable {
     var usedFraction: Double { total > 0 ? Double(used) / Double(total) : 0 }
 
     static func read() -> [Self] {
+        guard !Task.isCancelled else { return [] }
         let keys: Set<URLResourceKey> = [.volumeNameKey, .volumeTotalCapacityKey, .volumeAvailableCapacityKey,
                                          .volumeAvailableCapacityForImportantUsageKey,
                                          .volumeIsLocalKey, .volumeIsInternalKey]
         let root = URL(fileURLWithPath: "/", isDirectory: true)
-        let mounted = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: Array(keys), options: [.skipHiddenVolumes]) ?? []
+        // Filter out APFS support volumes before requesting capacity metadata.
+        // Prefetching all keys here queried important-usage capacity even for
+        // volumes discarded below; the surviving URLs request the same keys.
+        let mounted = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [.skipHiddenVolumes]) ?? []
         let candidates = [root] + mounted.filter { $0.path != "/" && !$0.path.hasPrefix("/System/Volumes/") }
         return candidates.compactMap { url in
+            guard !Task.isCancelled else { return nil }
             guard let values = try? url.resourceValues(forKeys: keys), values.volumeIsLocal == true,
                   let total = values.volumeTotalCapacity, total > 0 else { return nil }
             let stdAvail = values.volumeAvailableCapacity.map(Int64.init) ?? 0

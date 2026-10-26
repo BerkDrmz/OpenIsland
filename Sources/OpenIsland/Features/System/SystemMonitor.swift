@@ -39,6 +39,7 @@ final class SystemMonitor {
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored private var privateRevision: UInt64 = 0
     @ObservationIgnored private let readPublic: @Sendable () async -> SystemSensors.Snapshot
+    @ObservationIgnored private let readStorage: @Sendable () -> [StorageVolume]
     @ObservationIgnored private(set) var sampleCount = 0
     @ObservationIgnored private(set) var privateSampleCount = 0
     @ObservationIgnored private var displayControl: ManagedLevelControl?
@@ -56,9 +57,11 @@ final class SystemMonitor {
     init(thermalWorker: ThermalSamplingWorker = ThermalSamplingWorker(),
          readPublic: @escaping @Sendable () async -> SystemSensors.Snapshot = {
              await SystemSamplingWorker.shared.read()
-         }) {
+         },
+         readStorage: @escaping @Sendable () -> [StorageVolume] = { StorageVolume.read() }) {
         self.thermalWorker = thermalWorker
         self.readPublic = readPublic
+        self.readStorage = readStorage
     }
 
     @ObservationIgnored private var panelViewers = 0
@@ -141,10 +144,18 @@ final class SystemMonitor {
     func refreshStorage(after delay: Duration = .milliseconds(50)) {
         guard isRunning else { return }
         storageTask?.cancel()
+        let readStorage = self.readStorage
         storageTask = Task { [weak self] in
             do { try await Task.sleep(for: delay) } catch { return }
             guard !Task.isCancelled else { return }
-            let volumes = await Task.detached(priority: .utility) { StorageVolume.read() }.value
+            let read = Task.detached(priority: .utility) { readStorage() }
+            let volumes = await withTaskCancellationHandler {
+                await read.value
+            } onCancel: {
+                // Cancelling an unstructured parent task does not automatically
+                // cancel a detached read. Let it stop between volume queries.
+                read.cancel()
+            }
             guard !Task.isCancelled, let self, self.isRunning else { return }
             self.storageReadCount += 1
             if self.storage != volumes { self.storage = volumes }
