@@ -101,21 +101,7 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         return CGSize(width: max(canvas.width, layout.size.width), height: layout.size.height)
     }
 
-    /// Hızlı geçiş (kullanıcı isteği; SwiftUI'den bilinçli fark): bir sekme geçişi öncekinden `rapidInterval` içinde
-    /// gelirse başlık (kapsül, simge tonu, satır kayması) ve panel değişimi animasyonsuz son hâline geçer. Her tıklama
-    /// bir öncekinin yayını yarıda yeniden hedeflediğinde kapsül yolda yön değiştiriyor, simgeler yarı tonda kalıyor,
-    /// paneller yarı saydam üst üste biniyordu (SwiftUI sürümünde de aynı titreme). Tek geçişlerde animasyonlar aynı.
-    static let rapidInterval: CFTimeInterval = 0.35
-    private var lastTabSwitch: CFTimeInterval = -.infinity
-    private var rapidSwitch = false
-
     func refresh() {
-        if let tab = model.presentation.expandedTab, tab != activeTab, activeTab != nil {
-            let now = CACurrentMediaTime()
-            rapidSwitch = now - lastTabSwitch < Self.rapidInterval
-            lastTabSwitch = now
-        }
-        header.rapidSwitch = rapidSwitch
         header.refresh()
         banner.refresh()
         if let tab = model.presentation.expandedTab, tab != activeTab { select(tab) }
@@ -129,7 +115,7 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         let fadeOut = style == .reduced ? 0.06 : (lively ? 0.08 : 0.10)
         let isFirst = activeTab == nil
         if let previous = activeTab, let old = panels[previous] {
-            old.fadeOut(duration: rapidSwitch ? 0 : fadeOut)
+            old.fadeOut(duration: fadeOut)
         }
         activeTab = tab
         let container = panels[tab] ?? {
@@ -139,7 +125,7 @@ final class ExpandedContentView: FlippedView, IslandContentView {
             return c
         }()
         layoutPanel(container, tab: tab)
-        container.fadeIn(duration: isFirst || rapidSwitch ? 0 : fadeIn)
+        container.fadeIn(duration: isFirst ? 0 : fadeIn)
     }
 
     override func layout() {
@@ -193,6 +179,7 @@ final class PanelContainer: FlippedView {
     private(set) var isFadingOut = false
     private var isShown = false
     private var hideWork: DispatchWorkItem?
+    private var visibilityGeneration: UInt64 = 0
 
     init(panel: IslandPanel) {
         self.panel = panel
@@ -213,6 +200,7 @@ final class PanelContainer: FlippedView {
 
     /// Kapanışta: sönme iptal, gösteriliyorsa `didHide`. Etkin panel görünür kalır (açılışta `fadeIn` ile yeniden başlar).
     func suspend() {
+        visibilityGeneration &+= 1
         hideWork?.cancel(); hideWork = nil
         if isFadingOut { isFadingOut = false; isHidden = true; layer?.removeAnimation(forKey: "fade") }
         if isShown { isShown = false; panel.didHide() }
@@ -225,6 +213,7 @@ final class PanelContainer: FlippedView {
     }
 
     func fadeIn(duration: Double) {
+        visibilityGeneration &+= 1
         hideWork?.cancel(); hideWork = nil
         isFadingOut = false
         let wasHidden = isHidden
@@ -234,10 +223,14 @@ final class PanelContainer: FlippedView {
     }
 
     func fadeOut(duration: Double) {
+        hideWork?.cancel()
+        visibilityGeneration &+= 1
+        let token = visibilityGeneration
         isFadingOut = true
         animateOpacity(to: 0, from: nil, duration: duration, timing: .easeIn)
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.isFadingOut else { return }
+            guard let self, self.isFadingOut, self.visibilityGeneration == token else { return }
+            self.hideWork = nil
             self.isHidden = true
             self.isFadingOut = false
             if self.isShown { self.isShown = false; self.panel.didHide() }
@@ -249,6 +242,9 @@ final class PanelContainer: FlippedView {
     private func animateOpacity(to target: Float, from start: Float?, duration: Double, timing: CAMediaTimingFunctionName) {
         guard let layer else { return }
         let current = start ?? layer.presentation()?.opacity ?? layer.opacity
+        CATransaction.begin()
+        defer { CATransaction.commit() }
+        CATransaction.setDisableActions(true)
         layer.removeAnimation(forKey: "fade")
         layer.opacity = target
         guard duration > 0, current != target else { return }

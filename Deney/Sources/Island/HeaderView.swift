@@ -21,8 +21,6 @@ final class HeaderView: FlippedView {
     private var shift = Spring(0)
     private var capsuleX = Spring(0)
     private var lastLayoutTab: ExpandedTab?
-    /// Hızlı geçişte (bkz. `ExpandedContentView.rapidInterval`) seçim, kapsül ve satır kayması animasyonsuz.
-    var rapidSwitch = false
     private var lastRowShift: CGFloat = 0
     private lazy var driver = FrameDriver(view: self) { [weak self] dt in
         guard let self else { return false }
@@ -79,7 +77,7 @@ final class HeaderView: FlippedView {
             selectedTab = tab
             // SwiftUI: sekme geçişi yerleşimi değiştiriyorsa `IslandMotion.resize` işleminde, değilse animasyonsuz.
             var spec: SpringSpec?
-            if let old = previousTab, let tab, window != nil, !rapidSwitch {
+            if let old = previousTab, let tab, window != nil {
                 let metrics = model.metrics
                 if IslandLayoutEngine.layout(for: .expanded(old), metrics: metrics) != IslandLayoutEngine.layout(for: .expanded(tab), metrics: metrics) {
                     spec = DeneyMotion.resize(style: DeneyMotion.effectiveStyle(model.motionStyle))
@@ -147,14 +145,12 @@ final class HeaderView: FlippedView {
         // Yerleşim (isabet, odak, AX) hedefe tek adımda; görünen kayma ve kapsül yeniden boyutlama yayıyla.
         let style = DeneyMotion.effectiveStyle(model.motionStyle)
         let tabChanged = lastLayoutTab != nil && lastLayoutTab != tab
-        let animate = tabChanged && window != nil && !rapidSwitch
+        let animate = tabChanged && window != nil
         let newShift = rowShift
-        if tabChanged && rapidSwitch {
-            shift.set(0) // görünen kayma yarıda kalmaz, etiketler doğrudan yeni yerleşimde
-        } else if animate, newShift != lastRowShift {
+        if animate, newShift != lastRowShift {
             // Yalnız kayma gerçekten değişince: etiketler eski görünür konumdan yeni yerleşime kayar. (Önceden yeni kayma
             // yayın hedefiyle (0) karşılaştırılıyordu; sıfırdan farklı kaymada satır her geçişte sıçrayıp geri kayıyordu.)
-            shift.set(shift.value + lastRowShift - newShift)
+            shift.rebase(to: shift.value + lastRowShift - newShift)
             shift.animate(to: 0, spec: DeneyMotion.resize(style: style))
         }
         lastRowShift = newShift
@@ -167,21 +163,25 @@ final class HeaderView: FlippedView {
         pin.setLayoutFrame(CGRect(x: pinX, y: (bounds.height - d) / 2, width: d, height: d))
         // Seçim kapsülü (matchedGeometryEffect): yerleşim değişince yeniden boyutlama yayıyla, değişmezse anında.
         if let sx = layoutPositions[tab] {
-            if animate, layout.size.width != (lastBodyWidth ?? layout.size.width) {
-                let visible = capsuleX.value
-                capsuleX.set(visible)
-                capsuleX.animate(to: sx, spec: DeneyMotion.resize(style: style))
-            } else {
+            if lastLayout == nil {
                 capsuleX.set(sx)
+            } else if capsuleX.target != sx {
+                // A repeated layout is not a new selection. Keep both the
+                // in-flight value and velocity; do not restart or finish it.
+                if animate, layout != lastLayout {
+                    capsuleX.animate(to: sx, spec: DeneyMotion.resize(style: style))
+                } else {
+                    capsuleX.set(sx)
+                }
             }
             setCapsuleFrame(pixelRect(CGRect(x: capsuleX.value, y: y, width: size.width, height: size.height)))
         }
-        lastBodyWidth = layout.size.width
+        lastLayout = layout
         applyVisualOffsets()
         if shift.isActive || capsuleX.isActive { driver.start() }
     }
 
-    private var lastBodyWidth: CGFloat?
+    private var lastLayout: IslandLayout?
 
     /// Satır kayması bütün sekmelerde aynı (kullanıcı isteği; SwiftUI'den bilinçli fark): görünen sekmeler arasındaki en
     /// dar gövdenin kayması. SwiftUI'de kayma sekmenin gövde genişliğine göre değişir; dar gövdeli (kompakt) adada her

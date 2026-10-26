@@ -90,6 +90,9 @@ struct Spring {
         pendingTarget = nil
     }
 
+    /// Coordinate/presentation rebasing must not discard in-flight velocity.
+    mutating func rebase(to value: Double) { self.value = value }
+
     mutating func animate(to newTarget: Double, spec: SpringSpec) {
         self.spec = spec
         if spec.delay > 0 {
