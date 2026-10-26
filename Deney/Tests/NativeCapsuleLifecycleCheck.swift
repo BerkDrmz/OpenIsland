@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import Darwin
 
 /// Native layer lifetime checks, NOT a frame-rate, energy or visual-parity test.
 /// Test-only sleeps do not participate in the application implementation.
@@ -19,6 +20,16 @@ import QuartzCore
     }
 
     func run() async {
+        func counters() -> [String: UInt64] {
+            var info = rusage_info_v6()
+            let result = withUnsafeMutablePointer(to: &info) { p in
+                p.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(getpid(), RUSAGE_INFO_V6, $0) }
+            }
+            guard result == 0 else { return [:] }
+            return ["userMachTime":info.ri_user_time,"systemMachTime":info.ri_system_time,
+                    "footprintBytes":info.ri_phys_footprint,"residentBytes":info.ri_resident_size,
+                    "wakeups":info.ri_interrupt_wkups,"instructions":info.ri_instructions,"cycles":info.ri_cycles]
+        }
         var checks = 0
         var failures: [String] = []
         var phases: [[String: Any]] = []
@@ -52,6 +63,8 @@ import QuartzCore
         foreign.fromValue = 1; foreign.toValue = 1; foreign.duration = 100
         layer.add(foreign, forKey: "fixture.foreign")
         for (name, spec) in [("natural", DeneyMotion.naturalResize), ("expressive", DeneyMotion.livelyResize), ("reduced", DeneyMotion.reduced)] {
+            let before = counters()
+            var peakFootprint = before["footprintBytes"] ?? 0
             var driver: NativeCapsuleMotion? = NativeCapsuleMotion(layer: layer)
             weak var retired = driver
             driver!.move(to: CGRect(x: 0, y: 4, width: 14, height: 24), spec: nil)
@@ -72,10 +85,16 @@ import QuartzCore
                     check(spring.isAdditive && spring.isRemovedOnCompletion, "\(name): response lifecycle flags")
                 }
                 // Repeated layout must not cancel/restart an in-flight response.
+                let starts = Dictionary(uniqueKeysWithValues: keys.map { ($0, layer.animation(forKey:$0)!.beginTime) })
                 driver!.move(to: CGRect(x: x - 7, y: 4, width: 14, height: 24), spec: spec)
-                check(keys == (layer.animationKeys() ?? []).filter { $0.hasPrefix(NativeCapsuleMotion.keyPrefix) },
-                      "\(name): identical layout restarted animations")
+                let afterKeys = (layer.animationKeys() ?? []).filter { $0.hasPrefix(NativeCapsuleMotion.keyPrefix) }
+                // A previously expired response can legitimately disappear at
+                // this transaction boundary. Only newly ADDED keys or changed
+                // clocks would mean that identical layout restarted a response.
+                check(Set(afterKeys).isSubset(of:Set(keys)) && afterKeys.allSatisfy { layer.animation(forKey:$0)?.beginTime == starts[$0] },
+                      "\(name): identical layout added or restarted a response")
                 try? await Task.sleep(for: .milliseconds(50))
+                if selection % 25 == 0 { peakFootprint = max(peakFootprint, counters()["footprintBytes"] ?? 0) }
             }
             check(maxCount <= Int(ceil(longest / 0.05)) + 2, "\(name): native responses accumulate beyond lifetime bound")
             try? await Task.sleep(for: .seconds(longest + 0.15))
@@ -95,7 +114,8 @@ import QuartzCore
             driver = nil
             check(retired == nil, "\(name): motion owner retained after release")
             phases.append(["style": name, "selections": selections, "maxActiveAnimations": maxCount,
-                           "clientCachedKeysBeforeFlush": cachedBeforeFlush, "longestResponseSeconds": longest])
+                           "clientCachedKeysBeforeFlush": cachedBeforeFlush, "longestResponseSeconds": longest,
+                           "countersBefore":before,"countersAfter":counters(),"peakSampledFootprintBytes":peakFootprint])
         }
         window.close()
         let result: [String: Any] = ["checks": checks, "failures": failures, "phases": phases,

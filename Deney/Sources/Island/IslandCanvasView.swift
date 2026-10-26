@@ -137,7 +137,11 @@ final class IslandCanvasView: NSView {
 
     private func modelDidChange() {
         observeModel()
-        dropZone = model.nativeDropZone.map { $0 == .shelf ? .shelf : .airDrop }
+        if let zone = model.nativeDropZone {
+            dropZone = zone == .shelf ? .shelf : .airDrop
+        } else if !model.machine.context.isFileDragActive {
+            dropZone = nil
+        }
         let target = (layout: model.layout, presentation: model.presentation)
         if FrameDriver.isLogging {
             FrameDriver.note("model \(model.presentation) \(Int(model.layout.size.width))x\(Int(model.layout.size.height)) pinned=\(model.isPinned) relax=\(model.isRelaxing) hud=\(model.hud != nil) notice=\(model.notice != nil) content=\(model.metrics.content) hovering=\(model.machine.context.isHovering)")
