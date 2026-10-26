@@ -10,7 +10,24 @@ import IslandCore
 }
 @main @MainActor final class OffscreenUIContract:NSObject,NSApplicationDelegate {
     static var retained:OffscreenUIContract?
-    static func main(){let app=NSApplication.shared;app.setActivationPolicy(.accessory);let d=OffscreenUIContract();retained=d;app.delegate=d;app.run()}
+    static func main(){
+        // Production storage redirection intentionally requires DIAGNOSTICS,
+        // not merely PERFORMANCE_SCRIPT. Fail BEFORE constructing any service
+        // when the harness forgot that opt-in; never fall back to user data.
+        let values=ProcessInfo.processInfo.environment
+        guard let diagnostics=values["OPENISLAND_DIAGNOSTICS"],diagnostics.hasPrefix("/"),
+              let suite=values["OPENISLAND_TEST_DEFAULTS"],suite.hasPrefix("io.github.openisland.motion."),
+              let support=values["OPENISLAND_TEST_SUPPORT"],support.hasPrefix("/"),support != "/",
+              !support.contains("/Library/Application Support/") else {
+            print("REFUSED: explicit diagnostics and isolated motion test defaults/support are required")
+            exit(78)
+        }
+        guard AppPaths.support.standardizedFileURL.path == URL(fileURLWithPath:support).standardizedFileURL.path else {
+            print("REFUSED: application storage was not redirected to the fixture")
+            exit(78)
+        }
+        let app=NSApplication.shared;app.setActivationPolicy(.accessory);let d=OffscreenUIContract();retained=d;app.delegate=d;app.run()
+    }
     var failures:[String]=[],checks=0
     func check(_ b:Bool,_ note:String){checks += 1;if !b{failures.append(note);print("FAIL: \(note)")}}
     func applicationDidFinishLaunching(_ n:Notification){Task{await run()}}
@@ -89,7 +106,9 @@ import IslandCore
         check(container.isHidden && !container.isFadingOut && fake.hides==2,"final fade did not release owner")
         container.suspend();check(fake.hides==2,"suspending a completed fade released owner twice")
         container.removeFromSuperview();panel.close();model.cancelPendingEffects();env.shutdown()
-        let data:[String:Any]=["checks":checks,"failures":failures,"status":failures.isEmpty ? "PASS":"FAIL","scope":"In-process UI/hit/AX endpoint/lifecycle contracts; NOT real keyboard, VoiceOver, drag, frame or visible-screen proof."]
+        let data:[String:Any]=["checks":checks,"failures":failures,"status":failures.isEmpty ? "PASS":"FAIL",
+                              "storageRoot":AppPaths.support.path,"defaultsSuite":ProcessInfo.processInfo.environment["OPENISLAND_TEST_DEFAULTS"]!,
+                              "scope":"In-process UI/hit/AX endpoint/lifecycle contracts; NOT real keyboard, VoiceOver, drag, frame or visible-screen proof."]
         let path=CommandLine.arguments.dropFirst().first!
         try? JSONSerialization.data(withJSONObject:data,options:[.prettyPrinted,.sortedKeys]).write(to:URL(fileURLWithPath:path))
         print("UI contracts \(checks), failures \(failures.count)")
