@@ -61,6 +61,7 @@ import Darwin
         window.orderFrontRegardless()
         let foreign = CABasicAnimation(keyPath: "opacity")
         foreign.fromValue = 1; foreign.toValue = 1; foreign.duration = 100
+        foreign.speed = 0 // ownership sentinel, not an animation that expires during a long test
         layer.add(foreign, forKey: "fixture.foreign")
         for (name, spec) in [("natural", DeneyMotion.naturalResize), ("expressive", DeneyMotion.livelyResize), ("reduced", DeneyMotion.reduced)] {
             let before = counters()
@@ -117,6 +118,7 @@ import Darwin
                            "clientCachedKeysBeforeFlush": cachedBeforeFlush, "longestResponseSeconds": longest,
                            "countersBefore":before,"countersAfter":counters(),"peakSampledFootprintBytes":peakFootprint])
         }
+        layer.removeAnimation(forKey:"fixture.foreign")
         window.close()
         let result: [String: Any] = ["checks": checks, "failures": failures, "phases": phases,
                                      "sessionLocked": locked, "status": failures.isEmpty ? "PASS" : "FAIL",
