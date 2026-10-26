@@ -19,14 +19,14 @@ final class HeaderView: FlippedView {
     private var selectedTab: ExpandedTab?
     /// Görünen kayma (etiketler); yerleşim hedefe tek adımda geçer.
     private var shift = Spring(0)
-    private var capsuleX = Spring(0)
+    private lazy var capsuleMotion = NativeCapsuleMotion(layer: capsule)
     private var lastLayoutTab: ExpandedTab?
     private var lastRowShift: CGFloat = 0
     private lazy var driver = FrameDriver(view: self) { [weak self] dt in
         guard let self else { return false }
-        self.shift.step(dt); self.capsuleX.step(dt)
+        self.shift.step(dt)
         self.applyVisualOffsets()
-        return self.shift.isActive || self.capsuleX.isActive
+        return self.shift.isActive
     }
 
     init(model: IslandViewModel, environment: AppEnvironment) {
@@ -64,6 +64,7 @@ final class HeaderView: FlippedView {
                 guard let self, tab != self.selectedTab else { return }
                 model?.send(.selectTab(tab))
             }
+            button.setSelected(tab == selectedTab, spec: nil)
             buttons[tab] = button
             addSubview(button)
         }
@@ -163,22 +164,13 @@ final class HeaderView: FlippedView {
         pin.setLayoutFrame(CGRect(x: pinX, y: (bounds.height - d) / 2, width: d, height: d))
         // Seçim kapsülü (matchedGeometryEffect): yerleşim değişince yeniden boyutlama yayıyla, değişmezse anında.
         if let sx = layoutPositions[tab] {
-            if lastLayout == nil {
-                capsuleX.set(sx)
-            } else if capsuleX.target != sx {
-                // A repeated layout is not a new selection. Keep both the
-                // in-flight value and velocity; do not restart or finish it.
-                if animate, layout != lastLayout {
-                    capsuleX.animate(to: sx, spec: DeneyMotion.resize(style: style))
-                } else {
-                    capsuleX.set(sx)
-                }
-            }
-            setCapsuleFrame(pixelRect(CGRect(x: capsuleX.value, y: y, width: size.width, height: size.height)))
+            ensureCapsuleLayer()
+            let spec = animate && layout != lastLayout ? DeneyMotion.resize(style: style) : nil
+            capsuleMotion.move(to: pixelRect(CGRect(x: sx, y: y, width: size.width, height: size.height)), spec: spec)
         }
         lastLayout = layout
         applyVisualOffsets()
-        if shift.isActive || capsuleX.isActive { driver.start() }
+        if shift.isActive { driver.start() }
     }
 
     private var lastLayout: IslandLayout?
@@ -208,7 +200,7 @@ final class HeaderView: FlippedView {
         }
     }
 
-    private func setCapsuleFrame(_ rect: CGRect) {
+    private func ensureCapsuleLayer() {
         // Düğmeler yeniden kurulduğunda da en altta kalsın.
         if layer?.sublayers?.first !== capsule {
             if FrameDriver.isLogging {
@@ -217,14 +209,8 @@ final class HeaderView: FlippedView {
             layer?.insertSublayer(capsule, at: 0)
         }
         if let scale = window?.backingScaleFactor, capsule.contentsScale != scale { capsule.contentsScale = scale }
-        guard capsule.frame != rect else { return }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        capsule.frame = rect
-        CATransaction.commit()
     }
 
-    nonisolated override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         // Dinamik renk (Kontrastı Artır) görünümün görünüşüyle çözülür; görünüş değişince AppKit yeniden çağırır.
         CATransaction.begin()
@@ -239,11 +225,7 @@ final class HeaderView: FlippedView {
         let dx = shift.value
         for button in buttons.values { button.labelOffset = dx }
         pin.labelOffset = dx
-        let size = IslandLayoutEngine.tabButtonSize
-        // Hareket sırasında kesirli konum (SwiftUI şekli de ara karelerde piksele oturmaz); dururken piksel ızgarası.
-        let rect = CGRect(x: capsuleX.value + dx, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
-        let capsuleFrame = shift.isActive || capsuleX.isActive ? rect : pixelRect(rect)
-        setCapsuleFrame(capsuleFrame)
+        capsuleMotion.setVisualOffset(dx)
         CATransaction.commit()
     }
 }

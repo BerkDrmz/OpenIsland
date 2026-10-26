@@ -91,7 +91,10 @@ struct Spring {
     }
 
     /// Coordinate/presentation rebasing must not discard in-flight velocity.
-    mutating func rebase(to value: Double) { self.value = value }
+    mutating func rebase(to value: Double, velocity: Double? = nil) {
+        self.value = value
+        if let velocity { self.velocity = velocity }
+    }
 
     mutating func animate(to newTarget: Double, spec: SpringSpec) {
         self.spec = spec
@@ -202,7 +205,7 @@ final class FrameDriver: NSObject {
 
     @objc fileprivate func step(_ link: CADisplayLink) {
         let now = link.targetTimestamp
-        let dt = lastTimestamp.map { min(max(now - $0, 0), 0.05) } ?? (1.0 / 60)
+        let dt = lastTimestamp.map { max(now - $0, 0) } ?? (1.0 / 60)
         lastTimestamp = now
         guard let log = Self.frameLog else {
             if !tick(dt) { stop() }
