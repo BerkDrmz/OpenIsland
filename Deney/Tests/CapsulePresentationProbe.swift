@@ -15,6 +15,7 @@ import ApplicationServices
     private var phase="", samples:[[String:Any]]=[], events:[[String:Any]]=[], series:[CapsuleImpulse]=[]
     private var target=7.0, spec=DeneyMotion.naturalResize
     private var maxActive=0
+    private var lockedDuringRun=false
     func applicationDidFinishLaunching(_ note:Notification) {
         let locked=(CGSessionCopyCurrentDictionary() as? [String:Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
         guard !locked else {
@@ -38,6 +39,7 @@ import ApplicationServices
         return lastTarget+elapsed.reduce(0){$0+$1.sample(at:t).value}
     }
     @objc private func frame(_ d:CADisplayLink) {
+        if (CGSessionCopyCurrentDictionary() as? [String:Any])?["CGSSessionScreenIsLocked"] as? Bool == true { lockedDuringRun=true }
         guard !phase.isEmpty, let p=capsule.presentation() else{return}
         maxActive=max(maxActive,capsule.animationKeys()?.count ?? 0)
         samples.append(["phase":phase,"observed":CACurrentMediaTime(),"timestamp":d.timestamp,"targetTimestamp":d.targetTimestamp,
@@ -68,7 +70,7 @@ import ApplicationServices
             }
         }
         phase="";link?.invalidate();link=nil;window.close()
-        let result:[String:Any] = ["samples":samples,"events":events,"maxActiveAnimations":maxActive,
+        let result:[String:Any] = ["status":lockedDuringRun ? "NOT_TESTED_SESSION_LOCKED":"TELEMETRY_ONLY","sessionLockedDuringRun":lockedDuringRun,"samples":samples,"events":events,"maxActiveAnimations":maxActive,
                                    "AXTrusted":AXIsProcessTrusted(),"screenCaptureAllowed":CGPreflightScreenCaptureAccess(),
                                    "note":"Presentation-layer telemetry, not a screenshot/photodiode or CPU benchmark. No permissions requested."]
         let path=CommandLine.arguments.dropFirst().first ?? "/tmp/openisland-capsule-presentation.json"
