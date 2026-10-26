@@ -40,7 +40,9 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$OUT/OpenIslandDeney" "$APP/Contents/MacOS/OpenIslandDeney"
 cp "$INFO" "$APP/Contents/Info.plist"
-plutil -replace CFBundleIdentifier -string io.github.openisland.deney "$APP/Contents/Info.plist"
+if [[ -z "${OPENISLAND_BUILD_INFO_PLIST:-}" ]]; then
+  plutil -replace CFBundleIdentifier -string io.github.openisland.deney "$APP/Contents/Info.plist"
+fi
 plutil -replace CFBundleExecutable -string OpenIslandDeney "$APP/Contents/Info.plist"
 plutil -replace CFBundleName -string "OpenIsland Deney" "$APP/Contents/Info.plist"
 plutil -replace CFBundleDisplayName -string "OpenIsland Deney" "$APP/Contents/Info.plist"

@@ -32,11 +32,19 @@ enum AppPaths {
 
 enum Notifier {
     static func requestAuthorization() {
+        #if OPENISLAND_DENEY
+        // Isolated validation bundles must never request or deliver user notifications.
+        if TestIsolationGuard.isValidationBundle { return }
+        #endif
         guard AppPaths.isRunningAsBundle else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     static func post(title: String, body: String) {
+        #if OPENISLAND_DENEY
+        // Isolated validation bundles must never request or deliver user notifications.
+        if TestIsolationGuard.isValidationBundle { return }
+        #endif
         guard AppPaths.isRunningAsBundle else { return }
         let content = UNMutableNotificationContent()
         content.title = title

@@ -4,9 +4,12 @@ import Darwin
 /// Developer test runs must fail closed BEFORE AppEnvironment is constructed.
 /// Normal launches do not change storage, defaults or product behavior.
 enum TestIsolationGuard {
+    static var isValidationBundle: Bool {
+        Bundle.main.bundleIdentifier?.hasPrefix("io.github.openisland.validation.") == true
+    }
     static func validate() {
         let values = ProcessInfo.processInfo.environment
-        guard values["OPENISLAND_TEST_DEFAULTS"] != nil || values["OPENISLAND_TEST_SUPPORT"] != nil
+        guard isValidationBundle || values["OPENISLAND_TEST_DEFAULTS"] != nil || values["OPENISLAND_TEST_SUPPORT"] != nil
                 || values["OPENISLAND_PERFORMANCE_SCRIPT"] == "1" else { return }
         func canonical(_ path: String) -> String {
             URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
