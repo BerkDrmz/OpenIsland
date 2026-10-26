@@ -18,3 +18,15 @@ python3 Deney/Tests/run-efficiency-checks.py --metadata-bench
 This compiles the original `64f06a9` storage reader and candidate reader in one process. It checks volume identity/order/name/total/internal flags and capacity bounds, then runs three A/B/B/A blocks of eight reads per run. Available byte values can change naturally between reads. The numbers apply **only to storage metadata reads**, not tab switching, GPU, WindowServer, idle power or battery life. Avoid running concurrent compilers/profilers during a measured comparison.
 
 These tests do not replace the existing Swift core tests or live nine-panel, media, drag-and-drop, keyboard/VoiceOver and animation regression checks.
+
+## Motion experiment checks (not production performance claims)
+
+- `CapsuleMotionCheck.swift`: exact source scalar/additive response and native layer configuration checks across six rates and three styles. No user input or permissions.
+- `SwiftUISpringReferenceCheck.swift`: compares the actual native impulse mathematics with Apple's public `SwiftUI.Spring.update` oracle (position **and** velocity). This does not compare SwiftUI view transactions, spring response blending, rasterized frames or matched-geometry rendering.
+- `OffscreenUIContract.swift` + `build-ui-contract.sh OUT`: builds the real AppKit source with a separate test entry point. All nine header controls, selected/AX metadata, tooltips, native hit regions, repeated fade retargets and System ownership are tested without displaying its window. `OPENISLAND_UI_OWNERSHIP_ONLY=1` is a **test-fixture-only** switch for running the identical ownership reproduction against archived old source. It does not alter application behavior.
+- `NativeCapsuleLifecycleCheck.swift`: 100 real native retargets per style at 50 ms, bounded in-flight animations, retirement and weak owner release. Requires an unlocked session; returns `NOT_TESTED`/exit 3 otherwise. A locked rendering server can retain completed animation keys, so locked diagnostics are not proof of either an app leak or correct visible completion.
+- `CapsulePresentationProbe.swift`: test-only presentation-layer telemetry at 650/350/300/150/80/50 ms. Also refuses a locked session. Approximate presentation values are not screenshot parity, hardware latency, FPS or energy measurements.
+
+Standalone math/layer tests compile `Deney/Sources/Island/Motion.swift`, `NativeCapsuleMotion.swift`, the test entry point, and the real `IslandCore` module. Supply a test-only `MotionStyle` enum with the same three product cases to avoid pulling unrelated services into the math executable. Never replace the product's enum or use that fixture in an app benchmark.
+
+All full-code tests require **private** `OPENISLAND_TEST_DEFAULTS` and `OPENISLAND_TEST_SUPPORT` paths. Do not run them against user notes/preferences. They do not grant privacy permissions, manipulate another application's windows, or qualify real VoiceOver, keyboard, drag-and-drop or media regressions as passed.

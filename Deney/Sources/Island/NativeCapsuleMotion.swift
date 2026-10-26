@@ -80,6 +80,7 @@ final class NativeCapsuleMotion {
         if let lastSpec, lastSpec != spec, !impulses.isEmpty {
             // A live motion-style change is rare. Rebase from presentation, with
             // the old physical velocity, then use the NEW spring coefficients.
+            impulses.removeAll { layer.animation(forKey: $0.key) == nil }
             let visible = layer.presentation()?.position.x
                 ?? CGFloat(Double(previous) + impulses.reduce(0) { $0 + $1.sample(at: local).value })
             let velocity = impulses.reduce(0) { $0 + $1.sample(at: local).velocity }

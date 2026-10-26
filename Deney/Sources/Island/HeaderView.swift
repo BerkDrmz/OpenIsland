@@ -11,9 +11,8 @@ final class HeaderView: FlippedView {
     private var buttons: [ExpandedTab: TabButtonView] = [:]
     private let pin: IconButtonView
     /// Seçim kapsülü başlığın kendi katmanında, düğme katmanlarının altında düz bir katmandır (`RoundedView` ile aynı
-    /// özellikler: sürekli köşe eğrisi, görünüşe göre çözülen dolgu). Kayma ve yeniden boyutlama yayı her karede yalnız
-    /// katman çerçevesini yazar; kapsül görünümü taşınırken her kare görünüm geometrisi ve pencerenin izleme alanı
-    /// hesabı yenileniyordu.
+    /// özellikler: sürekli köşe eğrisi, görünüşe göre çözülen dolgu). Kapsül yayı Core Animation'da çalışır;
+    /// her kare görünüm geometrisini veya pencerenin izleme alanını yeniden hesaplatmaz.
     private let capsule = CALayer()
     private var visibleTabs: [ExpandedTab] = []
     private var selectedTab: ExpandedTab?

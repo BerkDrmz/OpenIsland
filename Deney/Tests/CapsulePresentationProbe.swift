@@ -16,6 +16,14 @@ import ApplicationServices
     private var target=7.0, spec=DeneyMotion.naturalResize
     private var maxActive=0
     func applicationDidFinishLaunching(_ note:Notification) {
+        let locked=(CGSessionCopyCurrentDictionary() as? [String:Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
+        guard !locked else {
+            let data:[String:Any]=["status":"NOT_TESTED","sessionLocked":true,"reason":"Visible presentation telemetry requires an unlocked rendering session."]
+            let path=CommandLine.arguments.dropFirst().first!
+            try! JSONSerialization.data(withJSONObject:data,options:[.prettyPrinted,.sortedKeys]).write(to:URL(fileURLWithPath:path))
+            print("NOT_TESTED: session locked; no capture, window or input automation started")
+            exit(3)
+        }
         window=NSPanel(contentRect:CGRect(x:40,y:70,width:470,height:38),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
         window.isReleasedWhenClosed=false;window.level = .floating;window.ignoresMouseEvents=true;window.backgroundColor = .black
         view=NSView(frame:CGRect(x:0,y:0,width:470,height:38));view.wantsLayer=true;window.contentView=view
