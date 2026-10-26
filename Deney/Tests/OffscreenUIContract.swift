@@ -74,6 +74,20 @@ import IslandCore
             // Never didShow Mirror/Mixer: mounting is not permission to capture.
             content.removeFromSuperview();model.cancelPendingEffects()
         }
+        // Only the authorized keyboard-navigation cohort exercises this gate.
+        // Cached hidden panels must not contribute native tab stops.
+        if NSApp.isFullKeyboardAccessEnabled {
+            let wrapper=FlippedView(frame:CGRect(x:0,y:0,width:100,height:40))
+            let button=PlainButton();button.frame=wrapper.bounds
+            root.addSubview(wrapper);wrapper.addSubview(button)
+            check(button.canBecomeKeyView,"visible native button lost keyboard navigation")
+            wrapper.isHidden=true
+            check(!button.canBecomeKeyView,"hidden cached panel button remains in the key-view loop")
+            wrapper.isHidden=false
+            button.isEnabled=false
+            check(!button.canBecomeKeyView,"disabled native button remains in key-view loop")
+            wrapper.removeFromSuperview()
+        }
         check(!env.system.isRunning,"dormant nine-panel construction started System worker")
         check(env.audioMixer.activeRouteCount==0,"dormant nine-panel construction started audio routing")
         // Deliberately not orderFront: this is not a claim about visible UI.

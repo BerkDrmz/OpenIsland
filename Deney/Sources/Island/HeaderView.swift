@@ -336,7 +336,7 @@ final class TabButtonView: FlippedView {
     /// `NSButton` ve SwiftUI düğmesi gibi: klavye odağı yalnız "Klavyeyle gezinme" açıkken. Kapalıyken tıklanan sekme
     /// odağı alıp büyüyen bir odak halkası çiziyordu; hızlı geçişte halkalar yanıp sönüyordu.
     override var acceptsFirstResponder: Bool { NSApp.isFullKeyboardAccessEnabled }
-    override var canBecomeKeyView: Bool { NSApp.isFullKeyboardAccessEnabled }
+    override var canBecomeKeyView: Bool { super.canBecomeKeyView && NSApp.isFullKeyboardAccessEnabled }
     override func accessibilityPerformPress() -> Bool { action(); return true }
     override func keyDown(with event: NSEvent) {
         if event.charactersIgnoringModifiers == " " { action() } else { super.keyDown(with: event) }
@@ -464,7 +464,7 @@ final class IconButtonView: FlippedView, TransientStateResettable {
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var acceptsFirstResponder: Bool { NSApp.isFullKeyboardAccessEnabled }
-    override var canBecomeKeyView: Bool { NSApp.isFullKeyboardAccessEnabled }
+    override var canBecomeKeyView: Bool { super.canBecomeKeyView && NSApp.isFullKeyboardAccessEnabled }
     override func accessibilityPerformPress() -> Bool { action(); return true }
     override func keyDown(with event: NSEvent) {
         if event.charactersIgnoringModifiers == " " { action() } else { super.keyDown(with: event) }
