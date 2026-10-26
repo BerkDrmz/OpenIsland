@@ -161,7 +161,9 @@ final class FrameDriver: NSObject {
     private weak var view: NSView?
     /// Pencere dışındaki görünüm için kendi bağlantısı (pencereye bağlı saat yokken).
     private var link: CADisplayLink?
+    private var linkTarget: WeakTarget?
     private weak var clock: FrameClock?
+    fileprivate lazy var clockEntry = FrameClock.WeakDriver(self)
     private var lastTimestamp: CFTimeInterval?
     private let tick: (Double) -> Bool
 
@@ -187,9 +189,11 @@ final class FrameDriver: NSObject {
             clock.add(self)
             self.clock = clock
         } else {
-            let link = view.displayLink(target: self, selector: #selector(step(_:)))
+            let target = WeakTarget(self)
+            let link = view.displayLink(target: target, selector: #selector(WeakTarget.fire(_:)))
             link.add(to: .main, forMode: .common)
             self.link = link
+            linkTarget = target
         }
         // Animasyon şimdi başladı: ilk kare, şimdiden o karenin gösterim anına kadar ilerler.
         lastTimestamp = CACurrentMediaTime()
@@ -198,9 +202,26 @@ final class FrameDriver: NSObject {
     func stop() {
         link?.invalidate()
         link = nil
+        linkTarget = nil
         clock?.remove(self)
         clock = nil
         lastTimestamp = nil
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            link?.invalidate()
+            clock?.remove(self)
+        }
+    }
+
+    @MainActor private final class WeakTarget: NSObject {
+        weak var driver: FrameDriver?
+        init(_ driver: FrameDriver) { self.driver = driver }
+        @objc func fire(_ link: CADisplayLink) {
+            guard let driver else { link.invalidate(); return }
+            driver.step(link)
+        }
     }
 
     @objc fileprivate func step(_ link: CADisplayLink) {
@@ -262,20 +283,43 @@ final class FrameClock: NSObject {
     private static var clocks: [ObjectIdentifier: FrameClock] = [:]
     private weak var window: NSWindow?
     private var link: CADisplayLink?
-    private var drivers: [FrameDriver] = []
+    fileprivate final class WeakDriver {
+        weak var value: FrameDriver?
+        init(_ driver: FrameDriver) { value = driver }
+    }
+    private var drivers: [WeakDriver] = []
+    private var closeObserver: NSObjectProtocol?
+    private let windowID: ObjectIdentifier
 
     static func shared(for window: NSWindow) -> FrameClock {
         let key = ObjectIdentifier(window)
         if let clock = clocks[key], clock.window === window { return clock }
+        for (_, clock) in clocks where clock.window == nil { clock.shutdown() }
         let clock = FrameClock(window: window)
         clocks[key] = clock
         return clock
     }
 
-    private init(window: NSWindow) { self.window = window }
+    private init(window: NSWindow) {
+        self.window = window
+        windowID = ObjectIdentifier(window)
+        super.init()
+        closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] note in
+            guard let closed = note.object as? NSWindow else { return }
+            let closedID = ObjectIdentifier(closed)
+            MainActor.assumeIsolated {
+                guard let self, closedID == self.windowID else { return }
+                // A cached window can reopen during an unfinished animation.
+                // Preserve that driver's clock/timestamps; only idle clocks
+                // may be discarded here. Owner deinit releases active drivers.
+                if !self.drivers.contains(where: { $0.value != nil }) { self.shutdown() }
+            }
+        }
+    }
 
     func add(_ driver: FrameDriver) {
-        drivers.append(driver)
+        drivers.removeAll { $0.value == nil }
+        drivers.append(driver.clockEntry)
         guard link == nil, let window else { return }
         let link = window.displayLink(target: self, selector: #selector(fire(_:)))
         link.add(to: .main, forMode: .common)
@@ -283,10 +327,29 @@ final class FrameClock: NSObject {
     }
 
     func remove(_ driver: FrameDriver) {
-        drivers.removeAll { $0 === driver }
+        drivers.removeAll { $0.value == nil || $0.value === driver }
         if drivers.isEmpty {
             link?.invalidate()
             link = nil
+            if window?.isVisible != true { shutdown() }
+        }
+    }
+
+    private func shutdown() {
+        link?.invalidate()
+        link = nil
+        let active = drivers.compactMap(\.value)
+        drivers.removeAll()
+        active.forEach { $0.stop() }
+        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        closeObserver = nil
+        if Self.clocks[windowID] === self { Self.clocks[windowID] = nil }
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            link?.invalidate()
+            if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
         }
     }
 
@@ -294,7 +357,10 @@ final class FrameClock: NSObject {
         CATransaction.begin()
         // Kopya üzerinde: bir sürücünün adımı başkasını durdurabilir (durdurulan bu karede ilerlemez) ya da yenisini
         // başlatabilir (yenisi sonraki karede ilerler; ayrı bağlantıda da öyleydi).
-        for driver in drivers where drivers.contains(where: { $0 === driver }) { driver.step(link) }
+        for entry in drivers {
+            guard let driver = entry.value, drivers.contains(where: { $0 === entry }) else { continue }
+            driver.step(link)
+        }
         CATransaction.commit()
     }
 }
