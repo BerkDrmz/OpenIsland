@@ -129,7 +129,7 @@ final class IslandCanvasView: NSView {
     private func observeModel() {
         withObservationTracking {
             _ = model.presentation; _ = model.layout; _ = model.hud; _ = model.notice
-            _ = model.isPinned; _ = model.isRelaxing; _ = model.metrics
+            _ = model.isPinned; _ = model.isRelaxing; _ = model.metrics; _ = model.nativeDropZone
         } onChange: { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.modelDidChange() } }
         }
@@ -137,6 +137,7 @@ final class IslandCanvasView: NSView {
 
     private func modelDidChange() {
         observeModel()
+        dropZone = model.nativeDropZone.map { $0 == .shelf ? .shelf : .airDrop }
         let target = (layout: model.layout, presentation: model.presentation)
         if FrameDriver.isLogging {
             FrameDriver.note("model \(model.presentation) \(Int(model.layout.size.width))x\(Int(model.layout.size.height)) pinned=\(model.isPinned) relax=\(model.isRelaxing) hud=\(model.hud != nil) notice=\(model.notice != nil) content=\(model.metrics.content) hovering=\(model.machine.context.isHovering)")
