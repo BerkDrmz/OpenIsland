@@ -39,7 +39,9 @@ final class ClipboardHistory {
     private(set) var isRunning = false
     var limit = 40
 
-    @ObservationIgnored private var lastChangeCount = NSPasteboard.general.changeCount
+    @ObservationIgnored private var lastChangeCount: Int
+    @ObservationIgnored private let pasteboard: NSPasteboard
+    @ObservationIgnored private let ownedTestPasteboard: NSPasteboard?
     @ObservationIgnored private var activationObserver: NSObjectProtocol?
     @ObservationIgnored private var modifierMonitor: Any?
     @ObservationIgnored private var shortcutMonitor: Any?
@@ -55,15 +57,36 @@ final class ClipboardHistory {
         .init("com.agilebits.onepassword"),
     ]
 
-    init(storeURL: URL = AppPaths.support.appendingPathComponent("clipboard.json")) {
+    init(storeURL: URL = AppPaths.support.appendingPathComponent("clipboard.json"), pasteboard: NSPasteboard? = nil) {
+        let values = ProcessInfo.processInfo.environment
+        let resolved: NSPasteboard
+        if let pasteboard {
+            resolved = pasteboard
+            ownedTestPasteboard = nil
+        } else if values["OPENISLAND_DIAGNOSTICS"] != nil,
+                  values["OPENISLAND_TEST_SUPPORT"] != nil,
+                  let suite = values["OPENISLAND_TEST_DEFAULTS"],
+                  Bundle.main.bundleIdentifier?.hasPrefix("io.github.openisland.validation.") == true {
+            resolved = NSPasteboard(name: .init("OpenIsland.Validation." + suite))
+            ownedTestPasteboard = resolved
+        } else {
+            resolved = .general
+            ownedTestPasteboard = nil
+        }
+        self.pasteboard = resolved
+        lastChangeCount = resolved.changeCount
         self.storeURL = storeURL
         load()
+    }
+
+    deinit {
+        MainActor.assumeIsolated { ownedTestPasteboard?.releaseGlobally() }
     }
 
     func start() {
         guard !isRunning else { return }
         isRunning = true
-        lastChangeCount = NSPasteboard.general.changeCount
+        lastChangeCount = pasteboard.changeCount
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
@@ -132,7 +155,6 @@ final class ClipboardHistory {
     }
 
     func copy(_ item: ClipItem) {
-        let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         switch item.content {
         case .text(let text): pasteboard.setString(text, forType: .string)
@@ -158,7 +180,6 @@ final class ClipboardHistory {
     /// `true` dönerse yeni bir değişiklik bulundu.
     @discardableResult
     private func checkNow(source: @autoclosure () -> String? = NSWorkspace.shared.frontmostApplication?.localizedName) -> Bool {
-        let pasteboard = NSPasteboard.general
         guard pasteboard.changeCount != lastChangeCount else { return false }
         lastChangeCount = pasteboard.changeCount
         // Opening an unchanged history must not fetch LaunchServices application metadata.
