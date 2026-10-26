@@ -29,7 +29,7 @@ import QuartzCore
         let locked = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
         guard !locked else {
             let result: [String: Any] = ["status": "NOT_TESTED", "sessionLocked": true,
-                "reason": "Core Animation retirement requires an active rendering session. A locked session cannot validate visible animation completion."]
+                "reason": "This retirement acceptance test requires an unlocked rendering session. A previous locked diagnostic was inconclusive; do not classify it as a pass or dismiss its failure."]
             let path = CommandLine.arguments.dropFirst().first!
             try! JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
             print("NOT_TESTED: session locked; no owned window or animation created")
