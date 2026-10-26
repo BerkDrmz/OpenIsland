@@ -20,7 +20,12 @@ func AXIsProcessTrusted() -> Bool { false }
 // Clipboard contents are controlled: this test never reads/writes the user's pasteboard.
 @MainActor final class NSPasteboard {
     typealias PasteboardType = AppKit.NSPasteboard.PasteboardType
+    typealias Name = AppKit.NSPasteboard.Name
     static let general = NSPasteboard()
+    private(set) var releases = 0
+    init() {}
+    init(name: Name) {}
+    func releaseGlobally() { releases += 1 }
     var changeCount = 0
     enum AccessBehavior { case alwaysAllow, alwaysDeny }
     var accessBehavior: AccessBehavior = .alwaysAllow
@@ -40,6 +45,12 @@ func AXIsProcessTrusted() -> Bool { false }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
+        let injected = NSPasteboard(name: .init("ClipboardCheck.private-fixture"))
+        var injectedHistory: ClipboardHistory? = ClipboardHistory(storeURL: folder.appendingPathComponent("injected.json"), pasteboard: injected)
+        weak var releasedHistory = injectedHistory
+        injectedHistory = nil
+        precondition(releasedHistory == nil && injected.releases == 0,
+                     "ClipboardHistory must not release an injected/caller-owned pasteboard")
         checkRefreshQueries(in: folder)
         let store = folder.appendingPathComponent("clipboard.json")
         let history = ClipboardHistory(storeURL: store)
