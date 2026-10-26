@@ -66,6 +66,16 @@ import IslandCore
             check(notes.text==fixture,"selection/copy changed Notes store")
         } else {check(false,"native Notes NSTextView missing")}
         notePanel.didHide();notePanel.removeFromSuperview();launcher.shutdown();notes.flush()
+        // Native settings controls need their own accessible names. Nearby
+        // static text is not a reliable VoiceOver/control association.
+        let switchRow=SettingsToggleRow("Fixture switch",get:{false},set:{_ in})
+        let segmentRow=SettingsSegmentedRow("Fixture motion",items:["One","Two"],get:{0},set:{_ in})
+        let popupRow=SettingsPopUpRow("Fixture display",items:["One","Two"],get:{0},set:{_ in})
+        for (row,label) in [(switchRow as NSView,"Fixture switch"),(segmentRow,"Fixture motion"),(popupRow,"Fixture display")] {
+            let control=row.subviews.first{$0 is NSControl}
+            check(control != nil && control?.accessibilityLabel()==label,"native settings control has no accessible name: \(label)")
+        }
+
         for tab in ExpandedTab.allCases {
             let model=IslandViewModel(metrics:NotchMetrics(notchSize:CGSize(width:192,height:33.5),style:.notch),configuration:.init(),hapticPerformer:{_ in})
             let content=PanelFactory.make(tab,model:model,environment:env)

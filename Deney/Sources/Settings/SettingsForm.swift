@@ -255,6 +255,7 @@ final class SettingsToggleRow: SettingsRow {
         toggle.controlSize = .mini
         toggle.target = self
         toggle.action = #selector(changed)
+        toggle.setAccessibilityLabel(title)
         addSubview(self.title)
         addSubview(toggle)
     }
@@ -299,6 +300,7 @@ final class SettingsSegmentedRow: SettingsRow {
         control.segmentDistribution = .fillEqually
         control.target = self
         control.action = #selector(changed)
+        control.setAccessibilityLabel(title)
         addSubview(self.title)
         addSubview(control)
     }
@@ -357,6 +359,7 @@ final class SettingsPopUpRow: SettingsRow {
         popup.addItems(withTitles: items)
         popup.target = self
         popup.action = #selector(changed)
+        popup.setAccessibilityLabel(title)
         addSubview(self.title)
         addSubview(popup)
     }

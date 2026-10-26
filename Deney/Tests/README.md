@@ -53,3 +53,8 @@ Observation, endpoint clamping, immediately readable optimistic AX values, and
 source disappearance/seek-eligibility changes. No Apple Events, hardware access,
 user preferences or clipboard are used. This is not a real Spotify, visual or
 energy acceptance test.
+
+`OffscreenUIContract` also verifies that native settings switches, segmented
+pickers and popup pickers carry their visible row title as an explicit accessible
+name. These checks do not qualify speech, VoiceOver cursor navigation or physical
+keyboard behavior as passed.
