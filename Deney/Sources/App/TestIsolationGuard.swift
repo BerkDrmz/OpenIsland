@@ -23,7 +23,7 @@ enum TestIsolationGuard {
               marker == "OpenIsland isolated fixture\n",
               let attributes = try? FileManager.default.attributesOfItem(atPath: canonical(rawRoot)),
               (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid() else {
-            fputs("REFUSED: missing or unsafe OpenIsland test root/defaults/support/diagnostics\n", stderr)
+            FileHandle.standardError.write(Data("REFUSED: missing or unsafe OpenIsland test root/defaults/support/diagnostics\n".utf8))
             exit(78)
         }
     }
