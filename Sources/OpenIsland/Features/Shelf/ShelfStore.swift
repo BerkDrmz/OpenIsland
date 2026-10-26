@@ -61,7 +61,13 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
          generateThumbnail: @escaping @MainActor (URL, CGFloat, @escaping @Sendable (CGImage?) -> Void) -> Void = ShelfStore.generateThumbnail) {
         self.generateThumbnail = generateThumbnail
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        self.storage = storage ?? base.appendingPathComponent("io.github.openisland/Shelf", isDirectory: true)
+        let values = ProcessInfo.processInfo.environment
+        let redirected = values["OPENISLAND_DIAGNOSTICS"] != nil && values["OPENISLAND_TEST_SUPPORT"]?.hasPrefix("/") == true
+        // A redirected persistence file alone is not isolation: temporary drops
+        // must not write into the daily application's shared Shelf cache either.
+        self.storage = storage ?? (redirected
+            ? AppPaths.support.appendingPathComponent("Caches/Shelf", isDirectory: true)
+            : base.appendingPathComponent("io.github.openisland/Shelf", isDirectory: true))
         self.storeURL = persistenceURL ?? AppPaths.support.appendingPathComponent("shelf.json")
         super.init()
         try? FileManager.default.createDirectory(at: self.storage, withIntermediateDirectories: true)

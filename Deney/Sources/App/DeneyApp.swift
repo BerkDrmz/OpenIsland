@@ -8,6 +8,7 @@ final class DeneyAppDelegate: NSObject, NSApplicationDelegate {
     private static var retained: DeneyAppDelegate?
 
     static func main() {
+        TestIsolationGuard.validate()
         let app = NSApplication.shared
         let delegate = DeneyAppDelegate()
         retained = delegate
