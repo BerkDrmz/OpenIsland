@@ -412,7 +412,8 @@ final class IslandCoordinator {
         let prefs = environment.preferences
         let saving = EnergyRules.savesEnergy(isEnabled: prefs.energySaving, lowPowerMode: environment.energy.isLowPowerMode,
                                              thermal: environment.energy.thermal)
-        model.motionStyle = saving ? .reduced : prefs.motionStyle
+        let style: MotionStyle = saving ? .reduced : prefs.motionStyle
+        if model.motionStyle != style { model.motionStyle = style }
         if model.energySaving != saving { model.energySaving = saving }
     }
 }

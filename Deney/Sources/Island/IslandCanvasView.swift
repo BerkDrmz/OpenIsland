@@ -24,6 +24,8 @@ final class IslandCanvasView: NSView {
 
     /// Ekranda çizilen (canlanan) yüzeyin hedefi; SwiftUI'deki `surface` durumunun karşılığı.
     private var surfacePresentation: IslandPresentation
+    private var surfaceTransitionFrom: IslandPresentation
+    private var lastMotionStyle: MotionStyle
     private var surfaceLayout: IslandLayout
     private var width: Spring, height: Spring, topRadius: Spring, bottomRadius: Spring, topInset: Spring
     private var relax = Spring(1)
@@ -52,6 +54,8 @@ final class IslandCanvasView: NSView {
         self.environment = environment
         let layout = model.layout
         surfacePresentation = model.presentation
+        surfaceTransitionFrom = model.presentation
+        lastMotionStyle = DeneyMotion.effectiveStyle(model.motionStyle)
         surfaceLayout = layout
         displayedPresentation = model.presentation
         width = Spring(layout.size.width)
@@ -129,7 +133,7 @@ final class IslandCanvasView: NSView {
     private func observeModel() {
         withObservationTracking {
             _ = model.presentation; _ = model.layout; _ = model.hud; _ = model.notice
-            _ = model.isPinned; _ = model.isRelaxing; _ = model.metrics; _ = model.nativeDropZone
+            _ = model.isPinned; _ = model.isRelaxing; _ = model.metrics; _ = model.nativeDropZone; _ = model.motionStyle
         } onChange: { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.modelDidChange() } }
         }
@@ -137,6 +141,14 @@ final class IslandCanvasView: NSView {
 
     private func modelDidChange() {
         observeModel()
+        let style = DeneyMotion.effectiveStyle(model.motionStyle)
+        if lastMotionStyle != style {
+            lastMotionStyle = style
+            if driver.isRunning {
+                applySurface(layout: surfaceLayout, presentation: surfacePresentation,
+                             spec: DeneyMotion.morph(from: surfaceTransitionFrom, to: surfacePresentation, style: style))
+            }
+        }
         if let zone = model.nativeDropZone {
             dropZone = zone == .shelf ? .shelf : .airDrop
         } else if !model.machine.context.isFileDragActive {
@@ -154,7 +166,6 @@ final class IslandCanvasView: NSView {
         } else {
             slots.forEach { $0.view.refresh() }
         }
-        let style = DeneyMotion.effectiveStyle(model.motionStyle)
         let relaxTarget = model.isRelaxing ? Double(DeneyMotion.relaxScale) : 1
         if relax.target != relaxTarget {
             relax.animate(to: relaxTarget, spec: style == .reduced ? DeneyMotion.reduced : DeneyMotion.relax)
@@ -206,6 +217,7 @@ final class IslandCanvasView: NSView {
 
     private func applySurface(layout: IslandLayout, presentation: IslandPresentation, spec: SpringSpec) {
         let wasExpanded = surfacePresentation.isExpanded
+        if surfaceLayout != layout || surfacePresentation != presentation { surfaceTransitionFrom = surfacePresentation }
         surfaceLayout = layout
         surfacePresentation = presentation
         width.animate(to: layout.size.width, spec: spec)

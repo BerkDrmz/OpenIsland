@@ -316,6 +316,11 @@ final class LayerSpring {
     }
 
     var target: CGFloat { CGFloat(spring.target) }
+    var isActive: Bool {
+        var current = spring
+        current.step(max(CACurrentMediaTime() - stamp, 0))
+        return current.isActive
+    }
 
     /// `spec == nil`: animasyonsuz atama (SwiftUI'de animasyonsuz işlem).
     func animate(to target: CGFloat, spec: SpringSpec?) {

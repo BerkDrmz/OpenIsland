@@ -66,11 +66,16 @@ final class NativeCapsuleMotion {
         if layer.bounds.size != rect.size { layer.bounds = CGRect(origin: .zero, size: rect.size) }
         if layer.position.y != rect.midY { layer.position.y = rect.midY }
         let endpoint = rect.midX
-        guard target != endpoint else { return } // unrelated layouts are true no-ops
+        let parametersChanged = spec != nil && lastSpec != spec
+        guard target != endpoint || parametersChanged else { return }
         let previous = target
-        target = endpoint
         let local = layer.convertTime(now, from: nil)
         impulses.removeAll { local >= $0.started + $0.duration }
+        if target == endpoint, impulses.isEmpty {
+            lastSpec = spec ?? lastSpec
+            return // new coefficients on a settled target do not create motion
+        }
+        target = endpoint
         guard let previous, let spec else {
             clearOwnedAnimations(layer)
             layer.position.x = endpoint
@@ -78,15 +83,15 @@ final class NativeCapsuleMotion {
             return
         }
         if let lastSpec, lastSpec != spec, !impulses.isEmpty {
-            // A live motion-style change is rare. Rebase from presentation, with
-            // the old physical velocity, then use the NEW spring coefficients.
+            // Rebase BOTH position and velocity at the same layer-local instant.
+            // presentation() is an approximate previous frame; mixing that
+            // position with the current analytic velocity creates a discontinuity.
             impulses.removeAll { layer.animation(forKey: $0.key) == nil }
-            let visible = layer.presentation()?.position.x
-                ?? CGFloat(Double(previous) + impulses.reduce(0) { $0 + $1.sample(at: local).value })
+            let visible = Double(previous) + impulses.reduce(0) { $0 + $1.sample(at: local).value }
             let velocity = impulses.reduce(0) { $0 + $1.sample(at: local).velocity }
             clearOwnedAnimations(layer)
             layer.position.x = endpoint
-            add(from: Double(visible - endpoint), velocity: velocity, spec: spec, time: local, layer: layer)
+            add(from: visible - Double(endpoint), velocity: velocity, spec: spec, time: local, layer: layer)
         } else {
             layer.position.x = endpoint
             add(from: Double(previous - endpoint), velocity: 0, spec: spec, time: local, layer: layer)

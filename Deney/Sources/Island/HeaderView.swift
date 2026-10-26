@@ -21,6 +21,8 @@ final class HeaderView: FlippedView {
     private lazy var capsuleMotion = NativeCapsuleMotion(layer: capsule)
     private var lastLayoutTab: ExpandedTab?
     private var lastRowShift: CGFloat = 0
+    private var lastMotionStyle: MotionStyle?
+    private var lastLayoutStyle: MotionStyle?
     private lazy var driver = FrameDriver(view: self) { [weak self] dt in
         guard let self else { return false }
         self.shift.step(dt)
@@ -71,6 +73,11 @@ final class HeaderView: FlippedView {
 
     func refresh() {
         rebuildButtons()
+        let style = DeneyMotion.effectiveStyle(model.motionStyle)
+        if let lastMotionStyle, lastMotionStyle != style {
+            for button in buttons.values { button.retargetMotion(spec: DeneyMotion.resize(style: style)) }
+        }
+        lastMotionStyle = style
         let tab = model.presentation.expandedTab
         if tab != selectedTab {
             let previousTab = selectedTab
@@ -164,10 +171,12 @@ final class HeaderView: FlippedView {
         // Seçim kapsülü (matchedGeometryEffect): yerleşim değişince yeniden boyutlama yayıyla, değişmezse anında.
         if let sx = layoutPositions[tab] {
             ensureCapsuleLayer()
-            let spec = animate && layout != lastLayout ? DeneyMotion.resize(style: style) : nil
+            let styleChanged = lastLayoutStyle != nil && lastLayoutStyle != style
+            let spec = (animate && layout != lastLayout) || styleChanged ? DeneyMotion.resize(style: style) : nil
             capsuleMotion.move(to: pixelRect(CGRect(x: sx, y: y, width: size.width, height: size.height)), spec: spec)
         }
         lastLayout = layout
+        lastLayoutStyle = style
         applyVisualOffsets()
         if shift.isActive { driver.start() }
     }
@@ -242,6 +251,15 @@ final class TabButtonView: FlippedView {
         isSelected = selected
         setAccessibilitySelected(selected)
         updateTint(spec: spec)
+    }
+
+    func retargetMotion(spec: SpringSpec) {
+        if usesLayerOpacity {
+            if opacity.isActive { updateTint(spec: spec) }
+        } else if colorAmount.isActive {
+            colorAmount.animate(to: isSelected ? 1 : 0, spec: spec)
+            colorDriver.start()
+        }
     }
     /// Seçililik miktarı (0…1). Tek katmanlı sembollerde katman opaklığı (render sunucusunda); Pano/Mikser'de renk alfası
     /// alt yollara ayrı uygulandığı için kare sürücüsüyle renk karışımı (SwiftUI renk animasyonu ile birebir).
