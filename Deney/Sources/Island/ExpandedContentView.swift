@@ -92,7 +92,7 @@ final class ExpandedContentView: FlippedView, IslandContentView {
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
     deinit {
-        MainActor.assumeIsolated { panels.values.forEach { $0.panel.didHide() } }
+        MainActor.assumeIsolated { panels.values.forEach { $0.suspend() } }
     }
 
     func fittingFrameSize(canvas: CGSize, metrics: NotchMetrics) -> CGSize {
