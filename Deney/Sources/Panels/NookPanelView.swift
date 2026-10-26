@@ -16,6 +16,7 @@ final class NookPanelView: FlippedView, IslandPanel {
     private let reminders: NookRemindersView
     private let shortcutsDivider = SeparatorView()
     private let shortcuts: NookShortcutsView
+    private var isViewing = false
     private lazy var observer = Observer(track: { [environment] in
         _ = environment.preferences.nookLayout
     }, apply: { [weak self] in self?.needsLayout = true })
@@ -41,6 +42,8 @@ final class NookPanelView: FlippedView, IslandPanel {
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
     func didShow() {
+        guard !isViewing else { return }
+        isViewing = true
         func timed(_ name: String, _ body: () -> Void) {
             let t0 = CACurrentMediaTime(); body()
             if FrameDriver.isLogging { FrameDriver.note(String(format: "nook.didShow %@ %.2f ms", name, (CACurrentMediaTime() - t0) * 1000)) }
@@ -53,6 +56,8 @@ final class NookPanelView: FlippedView, IslandPanel {
     }
 
     func didHide() {
+        guard isViewing else { return }
+        isViewing = false
         observer.stop()
         media.didHide(); calendar.didHide(); reminders.didHide(); shortcuts.didHide()
     }
@@ -79,7 +84,9 @@ final class NookPanelView: FlippedView, IslandPanel {
             x += m + 0.5 + m
             reminders.frame = CGRect(x: x, y: 0, width: widths[1], height: bounds.height)
             x += widths[1]
-            if window != nil, !reminders.isViewing { reminders.didShow() }
+            // Cached/dormant panels remain attached to the window. A layout pass
+            // is not a visibility event and must not restart hidden observers.
+            if isViewing, window != nil, !reminders.isViewing { reminders.didShow() }
         } else if reminders.isViewing {
             reminders.didHide()
         }
