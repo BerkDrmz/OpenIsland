@@ -23,7 +23,7 @@ final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
     init(notes: NotesStore, launcher: LauncherStore) {
         self.notes = notes
         self.launcher = launcher
-        let textView = NSTextView(frame: .zero)
+        let textView = NotesTextView(frame: .zero)
         self.textView = textView
         super.init(frame: .zero)
         // SwiftUI `TextEditor`'ün metin görünümü ayarlarıyla birebir (çalışma anında okunmuştur): ekleme imleci vurgu
@@ -226,4 +226,12 @@ final class LauncherTileView: PlainButton, TransientStateResettable {
         menu.addItem(StatusMenuItem(title: "Kaldır", keyEquivalent: "") { [remove] in remove() })
         return menu
     }
+}
+
+/// The island is deliberately nonactivating. A standard NSTextView discards
+/// the first click while making that panel key, leaving the window itself as
+/// first responder. Accept that same click in this editor only, as the island's
+/// other controls do; do not activate the application or steal focus on hover.
+private final class NotesTextView: NSTextView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

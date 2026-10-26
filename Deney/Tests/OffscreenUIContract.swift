@@ -53,6 +53,7 @@ import IslandCore
             return nil
         }
         if let editor=textView(in:notePanel) {
+            check(editor.acceptsFirstMouse(for:nil),"Notes discards the first explicit editor click in the nonactivating panel")
             check(editor.string==fixture,"Notes initial text differs from private store")
             let range=NSRange(location:4,length:7);editor.setSelectedRange(range)
             await launcher.refreshShortcutsIfNeeded()
