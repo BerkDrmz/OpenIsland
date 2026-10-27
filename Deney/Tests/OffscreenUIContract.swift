@@ -125,6 +125,32 @@ import IslandCore
         } else {check(false,"actual native tracked-link context menu missing")}
         clips.didHide();clips.removeFromSuperview();linkHistory.stop();linkBoard.releaseGlobally()
 
+        // Legacy scrollbars consume viewport width. The mixer document and its
+        // row controls must fit that viewport, not the outer NSScrollView frame.
+        let mixerFit=MixerPanelView(mixer:AudioMixerController(),settings:{})
+        root.addSubview(mixerFit)
+        if let scroll=mixerFit.subviews.first(where:{$0 is NSScrollView}) as? NSScrollView {
+            for autohide in [false,true] { scroll.autohidesScrollers=autohide
+            for style in [NSScroller.Style.legacy,.overlay] {
+                scroll.scrollerStyle=style
+                for width:CGFloat in [320,400,620] {
+                    mixerFit.frame=CGRect(x:0,y:0,width:width,height:180)
+                    mixerFit.needsLayout=true;mixerFit.layoutSubtreeIfNeeded()
+                    let viewport=scroll.contentSize.width
+                    check((scroll.documentView?.frame.width ?? .infinity)<=viewport+0.01,
+                          "mixer document overflows \(style) viewport at \(width) pt")
+                    for row in scroll.documentView?.subviews ?? [] where !row.isHidden {
+                        check(row.frame.minX>=0 && row.frame.maxX<=viewport+0.01,
+                              "mixer control row is clipped behind \(style) scroller at \(width) pt")
+                    }
+                }
+            }}
+        } else {check(false,"mixer scroll view missing")}
+        mixerFit.removeFromSuperview()
+        check(ExpandedTab.focus.symbolName=="stopwatch","focus tab must use the complete stopwatch symbol")
+        check(NSImage(systemSymbolName:ExpandedTab.focus.symbolName,accessibilityDescription:nil) != nil,
+              "complete stopwatch symbol is unavailable")
+
         for tab in ExpandedTab.allCases {
             let model=IslandViewModel(metrics:NotchMetrics(notchSize:CGSize(width:192,height:33.5),style:.notch),configuration:.init(),hapticPerformer:{_ in})
             let content=PanelFactory.make(tab,model:model,environment:env)

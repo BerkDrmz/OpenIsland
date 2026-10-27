@@ -122,8 +122,19 @@ final class MixerPanelView: FlippedView, IslandPanel {
         }
         let top = header.lineHeight + 10
         scroll.frame = pixelRect(CGRect(x: 0, y: top, width: w, height: max(bottom - 10 - top, 0)))
+        let viewportWidth = scroll.contentSize.width
+        layoutDocument(width: viewportWidth)
+        // Showing/hiding a legacy scrollbar can resize the viewport when the
+        // document height changes. Resolve that one size transition immediately,
+        // without polling, global preference changes, or an extra render loop.
+        if scroll.contentSize.width != viewportWidth {
+            layoutDocument(width: scroll.contentSize.width)
+        }
+    }
+
+    private func layoutDocument(width: CGFloat) {
         // İçerik: VStack(spacing: 12) + sağda 3 pt dolgu.
-        let cw = w - 3
+        let cw = max(width - 3, 0)
         var y: CGFloat = 0
         for view in [output, system, input] as [DeviceControlView] {
             view.frame = CGRect(x: 0, y: y, width: cw, height: view.preferredHeight)
@@ -141,7 +152,7 @@ final class MixerPanelView: FlippedView, IslandPanel {
             row.frame = CGRect(x: 0, y: y, width: cw, height: row.preferredHeight)
             y += row.preferredHeight + 12
         }
-        document.frame = CGRect(x: 0, y: 0, width: w, height: max(y - 12, 0))
+        document.frame = CGRect(x: 0, y: 0, width: width, height: max(y - 12, 0))
     }
 }
 

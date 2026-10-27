@@ -8,7 +8,7 @@ extension ExpandedTab {
         case .media: "music.note"
         case .shelf: "tray.and.arrow.down.fill"
         case .clipboard: "doc.on.clipboard"
-        case .focus: "timer"
+        case .focus: "stopwatch"
         case .notes: "note.text"
         case .mirror: "person.crop.circle"
         case .system: "cpu"
