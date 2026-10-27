@@ -1,5 +1,6 @@
 import AppKit
 import IslandCore
+import os
 
 /// Native, non-interactive UI contracts. Works while the session is locked,
 /// but does NOT claim real keyboard/VoiceOver/drag or visible-screen parity.
@@ -7,6 +8,14 @@ import IslandCore
     var shows=0,hides=0
     func didShow(){shows += 1}
     func didHide(){hides += 1}
+}
+private final class CountingSymbolDescriptionImage: NSImage {
+    nonisolated private let counter = OSAllocatedUnfairLock(initialState: 0)
+    var reads: Int { counter.withLock { $0 } }
+    override var accessibilityDescription: String? {
+        get { counter.withLock { $0 += 1 }; return "özel simge" }
+        set {}
+    }
 }
 @main @MainActor final class OffscreenUIContract:NSObject,NSApplicationDelegate {
     static var retained:OffscreenUIContract?
@@ -39,6 +48,41 @@ import IslandCore
         let panel=NSPanel(contentRect:CGRect(x:60,y:60,width:900,height:400),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
         panel.isReleasedWhenClosed=false;panel.ignoresMouseEvents=true;panel.backgroundColor = .black
         let root=FlippedView(frame:CGRect(x:0,y:0,width:900,height:400));panel.contentView=root
+        // Hidden placeholders must not read the system symbol localization
+        // tables until an accessibility client actually asks for the label.
+        // Native image roles, explicit overrides and immediate symbol changes
+        // remain readable; no accessibility feature is disabled or delayed.
+        let symbol = SymbolView("doc.on.clipboard", size: 12)
+        let described = CountingSymbolDescriptionImage(size: NSSize(width: 14, height: 14))
+        symbol.image = described
+        symbol.exposeAsImage()
+        check(described.reads == 0, "symbol exposure eagerly read localization metadata")
+        check(symbol.accessibilityLabel() == "Özel Simge", "symbol label did not use the existing image")
+        check(described.reads == 1, "first AX query did not resolve exactly once")
+        check(symbol.accessibilityLabel() == "Özel Simge" && described.reads == 1, "repeated AX query repeated metadata work")
+        symbol.setAccessibilityLabel("Explicit fixture")
+        check(symbol.accessibilityLabel() == "Explicit fixture", "explicit symbol AX label was overwritten")
+        symbol.exposeAsImage()
+        check(symbol.accessibilityLabel() == "Özel Simge", "automatic AX labeling did not resume")
+        symbol.set("folder", animated: false)
+        let folderLabel = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)?.accessibilityDescription?.capitalized(with: Locale(identifier: "tr_TR")) ?? ""
+        check(symbol.accessibilityLabel() == folderLabel, "replaced symbol retained a stale AX label")
+        symbol.set("display", animated: true)
+        let displayLabel = NSImage(systemSymbolName: "display", accessibilityDescription: nil)?.accessibilityDescription?.capitalized(with: Locale(identifier: "tr_TR")) ?? ""
+        check(symbol.accessibilityLabel() == displayLabel, "animated symbol replacement retained a stale AX label")
+        symbol.image = nil
+        symbol.exposeAsImage()
+        check(symbol.accessibilityLabel() == displayLabel, "missing configured image lost the named-symbol AX fallback")
+        for name in ["doc.on.clipboard", "tray.and.arrow.down", "hand.raised.fill", "speaker.wave.2.fill", "play.fill", "stopwatch", "plus", "cpu", "memorychip", "display", "airpods", "doc", "folder", "xmark", "arrow.counterclockwise"] {
+            for size in [7.0, 10, 12, 20, 28] { for weight in [NSFont.Weight.regular, .semibold, .bold] {
+                let v = SymbolView(name, size: size, weight: weight)
+                let geometry = v.layoutSize
+                v.exposeAsImage()
+                let expected = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.accessibilityDescription?.capitalized(with: Locale(identifier: "tr_TR")) ?? ""
+                check(v.accessibilityLabel() == expected, "system symbol label differs: \(name)/\(size)")
+                check(v.layoutSize == geometry, "symbol AX exposure changed visual geometry")
+            } }
+        }
         // Actual Cocoa text system and stores, but private clipboard and injected
         // shortcut data. These are NOT global keyboard/VoiceOver commands.
         let fixture="OpenIsland K8c fixture\nİkinci satır • 123"

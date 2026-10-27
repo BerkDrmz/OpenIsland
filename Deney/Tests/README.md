@@ -69,3 +69,19 @@ hidden/dormant state and repeated reopening, plus a real native capsule animatio
 when distinct tabs share the same surface size (a wide-notch fixture). It never
 sends global input, requests privacy permissions or activates camera/audio.
 A passing result is not an FPS, energy, physical keyboard or VoiceOver claim.
+
+## Demand-driven symbol accessibility
+
+The full `OffscreenUIContract` checks that exposing a placeholder image does not
+read symbol localization metadata, its first AX label request resolves once,
+repeat requests reuse that label, explicit names still win, and static/animated
+symbol replacement cannot keep a stale label. It also covers the named-symbol
+fallback when there is no configured image, plus system-label/geometry parity
+across 225 symbol/size/weight combinations. The counter image uses a lock so the
+SDK's nonisolated NSImage getter remains Sendable-correct.
+
+Use a **fresh private support directory and defaults suite for each contract
+run**. In particular, a persisted link-cleaner fixture can preserve an old item's
+identity through deduplication; reusing it is not a clean test of a newly created
+fixture item. These checks do not claim live VoiceOver speech/navigation, frame
+latency, or CPU/GPU/energy improvements.

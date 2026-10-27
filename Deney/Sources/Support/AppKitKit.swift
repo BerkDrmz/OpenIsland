@@ -337,6 +337,8 @@ final class SymbolView: NSImageView {
     func set(_ name: String, animated: Bool = true) {
         guard name != symbol else { return }
         symbol = name
+        symbolLabel = nil
+        labelImage = nil
         inkBounds = nil
         let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
         if animated, let image, #available(macOS 14.0, *) {
@@ -424,13 +426,41 @@ final class SymbolView: NSImageView {
     override func isAccessibilityElement() -> Bool { isExposed }
     override func accessibilityChildren() -> [Any]? { nil }
 
-    /// Bağımsız görsel olarak AX'e açar (SwiftUI `Image(systemName:)`): sistemin sembol etiketi, sözcükler büyük harfle.
+    /// Exposing a symbol must not synchronously load Apple's localization tables
+    /// while constructing a panel (including placeholders that stay hidden).
+    /// Resolve on the first real AX query, from the image we already configured.
+    /// The result is per-image, not a growing global cache or background task.
+    private var usesSymbolLabel = false
+    private weak var labelImage: NSImage?
+    private var symbolLabel: String?
+
     func exposeAsImage(frameOf container: NSView? = nil) {
-        let description = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.accessibilityDescription ?? ""
         frameContainer = container
         isExposed = true
         setAccessibilityRole(.image)
-        setAccessibilityLabel(description.capitalized(with: Locale(identifier: "tr_TR")))
+        usesSymbolLabel = true
+        symbolLabel = nil
+        labelImage = nil
+    }
+
+    override func accessibilityLabel() -> String? {
+        guard usesSymbolLabel else { return super.accessibilityLabel() }
+        let current = image
+        if let symbolLabel, labelImage === current { return symbolLabel }
+        // Preserve the old label fallback even if a configuration has no image.
+        let source = current ?? NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        let label = (source?.accessibilityDescription ?? "").capitalized(with: Locale(identifier: "tr_TR"))
+        labelImage = current
+        symbolLabel = label
+        return label
+    }
+
+    override func setAccessibilityLabel(_ label: String?) {
+        // Explicit caller-provided names retain normal NSImageView semantics.
+        usesSymbolLabel = false
+        symbolLabel = nil
+        labelImage = nil
+        super.setAccessibilityLabel(label)
     }
 
     /// SwiftUI sembol görselinin AX çerçevesi, sembolün mürekkep sınırıdır (görüntü kutusu değil). Yalnız AX sorgusunda,
