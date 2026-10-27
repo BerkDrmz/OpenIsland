@@ -58,3 +58,14 @@ energy acceptance test.
 pickers and popup pickers carry their visible row title as an explicit accessible
 name. These checks do not qualify speech, VoiceOver cursor navigation or physical
 keyboard behavior as passed.
+
+## Warm-host motion regression
+
+`build-ui-contract.sh OUT MotionLifecycleCheck.swift` builds the full native
+source with the visible, isolated motion entry point instead of the offscreen
+contract. Run `OUT/ui-contract RESULT.json` with the same private diagnostics,
+defaults and support variables above. It checks retained host/window identity,
+hidden/dormant state and repeated reopening, plus a real native capsule animation
+when distinct tabs share the same surface size (a wide-notch fixture). It never
+sends global input, requests privacy permissions or activates camera/audio.
+A passing result is not an FPS, energy, physical keyboard or VoiceOver claim.

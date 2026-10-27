@@ -158,7 +158,7 @@ final class IslandCanvasView: NSView {
         if FrameDriver.isLogging {
             FrameDriver.note("model \(model.presentation) \(Int(model.layout.size.width))x\(Int(model.layout.size.height)) pinned=\(model.isPinned) relax=\(model.isRelaxing) hud=\(model.hud != nil) notice=\(model.notice != nil) content=\(model.metrics.content) hovering=\(model.machine.context.isHovering)")
         }
-        morph(toLayout: target.layout, presentation: target.presentation)
+        let readyOpening = morph(toLayout: target.layout, presentation: target.presentation)
         if model.presentation != displayedPresentation || model.presentation.expandedTab != displayedTab {
             let t0 = CACurrentMediaTime()
             rebuildContent(animated: true)
@@ -166,6 +166,9 @@ final class IslandCanvasView: NSView {
         } else {
             slots.forEach { $0.view.refresh() }
         }
+        // A previously displayed, still-attached host needs no run-loop hop.
+        // Activate/refresh it first, then start the original spring in this event.
+        if let readyOpening, !readyOpening.isCancelled { readyOpening.perform() }
         let relaxTarget = model.isRelaxing ? Double(DeneyMotion.relaxScale) : 1
         if relax.target != relaxTarget {
             relax.animate(to: relaxTarget, spec: style == .reduced ? DeneyMotion.reduced : DeneyMotion.relax)
@@ -175,8 +178,8 @@ final class IslandCanvasView: NSView {
 
     // MARK: - Yüzey morph'u (IslandRootView.morph ile aynı mantık)
 
-    private func morph(toLayout layout: IslandLayout, presentation: IslandPresentation) {
-        guard layout != surfaceLayout || presentation != surfacePresentation else { return }
+    private func morph(toLayout layout: IslandLayout, presentation: IslandPresentation) -> DispatchWorkItem? {
+        guard layout != surfaceLayout || presentation != surfacePresentation else { return nil }
         pendingOpening?.cancel()
         pendingOpening = nil
         let style = DeneyMotion.effectiveStyle(model.motionStyle)
@@ -186,11 +189,12 @@ final class IslandCanvasView: NSView {
             } else {
                 applySurface(layout: layout, presentation: presentation, spec: DeneyMotion.resize(style: style))
             }
-            return
+            return nil
         }
         let spec = DeneyMotion.morph(from: surfacePresentation, to: presentation, style: style)
-        // Daha önce çizilmiş içerik (saklanan ya da kapanırken geri dönen) ilk kareyi beklemez: SwiftUI gibi bir
-        // run-loop turu sonra başlar. Yeni kurulan içerik ise ilk karesi ekrana çıkınca başlar.
+        // Already displayed content can start in this input event after refresh,
+        // but only while its host is still attached. A new host keeps its first
+        // presented-frame preparation, so no cold texture draw interrupts motion.
         let contentIsDrawn = spareExpanded?.hasBeenShown == true || slots.contains { $0.isExpanded && $0.isRemoving }
         if presentation.isExpanded && !surfacePresentation.isExpanded && contentIsDrawn {
             let work = DispatchWorkItem { [weak self] in
@@ -199,6 +203,8 @@ final class IslandCanvasView: NSView {
                 self?.pendingOpening = nil
             }
             pendingOpening = work
+            let attached = window != nil && (spareExpanded?.window === window || slots.contains { $0.isExpanded && $0.isRemoving && $0.view.window === window })
+            if attached { return work }
             DispatchQueue.main.async(execute: work)
         } else if presentation.isExpanded && !surfacePresentation.isExpanded {
             // Önce hedef içerik kurulup yerleşir ve ilk karesi ekrana çıkar (katman dokuları render sunucusuna yüklenir),
@@ -213,6 +219,7 @@ final class IslandCanvasView: NSView {
         } else {
             applySurface(layout: layout, presentation: presentation, spec: spec)
         }
+        return nil
     }
 
     private func applySurface(layout: IslandLayout, presentation: IslandPresentation, spec: SpringSpec) {
@@ -265,7 +272,22 @@ final class IslandCanvasView: NSView {
         let slot = ContentSlot(key: key, view: view, blurs: style != .reduced && !key.isExpanded)
         slots.append(slot)
         (view as? DropZoneContentView)?.zone = dropZone
-        contentView.addSubview(view, positioned: .below, relativeTo: media)
+        if view.superview === contentView {
+            // Reorder without unlinking the cached host from its window. A
+            // remove/add cycle invalidates the entire native drawing subtree.
+            var order = contentView.subviews.filter { $0 !== view }
+            order.insert(view, at: order.firstIndex(where: { $0 === media }) ?? order.count)
+            var ranks = Dictionary(uniqueKeysWithValues: order.enumerated().map { (ObjectIdentifier($0.element), $0.offset) })
+            withUnsafeMutablePointer(to: &ranks) { context in
+                contentView.sortSubviews({ a, b, context in
+                    let ranks = context!.assumingMemoryBound(to: [ObjectIdentifier: Int].self).pointee
+                    let a = ranks[ObjectIdentifier(a)]!, b = ranks[ObjectIdentifier(b)]!
+                    return a < b ? .orderedAscending : (a > b ? .orderedDescending : .orderedSame)
+                }, context: context)
+            }
+        } else {
+            contentView.addSubview(view, positioned: .below, relativeTo: media)
+        }
         spare?.activate()
         if key.isExpanded {
             // Yüzey hazırlanıp hareket etmeye başlayınca belirir (surfacePresentation genişlediğinde).
@@ -286,14 +308,19 @@ final class IslandCanvasView: NSView {
         active = media.step(dt) || active
         for slot in slots { active = slot.step(dt) || active }
         let finished = slots.filter { $0.isRemoving && $0.isFinished }
-        finished.forEach { $0.view.removeFromSuperview() }
-        slots.removeAll { slot in finished.contains { $0 === slot } }
-        // Kapanan genişletilmiş içerik yeniden kullanılmak üzere saklanır (yeni kurulum yok; kare kaybı yok).
-        for slot in finished where slot.isExpanded {
-            guard spareExpanded == nil, let view = slot.view as? ExpandedContentView else { continue }
-            view.suspend()
-            spareExpanded = view
+        for slot in finished {
+            if slot.isExpanded, spareExpanded == nil, let view = slot.view as? ExpandedContentView {
+                // Keep the already retained cache attached: hiding excludes it
+                // from mouse/keyboard/AX navigation while preserving its layers.
+                // suspend still releases every panel's visibility ownership.
+                view.suspend()
+                view.isHidden = true
+                spareExpanded = view
+            } else {
+                slot.view.removeFromSuperview()
+            }
         }
+        slots.removeAll { slot in finished.contains { $0 === slot } }
         applyFrame()
         return active || !finished.isEmpty
     }

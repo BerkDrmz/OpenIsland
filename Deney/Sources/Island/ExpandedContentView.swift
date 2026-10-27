@@ -5,7 +5,7 @@ import IslandCore
 ///
 /// Paneller sekme başına bir kez kurulur ve aynı açık oturum boyunca pencerede kalır; seçili olmayan panel gizlenir.
 /// SwiftUI'deki `onAppear/onDisappear` anlamı panelin kendi `didShow/didHide` çağrılarıyla korunur (örnekleme,
-/// konum izleme vb. yalnız panel görünürken). Ada kapanınca görünüm bırakılır; her açılış özgünle aynı başlar.
+/// konum izleme vb. yalnız panel görünürken). Ada kapanınca host gizlenip uyutulur; geçici etkileşim durumu sıfırlanır.
 ///
 /// Açılışta kurulum/çizim donması olmasın diye bir sonraki açılışın görünümü ada kapalıyken **uyku halinde** önceden
 /// kurulur (`dormant`): panel yerleşir ama `didShow` çağrılmaz, gözlem/örnekleme başlamaz; `activate()` açılış anında

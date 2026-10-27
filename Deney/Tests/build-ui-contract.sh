@@ -2,6 +2,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$1"
+ENTRY="${2:-OffscreenUIContract.swift}"
+case "$ENTRY" in OffscreenUIContract.swift|MotionLifecycleCheck.swift) ;; *) echo "Unsupported UI contract entry: $ENTRY" >&2; exit 64;; esac
 mkdir -p "$OUT"
 cd "$ROOT"
 cp Support/Info.plist "$OUT/TestInfo.plist"
@@ -17,4 +19,4 @@ done < <(find Sources/OpenIsland Deney/Sources -name '*.swift' | sort)
 # attribute is removed so the test executable supplies its own entry point.
 sed '/^@main$/d' Deney/Sources/App/DeneyApp.swift > "$OUT/DeneyAppWithoutEntry.swift"
 FILES+=("$OUT/DeneyAppWithoutEntry.swift")
-swiftc "${FLAGS[@]}" -parse-as-library -module-name MotionUIContract -I "$OUT" -L "$OUT" -lIslandCore -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$OUT/TestInfo.plist" -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker 14.0 "${FILES[@]}" Deney/Tests/OffscreenUIContract.swift -o "$OUT/ui-contract"
+swiftc "${FLAGS[@]}" -parse-as-library -module-name MotionUIContract -I "$OUT" -L "$OUT" -lIslandCore -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$OUT/TestInfo.plist" -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker 14.0 "${FILES[@]}" "Deney/Tests/$ENTRY" -o "$OUT/ui-contract"

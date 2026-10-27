@@ -82,13 +82,10 @@ final class HeaderView: FlippedView {
         if tab != selectedTab {
             let previousTab = selectedTab
             selectedTab = tab
-            // SwiftUI: sekme geçişi yerleşimi değiştiriyorsa `IslandMotion.resize` işleminde, değilse animasyonsuz.
+            // Selection feedback follows the same spring even when the body sizes match.
             var spec: SpringSpec?
-            if let old = previousTab, let tab, window != nil {
-                let metrics = model.metrics
-                if IslandLayoutEngine.layout(for: .expanded(old), metrics: metrics) != IslandLayoutEngine.layout(for: .expanded(tab), metrics: metrics) {
-                    spec = DeneyMotion.resize(style: DeneyMotion.effectiveStyle(model.motionStyle))
-                }
+            if previousTab != nil, tab != nil, window != nil {
+                spec = DeneyMotion.resize(style: DeneyMotion.effectiveStyle(model.motionStyle))
             }
             for (t, b) in buttons { b.setSelected(t == tab, spec: spec) }
         }
@@ -168,20 +165,17 @@ final class HeaderView: FlippedView {
         }
         let d = IconButtonView.diameter(for: 9.5)
         pin.setLayoutFrame(CGRect(x: pinX, y: (bounds.height - d) / 2, width: d, height: d))
-        // Seçim kapsülü (matchedGeometryEffect): yerleşim değişince yeniden boyutlama yayıyla, değişmezse anında.
+        // Every real selection retargets from the current visible spring state.
         if let sx = layoutPositions[tab] {
             ensureCapsuleLayer()
             let styleChanged = lastLayoutStyle != nil && lastLayoutStyle != style
-            let spec = (animate && layout != lastLayout) || styleChanged ? DeneyMotion.resize(style: style) : nil
+            let spec = animate || styleChanged ? DeneyMotion.resize(style: style) : nil
             capsuleMotion.move(to: pixelRect(CGRect(x: sx, y: y, width: size.width, height: size.height)), spec: spec)
         }
-        lastLayout = layout
         lastLayoutStyle = style
         applyVisualOffsets()
         if shift.isActive { driver.start() }
     }
-
-    private var lastLayout: IslandLayout?
 
     /// Satır kayması bütün sekmelerde aynı (kullanıcı isteği; SwiftUI'den bilinçli fark): görünen sekmeler arasındaki en
     /// dar gövdenin kayması. SwiftUI'de kayma sekmenin gövde genişliğine göre değişir; dar gövdeli (kompakt) adada her
