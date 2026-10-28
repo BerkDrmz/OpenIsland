@@ -110,6 +110,23 @@ private final class CountingSymbolDescriptionImage: NSImage {
             check(notes.text==fixture,"selection/copy changed Notes store")
         } else {check(false,"native Notes NSTextView missing")}
         notePanel.didHide();notePanel.removeFromSuperview();launcher.shutdown();notes.flush()
+        // These are real AppKit child views, not a SwiftUI opaque provider.
+        // An opaque role exposes the buttons to AX queries but traps actual
+        // VoiceOver linear navigation on the first launcher tile.
+        let accessibleStack = LazyStackView(frame: CGRect(x: 0, y: 0, width: 160, height: 40))
+        root.addSubview(accessibleStack)
+        let stackLabels = ["Fixture One", "Fixture Two", "Fixture Three"]
+        for (index, label) in stackLabels.enumerated() {
+            let button = PlainButton()
+            button.setAccessibilityLabel(label)
+            button.frame = CGRect(x: index * 40, y: 0, width: 28, height: 28)
+            accessibleStack.addSubview(button)
+        }
+        check(accessibleStack.accessibilityRole() == .group, "AppKit stack uses an opaque provider instead of a native accessible group")
+        let accessibleChildren = (accessibleStack.accessibilityChildren() ?? []).compactMap { $0 as? NSView }
+        check(accessibleChildren.map { $0.accessibilityLabel() ?? "" } == stackLabels, "native accessible group lost children or their source order")
+        check(accessibleStack.accessibilityFrame().width == 108, "native accessible group changed its tight child-union geometry")
+        accessibleStack.removeFromSuperview()
         // Native settings controls need their own accessible names. Nearby
         // static text is not a reliable VoiceOver/control association.
         let switchRow=SettingsToggleRow("Fixture switch",get:{false},set:{_ in})

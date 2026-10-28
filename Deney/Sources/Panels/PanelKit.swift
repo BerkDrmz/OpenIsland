@@ -182,13 +182,15 @@ extension NSAccessibility.Role {
     static let opaqueProviderGroup = NSAccessibility.Role(rawValue: "AXOpaqueProviderGroup")
 }
 
-/// SwiftUI `LazyVStack`/`LazyVGrid` karşılığı belge görünümü: AX rolü aynı, AX çerçevesi de SwiftUI gibi gerçekleşmiş
-/// çocukların birleşimidir (belgenin tüm yüksekliği değil).
+/// SwiftUI `LazyVStack`/`LazyVGrid` karşılığı belge görünümü. AppKit çocukları native AX grubu olarak gezilir;
+/// AX çerçevesi SwiftUI gibi gerçekleşmiş çocukların birleşimidir (belgenin tüm yüksekliği değil).
 class LazyStackView: FlippedView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         setAccessibilityElement(true)
-        setAccessibilityRole(.opaqueProviderGroup)
+        // AppKit supplies these NSView children itself; this is not SwiftUI's
+        // opaque accessibility provider. Use the native, navigable group role.
+        setAccessibilityRole(.group)
     }
 
     @available(*, unavailable)
