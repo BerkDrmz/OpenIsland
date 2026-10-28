@@ -94,7 +94,7 @@ final class RemindersService {
             AppHandoff.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"))
             return
         }
-        provider.store.requestFullAccessToReminders { [weak self] _, _ in
+        provider.store.requestFullAccessToReminders { @Sendable [weak self] _, _ in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self?.refreshAuthorization()
@@ -120,7 +120,10 @@ final class RemindersService {
         let endOfToday = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: .now))
         let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: endOfToday, calendars: nil)
         let now = Date()
-        fetchToken = store.fetchReminders(matching: predicate) { [weak self] reminders in
+        // EventKit invokes this legacy completion on its own queue. Explicit
+        // Sendable isolation keeps the mapping/sort closures from inheriting
+        // this service's MainActor; only immutable values cross to the UI.
+        fetchToken = store.fetchReminders(matching: predicate) { @Sendable [weak self] reminders in
             let mapped = (reminders ?? [])
                 .map { reminder -> ReminderItem in
                     let due = reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }

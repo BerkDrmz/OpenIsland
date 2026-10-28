@@ -58,6 +58,10 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
   Tools/PerformanceChecks/RemindersCheck.swift -o "$CHECK_DIR/reminders-check"
 "$CHECK_DIR/reminders-check"
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
+  Sources/OpenIsland/Features/Focus/RemindersService.swift \
+  Tools/PerformanceChecks/RemindersFetchCheck.swift -o "$CHECK_DIR/reminders-fetch-check"
+"$CHECK_DIR/reminders-fetch-check"
+swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
   Sources/OpenIsland/System/PermissionsCenter.swift Tools/PerformanceChecks/PermissionsCheck.swift \
   -o "$CHECK_DIR/permissions-check"
 "$CHECK_DIR/permissions-check"
