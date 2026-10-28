@@ -1,6 +1,33 @@
 import AppKit
 import IslandCore
 
+// Hold an actual script completion, not a guessed wall-clock delay. Cancellation
+// is deliberately ignored so the source must reject an obsolete completion.
+@MainActor final class ScriptCompletionGate {
+    private var completion: CheckedContinuation<Void, Never>?
+    private var entry: CheckedContinuation<Void, Never>?
+    private var entered = false
+
+    func hold() async {
+        await withCheckedContinuation {
+            completion = $0
+            entered = true
+            entry?.resume(); entry = nil
+        }
+    }
+
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { entry = $0 }
+    }
+
+    func release() {
+        guard let completion else { preconditionFailure("Script completion was not held") }
+        self.completion = nil
+        completion.resume()
+    }
+}
+
 // Real player lifecycle/command code; no real Apple Events, permissions or network traffic.
 @MainActor final class ScriptRunner {
     static let shared = ScriptRunner()
@@ -12,6 +39,8 @@ import IslandCore
     var refreshDuration: Int32 = 240000
     var position: Double = 10
     var delayedSeekAcknowledgement = false
+    private var unappliedSeeks: [Double] = []
+    var nextRefreshGate: ScriptCompletionGate?
     var state = "playing"
     var coverURL = ""
     var includeRefreshID = true
@@ -29,6 +58,12 @@ import IslandCore
         await withCheckedContinuation { callWaiters.append((count, $0)) }
     }
 
+    func applyAcknowledgedSeek(_ time: Double) {
+        guard let index = unappliedSeeks.firstIndex(of: time) else { preconditionFailure("Seek was not acknowledged") }
+        unappliedSeeks.remove(at: index)
+        position = time
+    }
+
     func execute<T: Sendable>(_ source: String, cacheResult: Bool = true, transform: @escaping @Sendable (NSAppleEventDescriptor) -> T?) async -> Outcome<T> {
         calls.append(source)
         let ready = callWaiters.filter { calls.count >= $0.0 }
@@ -36,6 +71,7 @@ import IslandCore
         for (_, waiter) in ready { waiter.resume() }
         if denied || (deniedCover && source == "cover") { return .init(value: nil, errorCode: -1743) }
         let result: NSAppleEventDescriptor
+        var completionGate: ScriptCompletionGate?
         if source.contains("return {player position") {
             result = .list()
             result.insert(.init(double: syncPosition), at: 1)
@@ -43,6 +79,8 @@ import IslandCore
             result.insert(.init(string: syncID), at: 3)
             if let syncDuration { result.insert(.init(double: syncDuration), at: 4) }
         } else if source.contains("return {name") {
+            completionGate = nextRefreshGate
+            nextRefreshGate = nil
             result = .list()
             var items: [NSAppleEventDescriptor] = [.init(string: "Track"), .init(string: "Artist"), .init(string: "Album"), .init(int32: refreshDuration), .init(double: position), .init(string: state)]
             if includeRefreshID && source.contains("id of current track") { items.append(.init(string: trackID)) }
@@ -58,10 +96,11 @@ import IslandCore
                   source.contains("set player position to "), let time = Double(value) {
             precondition(!cacheResult, "Seek scripts must not be cached")
             if delayedSeekAcknowledgement {
-                Task { try? await Task.sleep(for: .milliseconds(20)); self.position = time }
+                unappliedSeeks.append(time)
             } else { position = time }
             result = .init(boolean: true)
         } else { result = .init(boolean: true) }
+        if let completionGate { await completionGate.hold() }
         return .init(value: transform(result), errorCode: nil)
     }
 }
@@ -565,19 +604,42 @@ import IslandCore
         delayed.onUpdate = { latest = $0 }
         delayed.start(); await delayed.pendingUpdate?.value
         runner.delayedSeekAcknowledgement = true
-        let delayedAccepted = await delayed.seek(to: 0)
+        let initialCalls = runner.calls.count
+        let initialSeek = Task { await delayed.seek(to: 0) }
+        await runner.waitForCalls(initialCalls + 1)
+        precondition(runner.position == 30, "Mock applied the seek before its acknowledgement")
+        runner.applyAcknowledgedSeek(0)
+        let delayedAccepted = await initialSeek.value
         precondition(delayedAccepted, "Deferred seek rejected")
         guard latest?.elapsed == 0 else { print("FAIL: successful seek published pre-seek position before Spotify applied it"); exit(1) }
+        // Suspend the first *read result* after it has captured 20. The second
+        // seek publishes 60 before that result is released. Unlike overlapping
+        // 5/20 ms mock timers, this tests stale completions, not scheduler luck.
+        let oldRefresh = ScriptCompletionGate()
+        runner.nextRefreshGate = oldRefresh
+        let firstCalls = runner.calls.count
         let firstSeek = Task { await delayed.seek(to: 20) }
-        try? await Task.sleep(for: .milliseconds(5))
+        await runner.waitForCalls(firstCalls + 1)
+        runner.applyAcknowledgedSeek(20)
+        await oldRefresh.waitUntilEntered()
+        let secondCalls = runner.calls.count
         let secondSeek = Task { await delayed.seek(to: 60) }
-        _ = await firstSeek.value; _ = await secondSeek.value
+        await runner.waitForCalls(secondCalls + 1)
+        runner.applyAcknowledgedSeek(60)
+        _ = await secondSeek.value
+        precondition(latest?.elapsed == 60, "Newest seek was not published")
+        oldRefresh.release()
+        _ = await firstSeek.value
         precondition(latest?.elapsed == 60, "Superseded seek completion won over newest intent")
+        let beforeStopCalls = runner.calls.count
         let stoppedSeek = Task { await delayed.seek(to: 10) }
-        try? await Task.sleep(for: .milliseconds(5)); delayed.stop()
+        await runner.waitForCalls(beforeStopCalls + 1)
+        delayed.stop()
+        runner.applyAcknowledgedSeek(10)
         let stoppedValue = latest
         _ = await stoppedSeek.value
-        precondition(latest == stoppedValue, "Stopped source published a deferred seek completion")
+        precondition(latest == stoppedValue && runner.calls.count == beforeStopCalls + 1,
+                     "Stopped source published or queried a deferred seek completion")
         runner.delayedSeekAcknowledgement = false
         runner.syncDuration = nil
         // 12. A player opened paused may expose a provisional duration until
