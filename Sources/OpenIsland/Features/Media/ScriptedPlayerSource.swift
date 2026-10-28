@@ -45,8 +45,8 @@ final class ScriptedPlayerSource: MediaSource {
     ///
     /// Spotify (1.3.x) kendi arayüzünden yapılan sarmada dağıtık bildirim göndermez. Model yalnız bildirimden
     /// ekstrapole ettiği için geri sarmada süreye erken ulaşıp (kırpılarak) "4:52 / −0:00, dolu çubuk" gösteriyordu.
-    /// Bildirimler arasında model, oynatıcının konumuyla ±0,1 sn içinde kalır; bu yüzden çalma başlangıcında okuma
-    /// yapılmaz. Sürekli yoklama yerine yalnızca şu anlarda tek bir hafif okuma yapılır: öngörülen parça sonunda
+    /// Bildirimler arasında model, oynatıcının konumuyla ±0,1 sn içinde kalır; doğrulanmış aynı parça her
+    /// başlatıldığında tekrar okunmaz. Sürekli yoklama yerine şu anlarda tek bir hafif okuma yapılır: öngörülen parça sonunda
     /// bildirim gelmediyse (sınırlı), kullanıcı oynatıcıdan ayrıldığında ve medya paneli görünür olduğunda (çalarken,
     /// sınırlı sıklıkta). Panel görünür ve çalarken oynatıcının kendi penceresindeki sarma da (oynatıcı öndeyken
     /// fare bırakılınca) tek okumayla yakalanır; bu izleyici yalnızca o durumda kuruludur.
@@ -59,7 +59,8 @@ final class ScriptedPlayerSource: MediaSource {
         /// Oynatıcıda fare bırakıldıktan sonra okuma: sarmanın uygulanmasına ve çift tıklamaya pay.
         var clickSettle: TimeInterval = 0.35
         /// Spotify yeni parçada önce bildirimdeki süreyi verir, ≈0,5 sn sonra gerçek süreyi bildirimsiz düzeltir
-        /// (canlı ölçüm: 3/3 parçada 6,29 sn fark). Yeni parça çalarken bu kadar sonra tek doğrulama okuması.
+        /// (canlı ölçüm: 3/3 parçada 6,29 sn fark). Yeni parça veya duraklatılmış açılıştan sonraki ilk oynatmada
+        /// tek doğrulama okuması; aynı Playing bildirimleri bu son tarihi ileri taşımaz.
         var trackSettle: TimeInterval = 1.5
         /// Uygulamanın kendi komutundan (ör. "önceki parça" = baştan başlat) sonra bildirim gelmezse tek okuma.
         var commandSettle: TimeInterval = 0.5
@@ -99,6 +100,10 @@ final class ScriptedPlayerSource: MediaSource {
     private var artworkCache: ArtworkCache?
     private let positionTiming: PositionSyncTiming
     private var positionTask: Task<Void, Never>?
+    /// A paused startup can precede Spotify's final duration, even for the same
+    /// ID. Keep one deadline across duplicate events, not a polling loop.
+    private var durationSettleDeadline: Date?
+    private var settledPlayingIdentity: TrackIdentity?
     private var deactivationObserver: NSObjectProtocol?
     private var lastPositionSync = Date.distantPast
     private var endChecksLeft = 0
@@ -160,6 +165,7 @@ final class ScriptedPlayerSource: MediaSource {
         if let deactivationObserver { NSWorkspace.shared.notificationCenter.removeObserver(deactivationObserver) }
         deactivationObserver = nil
         cancelPendingWork()
+        durationSettleDeadline = nil
         updateClickMonitor()
     }
 
@@ -346,6 +352,8 @@ final class ScriptedPlayerSource: MediaSource {
         if snapshot.state == "Stopped" || !isRunning {
             current = nil
             currentIdentity = nil
+            durationSettleDeadline = nil
+            settledPlayingIdentity = nil
             onUpdate?(nil)
             return
         }
@@ -362,6 +370,10 @@ final class ScriptedPlayerSource: MediaSource {
         )
         let key = identity(for: info, trackID: snapshot.trackID)
         let isNewTrack = currentIdentity != key
+        if isNewTrack {
+            durationSettleDeadline = nil
+            settledPlayingIdentity = nil
+        }
         currentIdentity = key
         if let cache = artworkCache, cache.key == key {
             info.artworkData = cache.data
@@ -371,7 +383,7 @@ final class ScriptedPlayerSource: MediaSource {
         onUpdate?(info) // metin anında; kapak geldiğinde ikinci güncelleme
         // Bildirim taze konumdur; yalnızca öngörülen parça sonunun doğrulaması planlanır.
         endChecksLeft = positionTiming.endChecks
-        schedulePositionCheck(isNewTrack && usesSpotifyIdentity ? .trackSettle : .predictedEnd)
+        schedulePositionAfterUpdate(allowDurationSettle: true)
         guard artworkCache?.key != key || artworkCache?.isComplete != true else { return }
         let expectedGeneration = generation
         artworkTask = Task { [weak self] in
@@ -418,6 +430,8 @@ final class ScriptedPlayerSource: MediaSource {
         guard let snapshot, !snapshot.0.title.isEmpty else {
             current = nil
             currentIdentity = nil
+            durationSettleDeadline = nil
+            settledPlayingIdentity = nil
             onUpdate?(nil)
             schedulePositionCheck(.predictedEnd)
             return
@@ -425,12 +439,19 @@ final class ScriptedPlayerSource: MediaSource {
         var info = snapshot.0
         info.bundleIdentifier = player.bundleID
         let key = identity(for: info, trackID: snapshot.1)
+        if usesSpotifyIdentity, currentIdentity != key {
+            durationSettleDeadline = nil
+            settledPlayingIdentity = nil
+        }
         if var cache = artworkCache, cache.key == key {
             info.artworkData = cache.data
             // This is a fresh control-API reading, not a distributed notification.
             // Same-ID metadata can change; cached duration must not override newer truth.
             if usesSpotifyIdentity, info.duration.isFinite, info.duration > 0 {
                 if cache.duration != info.duration {
+                    if let previous = cache.duration, abs(previous - info.duration) > 0.5 {
+                        settledPlayingIdentity = nil
+                    }
                     cache.duration = info.duration
                     artworkCache = cache
                 }
@@ -448,14 +469,25 @@ final class ScriptedPlayerSource: MediaSource {
         if !usesSpotifyIdentity { currentIdentity = key }
         current = info
         onUpdate?(info)
-        // Kontrol API'sinden taze okuma: yalnızca öngörülen parça sonunun doğrulaması planlanır.
+        // Taze kontrol okuması yeni iş kurmaz; varsa tek süre doğrulamasını, yoksa parça sonunu korur.
         endChecksLeft = positionTiming.endChecks
-        schedulePositionCheck(.predictedEnd)
+        schedulePositionAfterUpdate()
     }
 
     // MARK: - Konum eşitleme
 
     private enum PositionCheck { case predictedEnd, trackSettle, external }
+
+    private func schedulePositionAfterUpdate(allowDurationSettle: Bool = false) {
+        if usesSpotifyIdentity, let info = current, let key = currentIdentity {
+            if !info.isPlaying {
+                durationSettleDeadline = nil
+            } else if allowDurationSettle, settledPlayingIdentity != key, durationSettleDeadline == nil {
+                durationSettleDeadline = Date().addingTimeInterval(positionTiming.trackSettle)
+            }
+        }
+        schedulePositionCheck(durationSettleDeadline == nil ? .predictedEnd : .trackSettle)
+    }
 
     /// En fazla bir bekleyen görev; her yeni bildirim/okuma onu iptal eder. Çalmıyorsa hiçbir şey planlanmaz.
     private func schedulePositionCheck(_ kind: PositionCheck) {
@@ -467,7 +499,7 @@ final class ScriptedPlayerSource: MediaSource {
             guard info.duration > 0, endChecksLeft > 0 else { return }
             delay = max(info.duration - info.elapsed(at: Date()), 0) + positionTiming.endGrace
         case .trackSettle:
-            delay = positionTiming.trackSettle
+            delay = max(durationSettleDeadline?.timeIntervalSinceNow ?? positionTiming.trackSettle, 0)
         case .external:
             delay = 0
         }
@@ -492,7 +524,8 @@ final class ScriptedPlayerSource: MediaSource {
     }
 
     /// Tek Apple Event: {konum, durum, kimlik}. Aynı parçada sapma eşiği aşılırsa konum, okuma anına göre
-    /// yeniden yayınlanır; parça farklıysa mevcut tam yenileme kullanılır. Kapak ve süre bu yoldan değişmez.
+    /// yeniden yayınlanır; parça farklıysa mevcut tam yenileme kullanılır. Kapak yeniden istenmez;
+    /// aynı kimlikteki taze süre okuması önbelleğe ve yayına birlikte uygulanır.
     private func synchronizePosition(_ kind: PositionCheck, generation expectedGeneration: UInt64) async {
         guard isRunning, current != nil else { return }
         let identityField = usesSpotifyIdentity ? "id of current track" : "name of current track"
@@ -513,11 +546,13 @@ final class ScriptedPlayerSource: MediaSource {
         guard isActive(expectedGeneration), var info = current else { return }
         positionTask = nil
         lastPositionSync = received
+        if kind == .trackSettle { durationSettleDeadline = nil }
         // Okunamadı: mevcut sağlık/geri çekilme kuralı geçerli, yeniden planlama yok.
         guard let reading, reading.0.isFinite, reading.0 >= 0 else { return }
         let sameTrack = usesSpotifyIdentity ? currentIdentity == .spotify(reading.2) : info.title == reading.2
         guard sameTrack else { requestRefresh(); return }
         let isPlaying = reading.1 == "playing"
+        if kind == .trackSettle, isPlaying { settledPlayingIdentity = currentIdentity }
         let instant = sent.addingTimeInterval(received.timeIntervalSince(sent) / 2)
         // Oynatıcının sonradan düzelttiği süre (yeni Spotify parçası): önbellek ve yayın aynı kimlikte güncellenir.
         var durationChanged = false
@@ -540,7 +575,7 @@ final class ScriptedPlayerSource: MediaSource {
         } else if kind == .predictedEnd {
             endChecksLeft -= 1
         }
-        schedulePositionCheck(.predictedEnd)
+        schedulePositionAfterUpdate()
     }
 
     private func artwork(for key: TrackIdentity, generation expectedGeneration: UInt64) async -> Data? {
@@ -593,6 +628,11 @@ final class ScriptedPlayerSource: MediaSource {
             guard isActive(expectedGeneration) else { return nil }
             data = if let url { await downloadArtwork(url) } else { nil }
             guard isActive(expectedGeneration) else { return nil }
+            // A one-shot duration check may finish while the cover is downloading.
+            // Keep that newer same-track metadata when publishing the image.
+            if let latest = artworkCache, latest.key == authoritativeKey {
+                cache.duration = latest.duration
+            }
             cache.data = data
             cache.isComplete = true
             artworkCache = cache

@@ -580,10 +580,70 @@ import IslandCore
         precondition(latest == stoppedValue, "Stopped source published a deferred seek completion")
         runner.delayedSeekAcknowledgement = false
         runner.syncDuration = nil
+        // 12. A player opened paused may expose a provisional duration until
+        // first playback, without changing the track ID. Repeated Playing
+        // notifications must not cancel that one pending correction.
+        runner.state = "paused"; runner.position = 7; runner.coverURL = ""; runner.denied = false
+        runner.trackID = "spotify:track:ColdResume"
+        runner.duration = 218933; runner.refreshDuration = 218933
+        runner.syncID = runner.trackID; runner.syncState = "playing"
+        runner.syncPosition = 8; runner.syncDuration = 212646
+        let coldResume = ScriptedPlayerSource(player: metadataPlayer, isRunning: { true }, positionTiming: clickTiming,
+                                              downloadArtwork: { _ in nil })
+        coldResume.onUpdate = { latest = $0 }
+        coldResume.start(); await coldResume.pendingUpdate?.value
+        precondition(latest?.duration == 218.933 && latest?.isPlaying == false)
+        let beforeResumeReads = positionReads()
+        for index in 0..<25 {
+            event(coldResume, id: runner.trackID, state: "Playing", position: 7 + Double(index) * 0.01)
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        for _ in 0..<70 where abs((latest?.duration ?? 0) - 212.646) > 0.000_001 { try? await Task.sleep(for: .milliseconds(10)) }
+        precondition(abs((latest?.duration ?? 0) - 212.646) < 0.000_001 && positionReads() == beforeResumeReads + 1,
+                     "Initial same-ID resume kept provisional duration or repeated its verification")
+        let verifiedResumeReads = positionReads()
+        event(coldResume, id: runner.trackID, state: "Paused", position: 8)
+        event(coldResume, id: runner.trackID, state: "Playing", position: 8)
+        await settle(coldResume)
+        precondition(positionReads() == verifiedResumeReads, "Verified same-track resume repeated duration work")
+        // Cancelling before the deadline must leave no verification callback.
+        runner.trackID = "spotify:track:StoppedBeforeSettle"
+        event(coldResume, id: runner.trackID, state: "Playing", position: 1)
+        await coldResume.pendingUpdate?.value
+        let stoppedSettleReads = positionReads()
+        coldResume.stop()
+        try? await Task.sleep(for: .milliseconds(100))
+        precondition(positionReads() == stoppedSettleReads, "Stopped source ran a pending duration verification")
+        precondition(coldResume.pendingPositionSync == nil && !coldResume.isWatchingPlayerClicks)
+        // A fresh-track cover download must not roll back the authoritative
+        // duration published by the one-shot check while that download waited.
+        runner.state = "paused"; runner.trackID = "spotify:track:BeforeGatedSettle"
+        runner.duration = 230000; runner.refreshDuration = 230000; runner.coverURL = ""
+        let durationGate = DownloadGate()
+        let gatedSettle = ScriptedPlayerSource(player: metadataPlayer, isRunning: { true }, positionTiming: clickTiming,
+                                               downloadArtwork: { await durationGate.download($0) })
+        gatedSettle.onUpdate = { latest = $0 }
+        gatedSettle.start(); await gatedSettle.pendingUpdate?.value
+        runner.trackID = "spotify:track:GatedSettle"; runner.duration = 218933
+        runner.syncID = runner.trackID; runner.syncDuration = 212646
+        runner.syncState = "playing"; runner.syncPosition = 8
+        runner.coverURL = "https://artwork.invalid/gated-settle"
+        event(gatedSettle, id: runner.trackID, state: "Playing", position: 7)
+        await durationGate.waitForDownloads(1)
+        let gatedSettleTask = gatedSettle.pendingUpdate!
+        for _ in 0..<70 where abs((latest?.duration ?? 0) - 212.646) > 0.000_001 { try? await Task.sleep(for: .milliseconds(10)) }
+        precondition(abs((latest?.duration ?? 0) - 212.646) < 0.000_001, "Duration did not settle while artwork waited")
+        durationGate.finish(0, data: Data([7])); await gatedSettleTask.value
+        precondition(abs((latest?.duration ?? 0) - 212.646) < 0.000_001 && latest?.artworkData == Data([7]),
+                     "Late artwork rolled back newer same-ID duration metadata")
+        gatedSettle.stop(); precondition(durationGate.isIdle)
+        runner.coverURL = ""; runner.syncDuration = nil
+        print("PASS Spotify artwork settle: delayed cover preserves newer duration cache and publication")
+        print("PASS Spotify cold resume: one duration correction survives duplicate events; verified resumes do no extra work")
         print("PASS Spotify seek: asynchronous acknowledgement settles once; superseded and stopped completions cannot publish")
         print("PASS Spotify settle: late duration correction published once per new track; app-command restart resynced; notified commands read nothing")
         print("PASS Media matrix: same-track restart, delayed metadata, stopped, quit, wake recovery; Music position read, click resync and title mismatch")
-        print("PASS Spotify position: unnotified backward/forward scrub corrected; no read at playback start; bounded end checks; paused/denied/mismatch safe")
+        print("PASS Spotify position: unnotified scrub corrected; verified playback does no extra read; bounded end checks; paused/denied/mismatch safe")
         print("PASS Spotify: distinct IDs/durations, initial identity, cached restart, boundary seek, rapid play/pause, denied events")
         print("PASS Spotify artwork: duration before gated download; pause/cancel/stop/restart reject stale publication and cache mutation")
         print("PASS ScriptedPlayer: explicit controls/seek recover from denial; Music raw artwork recovers; repeated start does no extra work")
