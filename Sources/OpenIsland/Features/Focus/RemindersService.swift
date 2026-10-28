@@ -12,7 +12,8 @@ struct ReminderItem: Identifiable, Equatable, Sendable {
 /// Apple Anımsatıcılar (EventKit). Ayrı bir yapılacaklar veritabanı yoktur; macOS'un kendi listeleri
 /// kullanılır ve iCloud eşitlemesi kendiliğinden çalışır.
 ///
-/// Olay güdümlü: `EKEventStoreChanged` bildirimi geldiğinde ve görünüm açıldığında yeniden okunur.
+/// Olay güdümlü: `EKEventStoreChanged` veriyi geçersiz kılar; görünürken yeniden okunur.
+/// Değişiklik yoksa tekrar açılışlar yalnız yayımlanmış değerleri kullanır; EventKit nesneleri saklanmaz.
 /// İzin yoksa hiçbir EventKit çağrısı yapılmaz; görünüm "Erişim ver" durumuna düşer.
 @MainActor
 @Observable
@@ -28,11 +29,14 @@ final class RemindersService {
     @ObservationIgnored private var reloadGeneration: UInt64 = 0
     @ObservationIgnored private let readAuthorization: () -> EKAuthorizationStatus
     @ObservationIgnored private var authorizationNeedsRefresh = false
+    // Only immutable published values are reused, never EventKit objects.
+    // Existing store/permission/day/clock/wake events invalidate this snapshot.
+    @ObservationIgnored private var hasCurrentSnapshot = false
     @ObservationIgnored private var authorizationObservers: [(NotificationCenter, NSObjectProtocol)] = []
 
     func beginViewing() {
         visibleClients += 1
-        if visibleClients == 1 { reload() }
+        if visibleClients == 1, !hasCurrentSnapshot || authorizationNeedsRefresh { reload() }
     }
 
     func endViewing() {
@@ -64,6 +68,7 @@ final class RemindersService {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.authorizationNeedsRefresh = true
+                    self.hasCurrentSnapshot = false
                     if self.visibleClients > 0 { self.reload() }
                 }
             }
@@ -74,6 +79,7 @@ final class RemindersService {
     /// Application shutdown, distinct from closing a visible widget.
     func shutdown() {
         visibleClients = 0
+        hasCurrentSnapshot = false
         stop()
         authorizationObservers.forEach { center, token in center.removeObserver(token) }
         authorizationObservers.removeAll()
@@ -107,6 +113,7 @@ final class RemindersService {
     /// Görünüm açıldığında çağrılır: izin yoksa hiçbir şey yapılmaz.
     func reload() {
         guard visibleClients > 0 else { return }
+        hasCurrentSnapshot = false
         reloadGeneration &+= 1
         let generation = reloadGeneration
         if let fetchToken { provider.store.cancelFetchRequest(fetchToken) }
@@ -124,6 +131,7 @@ final class RemindersService {
         // Sendable isolation keeps the mapping/sort closures from inheriting
         // this service's MainActor; only immutable values cross to the UI.
         fetchToken = store.fetchReminders(matching: predicate) { @Sendable [weak self] reminders in
+            let receivedSnapshot = reminders != nil
             let mapped = (reminders ?? [])
                 .map { reminder -> ReminderItem in
                     let due = reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }
@@ -136,6 +144,7 @@ final class RemindersService {
                 MainActor.assumeIsolated {
                     guard let self, self.visibleClients > 0, self.reloadGeneration == generation else { return }
                     self.fetchToken = nil
+                    self.hasCurrentSnapshot = receivedSnapshot
                     if self.items != mapped { self.items = mapped }
                 }
             }
@@ -161,6 +170,10 @@ final class RemindersService {
             try provider.store.save(reminder, commit: true)
             items.removeAll { $0.id == item.id }
             lastError = nil
+            // A fetch started before this write must not resurrect the item or
+            // turn its stale result into a reusable snapshot. User writes are
+            // actual invalidations, unlike unchanged panel appearances.
+            reload()
         } catch {
             lastError = "Kaydedilemedi"
         }
