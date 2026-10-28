@@ -31,6 +31,11 @@ final class AudioMixerController {
     @ObservationIgnored private var panels = 0
     @ObservationIgnored private var listenerFingerprint = ""
     @ObservationIgnored private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+    // HAL can synchronously deliver an IO property event while AudioDeviceStop
+    // waits for that IO thread. Delivering it to .main creates a queue inversion
+    // with the main-actor stop call. The callback must only enqueue actor work.
+    @ObservationIgnored private let listenerQueue = DispatchQueue(label: "openisland.audio-mixer.events")
+    @ObservationIgnored private var listenerGeneration: UInt64 = 0
     @ObservationIgnored private var workspaceObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var engines: [pid_t: AnyObject] = [:]
@@ -298,24 +303,31 @@ final class AudioMixerController {
         guard fingerprint != listenerFingerprint else { return }
         detachListeners()
         listenerFingerprint = fingerprint
+        let generation = listenerGeneration
         for (object, address) in properties {
             var address = address
-            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.scheduleRefresh() }
+            let block: AudioObjectPropertyListenerBlock = { @Sendable [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.listenerGeneration == generation else { return }
+                    self.scheduleRefresh()
+                }
             }
-            if AudioObjectHasProperty(object, &address), AudioObjectAddPropertyListenerBlock(object, &address, .main, block) == noErr {
+            if AudioObjectHasProperty(object, &address), AudioObjectAddPropertyListenerBlock(object, &address, listenerQueue, block) == noErr {
                 listeners.append((object, address, block))
             }
         }
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.scheduleRefresh() }
+                MainActor.assumeIsolated {
+                    guard let self, self.listenerGeneration == generation else { return }
+                    self.scheduleRefresh()
+                }
             })
         }
         workspaceObservers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, self.listenerGeneration == generation else { return }
                 self.isSleeping = true
                 self.refreshTask?.cancel()
                 self.refreshTask = nil
@@ -324,7 +336,7 @@ final class AudioMixerController {
         })
         workspaceObservers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, self.listenerGeneration == generation else { return }
                 self.isSleeping = false
                 self.stopHardwareRoutes()
                 self.scheduleRefresh()
@@ -390,10 +402,13 @@ final class AudioMixerController {
     }
 
     private func detachListeners() {
+        // Invalidate callbacks already queued on either delivery queue before
+        // removing the registrations; they must not revive a hidden/shut mixer.
+        listenerGeneration &+= 1
         listenerFingerprint = ""
         for (object, address, block) in listeners {
             var address = address
-            AudioObjectRemovePropertyListenerBlock(object, &address, .main, block)
+            AudioObjectRemovePropertyListenerBlock(object, &address, listenerQueue, block)
         }
         listeners.removeAll()
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
