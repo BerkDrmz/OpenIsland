@@ -303,6 +303,8 @@ private final class CountingSymbolDescriptionImage: NSImage {
         try? await Task.sleep(for:.milliseconds(60))
         check(container.isHidden && !container.isFadingOut && fake.hides==2,"final fade did not release owner")
         container.suspend();check(fake.hides==2,"suspending a completed fade released owner twice")
+        checkSettingsPersistence(env)
+        checkPrivateClipboardFormats(root)
         container.removeFromSuperview();panel.close();model.cancelPendingEffects();env.shutdown()
         let data:[String:Any]=["checks":checks,"failures":failures,"status":failures.isEmpty ? "PASS":"FAIL",
                               "storageRoot":AppPaths.support.path,"defaultsSuite":ProcessInfo.processInfo.environment["OPENISLAND_TEST_DEFAULTS"]!,
@@ -312,4 +314,120 @@ private final class CountingSymbolDescriptionImage: NSImage {
         print("UI contracts \(checks), failures \(failures.count)")
         exit(failures.isEmpty ? 0:1)
     }
+    /// Native action/serialization coverage, deliberately without a coordinator.
+    /// This must not register login items or enable global app-closing monitors.
+    private func checkSettingsPersistence(_ env: AppEnvironment) {
+        let suite=ProcessInfo.processInfo.environment["OPENISLAND_TEST_DEFAULTS"]!
+        let defaults=UserDefaults(suiteName:suite)!
+        let keys:[String:String]=[
+            "Dokunsal geri bildirim (Force Touch trackpad)":"hapticsEnabled",
+            "Düşük Güç Modu'nda pil tasarrufu":"energySaving",
+            "Müzik nabzı albüm renginde":"albumColoredPulse",
+            "Ağ bağlantısı kesildi / geri geldi":"networkNotices",
+            "Harici ekran ve ekran düzeni değişikliği":"displayNotices",
+            "Pil ve şarj (adaptör, %20, %10, %100)":"batteryNotices",
+            "Ses aygıtı bağlandı / ayrıldı (AirPods, kulaklık)":"audioDeviceNotices",
+            "Parça değişimi":"trackChangeNotices", "Toplantı hatırlatması (5 dk önce)":"meetingReminders",
+            "Kilit açıldı":"unlockNotices", "Dock'ta pencere önizlemeleri":"dockWindowPreviews",
+            "Son pencereyi kırmızı düğmeden kapatınca uygulamadan çık":"quitOnLastWindowClose",
+            "Klavye kısayolu ⌃⌥⌘I ile aç/kapat":"globalHotKey",
+            "Pano geçmişi ve renk seçici":"clipboardHistoryEnabled",
+            "Odak: zamanlayıcı, takvim, anımsatıcılar":"focusModule",
+            "Notlar ve uygulama kısayolları":"notesModule", "Ayna (kamera önizlemesi)":"mirrorModule",
+            "Sistem: CPU, GPU, bellek, sıcaklık, parlaklık":"systemModule",
+            "Sıcaklık, parlaklık ve klavye ışığı":"systemPrivateSensors",
+            "Trackpad jestleri (yatay: parça, dikey: ses)":"gesturesEnabled",
+            "Medya jestini ters çevir (sağa kaydır: sonraki parça)":"reversesMediaSwipe",
+            "İndirme / aktarım canlı etkinliği":"transferActivity"
+        ]
+        func all(_ v:NSView)->[NSView] { [v]+v.subviews.flatMap(all) }
+        let forms=[SettingsContent.general(env),SettingsContent.modules(env.preferences)]
+        var tested=Set<String>()
+        for view in forms {
+            guard let form=view as? SettingsFormView else{check(false,"settings form missing");continue}
+            form.refresh()
+            for control in all(form).compactMap({$0 as? NSSwitch}) {
+                guard let label=control.accessibilityLabel(),let key=keys[label]else{continue}
+                let original=control.state
+                for desired in [original == .on ? NSControl.StateValue.off:.on,original] {
+                    control.state=desired
+                    check(control.sendAction(control.action,to:control.target),"native switch action missing: \(label)")
+                    form.refresh()
+                    check(defaults.object(forKey:key) as? Bool == (desired == .on),"native switch did not persist: \(label)")
+                    check(control.state==desired,"native switch refresh did not round-trip: \(label)")
+                }
+                tested.insert(key)
+            }
+            let enums:[String:(String,[String])]=[
+                "Açık ada boyutu":("expandedSurfaceSize",[ExpandedSurfaceSize.compact.rawValue,ExpandedSurfaceSize.standard.rawValue]),
+                "Hareket":("motionStyle",MotionStyle.allCases.map(\.rawValue)),
+                "Nook düzeni":("nookLayout",NookLayout.allCases.map(\.rawValue))
+            ]
+            for control in all(form).compactMap({$0 as? NSSegmentedControl}) {
+                let label=control.accessibilityLabel() ?? "";let original=control.selectedSegment
+                for index in Array(0..<control.segmentCount)+[original] where index>=0 {
+                    control.selectedSegment=index
+                    check(control.sendAction(control.action,to:control.target),"native segment action missing: \(label)")
+                    form.refresh()
+                    check(control.selectedSegment==index,"native segment refresh lost selection: \(label)")
+                    if let (key,values)=enums[label] {check(defaults.string(forKey:key)==values[index],"native segment did not persist: \(label)")}
+                    else if label=="Üzerine gelince aç" {
+                        let preset=HoverPreset.allCases[index]
+                        check(defaults.bool(forKey:"expandsOnHover")==((preset != .off)),"hover enabled state did not persist")
+                        if let delay=preset.delay{check(defaults.double(forKey:"hoverDelay")==delay,"hover delay did not persist")}
+                    }
+                }
+            }
+            let menus:[String:(String,[String])]=[
+                "Gösterilecek ekran":("displayTarget",DisplayTarget.allCases.map(\.rawValue)),
+                "Tam ekranda":("fullscreenBehavior",FullscreenBehavior.allCases.map(\.rawValue))
+            ]
+            for control in all(form).compactMap({$0 as? NSPopUpButton}) {
+                guard let (key,values)=menus[control.accessibilityLabel() ?? ""]else{continue}
+                let original=control.indexOfSelectedItem
+                for index in Array(0..<control.numberOfItems)+[original] where index>=0 {
+                    control.selectItem(at:index)
+                    check(control.sendAction(control.action,to:control.target),"native popup action missing")
+                    form.refresh()
+                    check(control.indexOfSelectedItem==index && defaults.string(forKey:key)==values[index],"native popup did not round-trip: \(key)")
+                }
+            }
+        }
+        check(tested==Set(keys.values),"settings switch coverage incomplete: \(Set(keys.values).subtracting(tested))")
+        // Login registration and permission-grant buttons intentionally NOT run.
+    }
+
+    private func checkPrivateClipboardFormats(_ root:NSView) {
+        let board=NSPasteboard(name:.init("OpenIsland.private-formats-"+UUID().uuidString))
+        defer{board.releaseGlobally()}
+        let history=ClipboardHistory(storeURL:AppPaths.support.appendingPathComponent("format-history.json"),pasteboard:board)
+        let image=NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:2,pixelsHigh:2,bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0)!
+        let png=image.representation(using:.png,properties:[:])!
+        let file=AppPaths.support.appendingPathComponent("OpenIsland format 你好.bin")
+        let bytes=Data([0,1,2,127,128,255]);try! bytes.write(to:file)
+        let formats:[ClipItem.Content]=[.text("OpenIsland private format"),.image(png),.files([file])]
+        let panel=ClipboardPanelView(history:history,colors:ColorPickerService())
+        panel.frame=CGRect(x:0,y:0,width:760,height:220);root.addSubview(panel);panel.didShow()
+        defer{panel.didHide();panel.removeFromSuperview()}
+        func row(_ v:NSView,_ label:String)->NSView? { if v.accessibilityLabel()==label{return v};return v.subviews.lazy.compactMap{row($0,label)}.first }
+        for content in formats {
+            let item=ClipItem(content:content,date:Date(),sourceApp:"Private format fixture")
+            history.copy(item);panel.didHide();panel.didShow();panel.layoutSubtreeIfNeeded()
+            let label:String
+            switch content{case .text(let t):label=t;case .image:label="Görsel";case .files:label=file.lastPathComponent}
+            guard let native=row(panel,label)else{check(false,"native clipboard format row missing");continue}
+            check(native.accessibilityPerformPress(),"native clipboard format row press failed")
+            switch content {
+            case .text(let text):check(board.string(forType:.string)==text,"native text copy altered bytes")
+            case .image(let data):check(board.data(forType:.png)==data,"native image copy altered bytes")
+            case .files(let files):check(board.readObjects(forClasses:[NSURL.self],options:[.urlReadingFileURLsOnly:true]) as? [URL] == files,"native file copy changed original URL")
+            }
+            let remove=native.accessibilityCustomActions()?.first{$0.name=="Geçmişten sil"}
+            check(remove?.handler?() == true,"native clipboard remove custom action failed")
+            check(!history.items.contains{$0.id==item.id},"deleted native row remained in history")
+        }
+        check((try? Data(contentsOf:file))==bytes,"clipboard file bytes changed")
+        history.clear();check(history.items.isEmpty,"private clipboard clear failed")
+    }
+
 }
