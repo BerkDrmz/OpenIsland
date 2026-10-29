@@ -95,11 +95,21 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         MainActor.assumeIsolated { panels.values.forEach { $0.suspend() } }
     }
 
+    /// Yükseklik sekmeden bağımsız (bütün sekmelerin en büyüğü): çocukların yerleşimi yalnız genişliğe bağlı ve görünüm
+    /// AX öğesi değil. Sekmeye göre değişen yükseklik her seçimde `setFrameSize` ile bütün alt ağacın izleme alanlarını ve
+    /// görünür alanını geçersiz kılıyordu. Ölçüldü (80 ms, A/B/B/A): talimat/seçim −%20, uygulama CPU'su −%13…18. Görünen
+    /// alan ada maskesiyle sınırlı; ekran görüntüsü, AX çerçeveleri ve AX isabet ızgarası 8 sekmede aynı.
     func fittingFrameSize(canvas: CGSize, metrics: NotchMetrics) -> CGSize {
         guard let tab = model.presentation.expandedTab ?? activeTab else { return .zero }
         let layout = IslandLayoutEngine.layout(for: .expanded(tab), metrics: metrics)
-        return CGSize(width: max(canvas.width, layout.size.width), height: layout.size.height)
+        if tallestMetrics != metrics {
+            tallestMetrics = metrics
+            tallestHeight = ExpandedTab.allCases.map { IslandLayoutEngine.layout(for: .expanded($0), metrics: metrics).size.height }.max() ?? 0
+        }
+        return CGSize(width: max(canvas.width, layout.size.width), height: max(tallestHeight, layout.size.height))
     }
+    private var tallestMetrics: NotchMetrics?
+    private var tallestHeight: CGFloat = 0
 
     func refresh() {
         header.refresh()

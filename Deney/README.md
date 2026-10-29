@@ -24,6 +24,17 @@ davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım Swif
   ekleme/silme, önceki sürümle aynı açılışlarda göründü ve kayboldu; bayat veri yok.
 - Kanıt: `OpenIsland-Evidence/20261029-k2/2026-10-29-K2-reminders-ab.md`.
 
+## 29–30 Ekim 2026 — Genişletilmiş içeriğin sabit yüksekliği (K3)
+
+- Genişletilmiş içerik görünümü her sekme seçiminde yeniden boyutlanıyordu. Bu, bütün alt ağacın izleme alanlarını ve
+  görünür alanını geçersiz kılıyordu. Artık yükseklik bütün sekmelerin en büyüğü. Çocukların yerleşimi yalnız genişliğe
+  bağlı ve görünüm AX öğesi değil. Kapak ve nabız görünümlerinin kimsenin dinlemediği çerçeve bildirimleri kapatıldı.
+- Eşdeğerlik: 8 sekmenin ve kompakt adanın ekran görüntüsü piksel piksel aynı. Sistem sekmesindeki fark canlı bellek
+  değerlerinden geliyor. AX çerçeveleri birebir; 8 sekmede ~90 bin noktalık AX isabet ızgarası aynı.
+- A/B/B/A (aynı kimlik, 80 ms, 2 × 4 × 480 seçim): uygulama CPU'su %12,17 → %9,99 ve %11,64 → %10,08; talimat/seçim
+  −%20; CPU-görev enerjisi −%18. 650 ms'de CPU −%8. WindowServer eşit.
+- Kanıt: `OpenIsland-Evidence/20261029-k2` (`vis/K2R-*`, `vis/K3R-*`, `logs/k3r80.json`, `logs/k3r650.json`).
+
 ## Mimari
 
 - **Ortak katman:** `Sources/IslandCore` (durum makinesi, yerleşim motoru) ve `Sources/OpenIsland` altındaki

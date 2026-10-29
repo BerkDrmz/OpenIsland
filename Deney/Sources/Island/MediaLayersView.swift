@@ -28,7 +28,8 @@ final class MediaLayersView: FlippedView {
         addSubview(artwork)
         addSubview(waveform)
         _ = noBlur
-        for view in [artwork, waveform] as [NSView] { view.wantsLayer = true }
+        // Çerçeveleri yuva yaylarıyla her karede değişir; bu görünümlerin çerçeve bildirimini dinleyen yok.
+        for view in [artwork, waveform] as [NSView] { view.wantsLayer = true; view.postsFrameChangedNotifications = false }
         artwork.setAccessibilityElement(true)
         artwork.setAccessibilityRole(.image)
         waveform.setAccessibilityElement(false)
