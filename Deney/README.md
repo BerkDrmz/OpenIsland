@@ -12,6 +12,18 @@ davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım Swif
 - Pano satırının sağ tık menüsü ve AX eyleminde **Takipsiz bağlantıyı kopyala**: yalnız açıkça tanımlı takip parametrelerini, kullanıcı istediğinde çevrimdışı temizler. Özgün geçmiş kaydı korunur; yeni polling yoktur.
 - Aşağıdaki eski tarihli performans ve eşdeğerlik sonuçları tarihsel kayıttır; bu adayın ölçümü değildir. Günlük AppKit güncellemesi kullanıcı onayıyla, mevcut paket kimliği ve yerel sertifika korunarak yapılır; `/Applications/OpenIsland.app` bu çalışmanın hedefi değildir.
 
+## 29 Ekim 2026 — Anımsatıcı anlık görüntüsü (K2) adaya alındı
+
+- Nook her göründüğünde Anımsatıcılar yeniden çekiliyordu. Artık değişiklik yoksa son başarılı değerler kullanılıyor.
+  EventKit değişikliği, uygulama etkinleşmesi, uyanma, gün/saat/saat dilimi değişimi ve kullanıcı ekleme/tamamlama
+  işlemleri anlık görüntüyü geçersiz kılıyor (`RemindersService.swift`). Arayüz ve animasyon kaynakları değişmedi.
+- Gerçek uygulama A/B/B/A (aynı test kimliği ve Anımsatıcılar izni, 80 ms, 2 × 4 × 480 seçim): uygulama talimatı/seçim
+  −5,6% ve −6,1%; `remindd` servisinin faz CPU'su ~0,85 s → 0. Sistem yüklüydü; uygulama CPU yüzdesi kazancı bu ölçümle
+  kanıtlanmadı.
+- Gerçek EventKit kabulü (kullanıcı onaylı, tek geçici test öğesi): Nook gizliyken ve görünürken uygulama dışından
+  ekleme/silme, önceki sürümle aynı açılışlarda göründü ve kayboldu; bayat veri yok.
+- Kanıt: `OpenIsland-Evidence/20261029-k2/2026-10-29-K2-reminders-ab.md`.
+
 ## Mimari
 
 - **Ortak katman:** `Sources/IslandCore` (durum makinesi, yerleşim motoru) ve `Sources/OpenIsland` altındaki
