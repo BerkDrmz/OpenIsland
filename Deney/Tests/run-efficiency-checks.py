@@ -30,6 +30,10 @@ with tempfile.TemporaryDirectory(prefix='openisland-efficiency-') as temp:
     run(flags+linking+[system/(n+'.swift') for n in ['PrivateAPIGuard','SystemSensors','PrivateControls','StorageVolumes','SystemMonitor']]
         +[ROOT/'Deney/Tests/StorageLifecycleCheck.swift','-o',out/'storage-check'])
     run([out/'storage-check'])
+    kit = (ROOT/'Deney/Sources/Panels/PanelKit.swift').read_text()
+    (out/'ObserverActual.swift').write_text('import Foundation\n' + kit[kit.index('@MainActor\nfinal class Observer'):kit.index('/// Tam saniye')])
+    run(flags+[out/'ObserverActual.swift',ROOT/'Deney/Tests/ObserverLifecycleCheck.swift','-o',out/'observer-check'])
+    run([out/'observer-check'])
     if args.metadata_bench:
         old = subprocess.check_output(['git','show','64f06a933064731e36adeb526ee7fc9296eb47d7:Sources/OpenIsland/Features/System/StorageVolumes.swift'],cwd=ROOT,text=True)
         (out/'StorageBaseline.swift').write_text(old.replace('struct StorageVolume:','struct BaselineStorageVolume:'))

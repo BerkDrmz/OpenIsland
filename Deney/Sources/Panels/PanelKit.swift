@@ -3,10 +3,12 @@ import IslandCore
 
 /// Gözlem yardımcısı: `track` içinde okunan Observation değerlerinden biri değişince `apply` bir kez çağrılır ve
 /// yeniden abone olunur. `stop()` sonrası (panel gizlendi) gelen bildirimler yok sayılır: görünmeyen panel iş yapmaz.
+/// Bir kayıt tetiklenene kadar registrar'da kalır; bu yüzden `start()` bekleyen kaydı yeniden kullanır, yenisini
+/// eklemez (aksi hâlde değişmeyen değerler için her gösterimde bir kayıt birikir).
 @MainActor
 final class Observer {
-    private var generation = 0
     private var active = false
+    private var armed = false
     private let track: () -> Void
     private let apply: () -> Void
 
@@ -18,22 +20,23 @@ final class Observer {
     func start() {
         guard !active else { return }
         active = true
-        generation += 1
-        observe(generation)
+        if !armed { observe() }
         apply()
     }
 
     func stop() {
         active = false
-        generation += 1
     }
 
-    private func observe(_ token: Int) {
+    private func observe() {
+        armed = true
         withObservationTracking { track() } onChange: { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self, self.active, self.generation == token else { return }
-                    self.observe(token)
+                    guard let self else { return }
+                    self.armed = false
+                    guard self.active else { return }
+                    self.observe()
                     self.apply()
                 }
             }
