@@ -83,6 +83,7 @@ final class NotchWindowController {
 
         placeWindows()
         panel.orderFrontRegardless()
+        sensor.accessibilityTarget = panel // erişilebilirlik isabetleri görsel adaya
         sensor.orderFrontRegardless()
         SpacePresentationController.shared.attach([panel, sensor])
         wireManagedDropReceiver()

@@ -5,6 +5,13 @@ import IslandCore
 /// ölçer (`panelDidAppear`), gizlenince durur. Değerler yalnız değişen etiketi yeniden çizer.
 @MainActor
 final class SystemPanelView: FlippedView, IslandPanel {
+    /// SwiftUI `SystemPanel`: sıcaklık, donanım ve ekran sütunları sırayla (`PanelAXOrder.first/second/third`), sonra depolama.
+    func axNavigationRank(of view: NSView) -> Int? {
+        if view.isDescendant(of: temperature) { return 3 }
+        if view.isDescendant(of: usage) { return 2 }
+        if view.isDescendant(of: controls) { return 1 }
+        return 0
+    }
     private let system: SystemMonitor
     private let temperature: TemperatureColumnView
     private let usage: UsageColumnView

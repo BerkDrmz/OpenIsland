@@ -199,9 +199,18 @@ final class NotchSensorPanel: NSPanel {
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    /// Algılayıcı yalnız fare yönlendirmesi içindir; erişilebilirlikte görünmez. Üstteki görünmez pencere VoiceOver'ın
+    /// "işaretçi altındaki öğe" sorgusunu yakalayıp içi boş bir pencere okutuyordu. İsabet sorgusu görsel adaya iletilir.
+    weak var accessibilityTarget: NSWindow?
+    override func isAccessibilityElement() -> Bool { false }
+    override func accessibilityChildren() -> [Any]? { nil }
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? { accessibilityTarget?.accessibilityHitTest(point) }
 }
 
 final class SensorView: NSView {
+    override func isAccessibilityElement() -> Bool { false }
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? { (window as? NotchSensorPanel)?.accessibilityHitTest(point) }
     var onPointerEntered: (() -> Void)?
     var onPointerExited: (() -> Void)?
     var onClick: (() -> Void)?

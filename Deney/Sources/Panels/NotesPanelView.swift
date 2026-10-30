@@ -4,6 +4,10 @@ import IslandCore
 /// Quick Notes (sol) + App/Shortcuts başlatıcı (sağ) (SwiftUI `NotesPanel`).
 @MainActor
 final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
+    /// SwiftUI `NotesPanel`: not sütunu önce (`PanelAXOrder.first`), başlatıcı sonra.
+    func axNavigationRank(of view: NSView) -> Int? {
+        [noteLabel, editorBackground, scroll].contains { view.isDescendant(of: $0) } ? 3 : 0
+    }
     private let notes: NotesStore
     private let launcher: LauncherStore
     private let noteLabel = TextLabel("Hızlı Not", font: Fonts.sectionLabel, color: Palette.secondary)

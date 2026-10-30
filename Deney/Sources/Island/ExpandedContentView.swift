@@ -136,6 +136,7 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         }()
         layoutPanel(container, tab: tab)
         container.fadeIn(duration: isFirst ? 0 : fadeIn)
+        container.announceLayoutChange()
     }
 
     override func layout() {
@@ -173,9 +174,13 @@ protocol IslandPanel: NSView {
     func didHide()
     /// Uyku hâlindeki ön kurulumda: yalnız mağazadaki mevcut veriden görsel hazırlık (gözlem/örnekleme başlatmaz).
     func prewarm()
+    /// SwiftUI `accessibilitySortPriority(PanelAXOrder…)` karşılığı: panel içindeki bir görünümün VoiceOver gezinme
+    /// önceliği (yüksek önce). nil: panel öncelik vermez, VoiceOver kendi geometrik sırasını kullanır.
+    func axNavigationRank(of view: NSView) -> Int?
 }
 
 extension IslandPanel {
+    func axNavigationRank(of view: NSView) -> Int? { nil }
     func didShow() {}
     func didHide() {}
     func prewarm() {}
@@ -232,6 +237,12 @@ final class PanelContainer: FlippedView {
         animateOpacity(to: 1, from: wasHidden ? 0 : nil, duration: duration, timing: .easeOut)
     }
 
+    /// Görünür panel kümesi değişti: VoiceOver gizlenen panelin öğelerini önbellekte tutmasın (SwiftUI bunu kendiliğinden
+    /// bildirir). Dinleyen yardımcı teknoloji yoksa AppKit bildirimi ucuz geçer.
+    func announceLayoutChange() {
+        if let window { NSAccessibility.post(element: window, notification: .layoutChanged) }
+    }
+
     func fadeOut(duration: Double) {
         hideWork?.cancel()
         visibilityGeneration &+= 1
@@ -244,6 +255,7 @@ final class PanelContainer: FlippedView {
             self.isHidden = true
             self.isFadingOut = false
             if self.isShown { self.isShown = false; self.panel.didHide() }
+            self.announceLayoutChange()
         }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)

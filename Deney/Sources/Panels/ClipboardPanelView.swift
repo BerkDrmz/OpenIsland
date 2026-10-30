@@ -5,6 +5,8 @@ import IslandCore
 /// Liste sanallaştırılmıştır: yalnız görünen satırlar kurulur ve kaydırınca yeniden kullanılır.
 @MainActor
 final class ClipboardPanelView: FlippedView, IslandPanel {
+    /// SwiftUI `ClipboardPanel`: geçmiş sütunu önce (`PanelAXOrder.first`), renk sütunu sonra.
+    func axNavigationRank(of view: NSView) -> Int? { view.isDescendant(of: colorColumn) ? 0 : 3 }
     private let history: ClipboardHistory
     private let colors: ColorPickerService
     private let list: ClipListView

@@ -504,6 +504,37 @@ final class ShapeView: NSView {
 final class AccessibleContainerView: FlippedView {
     var onCancel: (() -> Void)?
     override func accessibilityPerformCancel() -> Bool { onCancel?(); return onCancel != nil }
+
+    /// SwiftUI'de sütunlu paneller (`PanelAXOrder`) VoiceOver'da sütun sütun okunur; AppKit'te VoiceOver düz kapsayıcıyı
+    /// geometrik (satır satır) gezer ve sütunları karıştırır. Görünür panel öncelik veriyorsa gezinme sırası SwiftUI ile aynı
+    /// kurulur: panel dışı öğeler (başlık) özgün sırada, sonra panel öğeleri öncelik (yüksek önce) ve her grup içinde
+    /// geometrik sırada (üstten alta, soldan sağa). Öncelik vermeyen panellerde nil: VoiceOver'ın varsayılan sırası.
+    override func accessibilityChildrenInNavigationOrder() -> [NSAccessibilityElementProtocol]? {
+        guard let children = accessibilityChildren(), !children.isEmpty else { return nil }
+        func view(of element: Any) -> NSView? {
+            var current: Any? = element
+            for _ in 0..<12 {
+                if let view = current as? NSView { return view }
+                if let cell = current as? NSCell, let control = cell.controlView { return control } // sürgü, açılır düğme
+                current = (current as? NSAccessibilityElementProtocol)?.accessibilityParent()
+            }
+            return nil
+        }
+        var leading: [NSAccessibilityElementProtocol] = []
+        var ranked: [(rank: Int, top: CGFloat, x: CGFloat, element: NSAccessibilityElementProtocol)] = []
+        for case let child as NSAccessibilityElementProtocol in children {
+            guard let v = view(of: child) else { leading.append(child); continue }
+            var ancestor: NSView? = v
+            var panel: IslandPanel?
+            while let a = ancestor { if let p = a as? IslandPanel { panel = p; break }; ancestor = a.superview }
+            guard let panel, let rank = panel.axNavigationRank(of: v) else { leading.append(child); continue }
+            let frame = child.accessibilityFrame()
+            ranked.append((rank, (frame.maxY / 4).rounded(), frame.minX, child))
+        }
+        guard !ranked.isEmpty else { return nil }
+        ranked.sort { a, b in a.rank != b.rank ? a.rank > b.rank : (a.top != b.top ? a.top > b.top : a.x < b.x) }
+        return leading + ranked.map(\.element)
+    }
 }
 
 // MARK: - Sürükle-bırak
