@@ -202,9 +202,10 @@ final class NotchSensorPanel: NSPanel {
 
     /// Algılayıcı yalnız fare yönlendirmesi içindir; erişilebilirlikte görünmez. Üstteki görünmez pencere VoiceOver'ın
     /// "işaretçi altındaki öğe" sorgusunu yakalayıp içi boş bir pencere okutuyordu. İsabet sorgusu görsel adaya iletilir.
-    /// Pencerenin kendisi erişilebilirlik öğesi olarak kalır: `isAccessibilityElement() == false` Tam Klavye Erişimi'nde
-    /// adanın tuş döngüsünü bozuyordu (Notlar düzenleyicisinden Ctrl-Tab başlığa atlıyor, geri dönmüyordu).
+    /// Pencere öğe olarak kalırsa VoiceOver adaya geçerken bu boş "sistem sorgu kutusu"na düşüp içinde kalıyor.
+    /// (Tam Klavye Erişimi'ndeki Tab takılması bu gizlemeden değil, pencere düzeyindeki layoutChanged bildiriminden geliyordu.)
     weak var accessibilityTarget: NSWindow?
+    override func isAccessibilityElement() -> Bool { false }
     override func accessibilityChildren() -> [Any]? { nil }
     override func accessibilityHitTest(_ point: NSPoint) -> Any? { accessibilityTarget?.accessibilityHitTest(point) }
 }
