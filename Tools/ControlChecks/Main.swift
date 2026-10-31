@@ -169,7 +169,24 @@ enum MotionStyle { case expressive, natural, reduced }
             guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success else { return [] }
             return value as? [AXUIElement] ?? []
         }
-        func clickClose(_ window: AXUIElement) async {
+        /// Pencerelerin AX'te görünmesini sabit süre yerine durumla bekler.
+        func waitForWindows(_ app: NSRunningApplication, count: Int) async {
+            for _ in 0..<150 where windows(app).count != count { try? await Task.sleep(for: .milliseconds(20)) }
+        }
+        /// Gerçek tıklama yalnızca noktadaki en üst AX öğesi hedef uygulamanın kapat düğmesiyse gönderilir. Test uygulaması
+        /// öne gelemediğinde (işbirlikçi etkinleştirme reddi) veya başka bir pencere düğmeyi örttüğünde tıklama başka
+        /// pencereye gidiyor ve iki pencere açık kaldığı halde hata "uygulama sonlandı" diye raporlanıyordu.
+        func closeButtonIsHit(_ point: CGPoint, pid: pid_t) -> Bool {
+            var hit: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+                  let hit else { return false }
+            var owner: pid_t = 0
+            var subrole: CFTypeRef?
+            AXUIElementGetPid(hit, &owner)
+            AXUIElementCopyAttributeValue(hit, kAXSubroleAttribute as CFString, &subrole)
+            return owner == pid && subrole as? String == kAXCloseButtonSubrole
+        }
+        func clickClose(_ window: AXUIElement, of app: NSRunningApplication) async {
             var buttonValue: CFTypeRef?
             precondition(AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &buttonValue) == .success)
             let button = unsafeDowncast(buttonValue!, to: AXUIElement.self)
@@ -181,6 +198,12 @@ enum MotionStyle { case expressive, natural, reduced }
             var size = CGSize.zero
             AXValueGetValue(unsafeDowncast(value!, to: AXValue.self), .cgSize, &size)
             point.x += size.width / 2; point.y += size.height / 2
+            if !closeButtonIsHit(point, pid: app.processIdentifier) {
+                app.activate()
+                for _ in 0..<50 where !closeButtonIsHit(point, pid: app.processIdentifier) { try? await Task.sleep(for: .milliseconds(20)) }
+            }
+            precondition(closeButtonIsHit(point, pid: app.processIdentifier),
+                         "ENVIRONMENT: another window covers the test window's close button; no click was sent")
             let source = CGEventSource(stateID: .hidSystemState)
             CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
             // Fast real clicks must work too; long down/up gaps can hide AX delivery races.
@@ -193,36 +216,37 @@ enum MotionStyle { case expressive, natural, reduced }
             config.createsNewApplicationInstance = true
             let app = try await NSWorkspace.shared.openApplication(at: appURL, configuration: config)
             defer { if !app.isTerminated { app.terminate() } }
-            try? await Task.sleep(for: .seconds(1))
+            await waitForWindows(app, count: 2)
             precondition(windows(app).count == 2)
-            await clickClose(windows(app)[0])
-            precondition(!app.isTerminated && windows(app).count == 1, "Closing one of two windows terminated the app")
-            await clickClose(windows(app)[0])
+            await clickClose(windows(app)[0], of: app)
+            precondition(!app.isTerminated && service.requestCount == 0, "Closing one of two windows terminated the app")
+            precondition(windows(app).count == 1, "The first red-button click did not close its window")
+            await clickClose(windows(app)[0], of: app)
             print("CLOSE CHECK: pid=\(app.processIdentifier), windows=\(windows(app).count), requests=\(service.requestCount), terminated=\(app.isTerminated)")
             precondition(app.isTerminated && service.requestCount == 1, "Last red-button close did not terminate through the tested service")
             print("PASS: actual red-button clicks preserve another window, then terminate after last window closes")
             config.arguments = ["veto"]
             let vetoApp = try await NSWorkspace.shared.openApplication(at: appURL, configuration: config)
             defer { vetoApp.terminate() }
-            try? await Task.sleep(for: .seconds(1))
-            await clickClose(windows(vetoApp)[0])
+            await waitForWindows(vetoApp, count: 2)
+            await clickClose(windows(vetoApp)[0], of: vetoApp)
             precondition(!vetoApp.isTerminated && windows(vetoApp).count == 2, "Cancelled close terminated an app")
             print("PASS: cancelled close leaves the application and its windows alive; normal terminate used")
             config.arguments = ["delayed"]
             let delayedApp = try await NSWorkspace.shared.openApplication(at: appURL, configuration: config)
             defer { if !delayedApp.isTerminated { delayedApp.terminate() } }
-            try? await Task.sleep(for: .seconds(1))
-            await clickClose(windows(delayedApp)[0])
+            await waitForWindows(delayedApp, count: 2)
+            await clickClose(windows(delayedApp)[0], of: delayedApp)
             precondition(!delayedApp.isTerminated && windows(delayedApp).count == 1, "Delayed first close terminated another window")
-            await clickClose(windows(delayedApp)[0])
+            await clickClose(windows(delayedApp)[0], of: delayedApp)
             try? await Task.sleep(for: .milliseconds(500))
             precondition(delayedApp.isTerminated && service.requestCount == 2, "Delayed last-window close did not quit")
             print("PASS: delayed red-button close preserves another window, then quits after last window finishes closing")
             config.arguments = []
             let mixedApp = try await NSWorkspace.shared.openApplication(at: appURL, configuration: config)
             defer { if !mixedApp.isTerminated { mixedApp.terminate() } }
-            try? await Task.sleep(for: .seconds(1))
-            await clickClose(windows(mixedApp)[0])
+            await waitForWindows(mixedApp, count: 2)
+            await clickClose(windows(mixedApp)[0], of: mixedApp)
             let last = windows(mixedApp)[0]
             var close: CFTypeRef?
             precondition(AXUIElementCopyAttributeValue(last, kAXCloseButtonAttribute as CFString, &close) == .success)
