@@ -12,7 +12,7 @@ final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
     private let launcher: LauncherStore
     private let noteLabel = TextLabel("Hızlı Not", font: Fonts.sectionLabel, color: Palette.secondary)
     private let editorBackground = RoundedView(radius: Spacing.cardRadius - 4, fill: Palette.fill)
-    private let scroll = NSScrollView()
+    private let scroll: NSScrollView = NotesScrollView()
     private let textView: NSTextView
     private let launcherLabel = TextLabel("Başlatıcı", font: Fonts.sectionLabel, color: Palette.secondary)
     private let addButton = FramedPopUpButton(frame: .zero, pullsDown: true)
@@ -236,6 +236,14 @@ final class LauncherTileView: PlainButton, TransientStateResettable {
 /// the first click while making that panel key, leaving the window itself as
 /// first responder. Accept that same click in this editor only, as the island's
 /// other controls do; do not activate the application or steal focus on hover.
+/// Erişilebilirlikte saydam kaydırma görünümü: metin alanı ve kaydırma çubuğu AX ağacında kalır, üst kaba taşınır.
+/// Tam Klavye Erişimi, bir tıklama paneli anahtar pencere yaptığında pencere-anahtar oldu işleyicisinde ~1 sn klavye
+/// odağı izlemesini kapatıyor ve imleci pencereye girişte odak zincirindeki ilk durağa koyuyordu. Bu durak kaydırma
+/// alanı olunca fareyle düzenleyiciye tıklandıktan sonraki ilk Ctrl-Tab metin alanına inmekte harcanıyordu.
+private final class NotesScrollView: NSScrollView {
+    override func isAccessibilityElement() -> Bool { false }
+}
+
 private final class NotesTextView: NSTextView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
