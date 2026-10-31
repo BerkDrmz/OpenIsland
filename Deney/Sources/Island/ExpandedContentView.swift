@@ -238,9 +238,13 @@ final class PanelContainer: FlippedView {
     }
 
     /// Görünür panel kümesi değişti: VoiceOver gizlenen panelin öğelerini önbellekte tutmasın (SwiftUI bunu kendiliğinden
-    /// bildirir). Dinleyen yardımcı teknoloji yoksa AppKit bildirimi ucuz geçer.
+    /// bildirir). Dinleyen yardımcı teknoloji yoksa AppKit bildirimi ucuz geçer. Bildirim pencereye değil adanın erişilebilirlik
+    /// kabına gönderilir: pencere düzeyindeki bildirim Tam Klavye Erişimi ajanının konumunu sıfırlıyor, panel değişince Tab
+    /// odağı başlıkta takılıyordu.
     func announceLayoutChange() {
-        if let window { NSAccessibility.post(element: window, notification: .layoutChanged) }
+        var node = superview
+        while let current = node, !(current is AccessibleContainerView) { node = current.superview }
+        if let node { NSAccessibility.post(element: node, notification: .layoutChanged) }
     }
 
     func fadeOut(duration: Double) {
