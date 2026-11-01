@@ -290,7 +290,7 @@ enum PanelFactory {
         case .media: MediaPanelView(media: environment.media, model: model)
         case .nook: NookPanelView(environment: environment, model: model)
         case .shelf: ShelfPanelView(shelf: environment.shelf)
-        case .clipboard: ClipboardPanelView(history: environment.clipboard, colors: environment.colorPicker, downloader: environment.linkDownloader)
+        case .clipboard: ClipboardPanelView(history: environment.clipboard, downloader: environment.linkDownloader)
         case .focus: FocusPanelView(timer: environment.focusTimer)
         case .notes: NotesPanelView(notes: environment.notes, launcher: environment.launcher)
         case .mirror: MirrorPanelView(mirror: environment.mirror)
