@@ -654,7 +654,7 @@ extension IslandCanvasView {
         }
         spareExpanded = view
         if FrameDriver.isLogging { FrameDriver.note(String(format: "spare expanded ready %.2f ms", (CACurrentMediaTime() - t0) * 1000)) }
-        presentSpare(view) { [weak self] in self?.scheduleSparePanelWarmup(after: 0.4) }
+        presentSpare(view) { [weak self] in self?.scheduleSparePanelWarmup(after: 0.2) }
     }
 
     /// Uyku hâlindeki içeriği pencerede bir kez, göz ayırt etmeyecek opaklıkla (%0,4; bkz. `ContentSlot.apply`)
@@ -693,7 +693,7 @@ extension IslandCanvasView {
         let t0 = CACurrentMediaTime()
         guard let tab = spare.prewarmNextPanel() else { return }
         if FrameDriver.isLogging { FrameDriver.note(String(format: "panel prewarm %@ %.2f ms", "\(tab)", (CACurrentMediaTime() - t0) * 1000)) }
-        presentSpare(spare) { [weak self] in self?.scheduleSparePanelWarmup(after: 0.3) }
+        presentSpare(spare) { [weak self] in self?.scheduleSparePanelWarmup(after: 0.15) }
     }
 
     func takeSpareExpanded() -> ExpandedContentView? {
