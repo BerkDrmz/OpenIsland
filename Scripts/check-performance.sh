@@ -70,7 +70,7 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
   -o "$CHECK_DIR/permissions-check"
 "$CHECK_DIR/permissions-check"
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
-  Sources/OpenIsland/Features/Clipboard/ClipboardHistory.swift Tools/PerformanceChecks/ClipboardCheck.swift \
+  Sources/OpenIsland/Features/Clipboard/{ClipboardHistory,PasteAccess}.swift Tools/PerformanceChecks/ClipboardCheck.swift \
   -o "$CHECK_DIR/clipboard-check"
 "$CHECK_DIR/clipboard-check"
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lIslandCore \
@@ -107,6 +107,6 @@ python3 Tools/PerformanceChecks/TabBenchmarkReportCheck.py
 
 python3 Tools/PerformanceChecks/ProcessMatrixProbeCheck.py
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
-  Sources/OpenIsland/Features/Notes/NotesStore.swift Tools/PerformanceChecks/ShortcutsCheck.swift \
+  Sources/OpenIsland/Features/Notes/NotesStore.swift Sources/OpenIsland/Features/Clipboard/PasteAccess.swift Tools/PerformanceChecks/ShortcutsCheck.swift \
   -o "$CHECK_DIR/shortcuts-check"
 "$CHECK_DIR/shortcuts-check"

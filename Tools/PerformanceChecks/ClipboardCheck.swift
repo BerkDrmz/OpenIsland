@@ -27,7 +27,7 @@ func AXIsProcessTrusted() -> Bool { false }
     init(name: Name) {}
     func releaseGlobally() { releases += 1 }
     var changeCount = 0
-    enum AccessBehavior { case alwaysAllow, alwaysDeny }
+    enum AccessBehavior { case `default`, ask, alwaysAllow, alwaysDeny }
     var accessBehavior: AccessBehavior = .alwaysAllow
     var types: [PasteboardType]? = [.string]
     var value: String?
@@ -47,7 +47,7 @@ func AXIsProcessTrusted() -> Bool { false }
         defer { try? FileManager.default.removeItem(at: folder) }
         let injected = NSPasteboard(name: .init("ClipboardCheck.private-fixture"))
         var injectedHistory: ClipboardHistory? = ClipboardHistory(storeURL: folder.appendingPathComponent("injected.json"), pasteboard: injected)
-        weak var releasedHistory = injectedHistory
+        weak let releasedHistory = injectedHistory
         injectedHistory = nil
         precondition(releasedHistory == nil && injected.releases == 0,
                      "ClipboardHistory must not release an injected/caller-owned pasteboard")
