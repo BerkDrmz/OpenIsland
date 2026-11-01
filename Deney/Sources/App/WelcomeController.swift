@@ -5,8 +5,7 @@ import QuartzCore
 
 /// İlk kurulum karşılaması adanın içinde: ada çentikten açılır ve farklı dillerde "merhaba", el yazısı gibi çizilerek
 /// belirir (uygulama simgesinin camgöbeği → mor → pembe renkleriyle). Ekranın geri kalanı örtülmez. Karşılama süresince
-/// ada `IslandHold` ile açık tutulur; "Başla" karşılamayı söndürüp adanın kendi içeriğini gösterir ve tutmayı bırakır
-/// (imleç dışarıdaysa ada her zamanki gibi kapanır). Esc ile ada kapanırsa karşılama da biter.
+/// ada `IslandHold` ile açık tutulur; "Başla" (ya da Esc) adayı çentiğe geri kapatır, karşılama içerikle birlikte söner.
 /// Bütün hareket Core Animation'da (render sunucusunda) çalışır; Hareketi Azalt açıksa çizim yerine yumuşak geçiş.
 @MainActor
 final class WelcomeController {
@@ -37,21 +36,24 @@ final class WelcomeController {
         return welcomePending && !TestIsolationGuard.isValidationBundle && environment["OPENISLAND_DIAGNOSTICS"] == nil
     }
 
-    /// Karşılamanın açıldığı sekme: geniş ve alçak gövde (yazıya uygun en-boy oranı).
-    private static let tab: ExpandedTab = .media
+    /// Karşılamanın açıldığı sekme: en geniş ve yüksek gövde Sistem'de (571×208); modül kapalıysa Medya.
+    static func tab(visibleTabs: [ExpandedTab]) -> ExpandedTab { visibleTabs.contains(.system) ? .system : .media }
 
     private let island: NotchWindowController
     private let hold: IslandHold
+    private let tab: ExpandedTab
     private let view = WelcomeIslandView()
     private let onFinish: (_ completed: Bool) -> Void
-    private var previousTab: ExpandedTab = WelcomeController.tab
+    private var previousTab: ExpandedTab
     private var holding = false
     private var finished = false
 
-    init(island: NotchWindowController, hold: IslandHold, onFinish: @escaping (_ completed: Bool) -> Void) {
+    init(island: NotchWindowController, hold: IslandHold, tab: ExpandedTab, onFinish: @escaping (_ completed: Bool) -> Void) {
         self.island = island
         self.hold = hold
+        self.tab = tab
         self.onFinish = onFinish
+        previousTab = tab
         view.onStart = { [weak self] in self?.complete() }
     }
 
@@ -60,7 +62,7 @@ final class WelcomeController {
         previousTab = model.machine.context.lastTab
         hold.begin()
         holding = true
-        model.send(.selectTab(Self.tab))
+        model.send(.selectTab(tab))
         if !model.machine.isExpanded { model.send(.tapped) }
         // Tam ekran / gizli ada gibi açılamayan durumlar: karşılama bir sonraki açılışa kalır.
         guard model.machine.isExpanded else { end(completed: false); return }
@@ -72,17 +74,12 @@ final class WelcomeController {
         ])
     }
 
-    /// "Başla": karşılama söner, adanın kendi içeriği görünür, tutma bırakılır.
+    /// "Başla": tutma bırakılır ve ada çentiğe kapanır; karşılama içerikle birlikte söner (`presentOverlay` kapanışı).
     private func complete() {
         guard !finished else { return }
-        view.fadeOut { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.island.canvas.dismissOverlay()
-                if self.previousTab != Self.tab { self.island.model.send(.selectTab(self.previousTab)) }
-                self.end(completed: true)
-            }
-        }
+        if holding { holding = false; hold.end() }
+        island.model.send(.escapePressed)
+        if island.model.machine.isExpanded { end(completed: true); island.canvas.dismissOverlay() }
     }
 
     private func end(completed: Bool) {
@@ -90,6 +87,8 @@ final class WelcomeController {
         finished = true
         view.stop()
         if holding { holding = false; hold.end() }
+        // Kapalı adada sekme seçimi yalnız bir sonraki açılışın sekmesidir; görünür bir geçiş olmaz.
+        if previousTab != tab, !island.model.machine.isExpanded { island.model.send(.selectTab(previousTab)) }
         onFinish(completed)
     }
 }
@@ -166,24 +165,25 @@ final class WelcomeIslandView: NSView {
         timer = nil
     }
 
-    func fadeOut(_ completion: @escaping @Sendable () -> Void) {
-        stop()
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = reduceMotion ? 0.15 : 0.3
-            animator().alphaValue = 0
-        }, completionHandler: completion)
+    /// Önceki selamlama söner, ardından bir sonraki çizilir; ilkinden sonra alt satır belirir. "Başla"ya kadar döner.
+    private func playNext() {
+        guard running else { return }
+        let fadeOut: CFTimeInterval = 0.35
+        guard let previous = current else { showGreeting(); return }
+        current = nil
+        dissolve(previous, duration: fadeOut)
+        timer = Timer.scheduledTimer(withTimeInterval: fadeOut + 0.05, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.showGreeting() }
+        }
     }
 
-    /// Bir sonraki selamlama; ilkinden sonra alt satır belirir. "Başla"ya kadar döner.
-    private func playNext() {
+    private func showGreeting() {
         guard running else { return }
         let greeting = WelcomeController.greetings[index % WelcomeController.greetings.count]
         let first = index == 0
         index += 1
         let draw: CFTimeInterval = reduceMotion ? 0 : (first ? 2.0 : 1.4)
-        let hold: CFTimeInterval = first ? 1.2 : 0.9
-        let fadeOut: CFTimeInterval = 0.4
-        if let current { dissolve(current, duration: fadeOut) }
+        let hold: CFTimeInterval = first ? 1.3 : 1.0
         let layer = makeGreetingLayer(greeting, draw: draw)
         current = layer
         stage.addSublayer(layer)
@@ -194,7 +194,7 @@ final class WelcomeIslandView: NSView {
                 button.animator().alphaValue = 1
             }
         }
-        timer = Timer.scheduledTimer(withTimeInterval: draw + hold + fadeOut * 0.5, repeats: false) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: draw + hold, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.playNext() }
         }
     }

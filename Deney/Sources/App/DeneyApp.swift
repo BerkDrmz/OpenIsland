@@ -59,7 +59,8 @@ final class DeneyAppDelegate: NSObject, NSApplicationDelegate {
     /// ada açılamadıysa (ör. tam ekranda gizli) bir sonraki açılışta yeniden denenir.
     func showWelcome() {
         guard welcome == nil, let island = coordinator?.primaryController else { return }
-        let controller = WelcomeController(island: island, hold: environment.hold) { [weak self] completed in
+        let tab = WelcomeController.tab(visibleTabs: environment.preferences.visibleTabs)
+        let controller = WelcomeController(island: island, hold: environment.hold, tab: tab) { [weak self] completed in
             if completed { self?.environment.preferences.markWelcomeShown() }
             self?.welcome = nil
         }

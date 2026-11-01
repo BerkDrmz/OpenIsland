@@ -177,7 +177,7 @@ final class IslandCanvasView: NSView {
             let collapsed = onOverlayCollapse
             self.overlay = nil
             onOverlayCollapse = nil
-            NSAnimationContext.runAnimationGroup({ $0.duration = 0.15; overlay.animator().alphaValue = 0 },
+            NSAnimationContext.runAnimationGroup({ $0.duration = 0.22; overlay.animator().alphaValue = 0 },
                                                  completionHandler: { MainActor.assumeIsolated { overlay.removeFromSuperview() } })
             collapsed?()
         }
