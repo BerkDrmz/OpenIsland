@@ -70,7 +70,9 @@ final class WelcomeWindowController: NSObject {
     func show() {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(button)
+        // Düğme odakla açılmaz (fareyle görünür mavi halka olmasın): Return/Boşluk/Esc pencerede karşılanır, Tab ile
+        // gelen klavye kullanıcısı halkayı görür, VoiceOver düğmeyi bulur.
+        window.makeFirstResponder(nil)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = reduceMotion ? 0.25 : 0.6
             window.animator().alphaValue = 1
