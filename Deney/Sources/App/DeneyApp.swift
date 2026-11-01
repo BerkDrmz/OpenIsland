@@ -44,6 +44,27 @@ final class DeneyAppDelegate: NSObject, NSApplicationDelegate {
         coordinator.start()
         self.coordinator = coordinator
         SingleInstance.observeReopenRequests { [weak settings] in settings?.show() }
+
+        if WelcomeWindowController.shouldShowAtLaunch(welcomePending: environment.preferences.welcomePending) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                MainActor.assumeIsolated { self?.showWelcome() }
+            }
+        }
+    }
+
+    private var welcome: WelcomeWindowController?
+
+    /// İlk kurulumda (ve menüden) "merhaba" karşılaması. Kapanınca bir daha kendiliğinden açılmaz.
+    func showWelcome() {
+        guard welcome == nil else { welcome?.bringToFront(); return }
+        let controller = WelcomeWindowController { [weak self] in
+            MainActor.assumeIsolated {
+                self?.environment.preferences.markWelcomeShown()
+                self?.welcome = nil
+            }
+        }
+        welcome = controller
+        controller.show()
     }
 
     /// Çalışan uygulama yeniden açıldı (Finder, Spotlight, Launchpad): penceresiz bir menü çubuğu uygulamasında
@@ -94,6 +115,7 @@ final class StatusMenuBuilder: NSObject, NSMenuDelegate {
         demo.state = env.preferences.demoMode ? .on : .off
         menu.addItem(demo)
         menu.addItem(.separator())
+        menu.addItem(item("Karşılamayı Oynat") { (NSApp.delegate as? DeneyAppDelegate)?.showWelcome() })
         menu.addItem(item("Araçlar…") { env.maintenance.open() })
         menu.addItem(item("Ayarlar…", key: ",") { env.openSettings() })
         menu.addItem(item("OpenIsland'den Çık", key: "q") { NSApp.terminate(nil) })

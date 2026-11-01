@@ -14,6 +14,9 @@ final class Preferences {
     private(set) var launchAtLoginStatus: SMAppService.Status
     private(set) var launchAtLoginError: String?
     @ObservationIgnored var onChange: (() -> Void)?
+    /// İlk kurulum karşılaması bekliyor: bu tercih deposuyla ilk çalıştırma (önceki her sürüm `hoverLatencyOptimized`
+    /// yazar) ya da karşılama yarıda kaldı (`welcomeShown = false`). Karşılama kapanınca `welcomeShown = true`.
+    @ObservationIgnored let welcomePending: Bool
 
     var expandsOnHover: Bool { didSet { persist(expandsOnHover, "expandsOnHover") } }
     var quitOnLastWindowClose: Bool { didSet { persist(quitOnLastWindowClose, "quitOnLastWindowClose") } }
@@ -113,6 +116,9 @@ final class Preferences {
         gesturesEnabled = bool("gesturesEnabled", true)
         reversesMediaSwipe = bool("reversesMediaSwipe", false)
         clipboardHistoryEnabled = bool("clipboardHistoryEnabled", true)
+        let welcomeShown = defaults.object(forKey: "welcomeShown") as? Bool
+        welcomePending = welcomeShown == false || (welcomeShown == nil && defaults.object(forKey: "hoverLatencyOptimized") == nil)
+        if welcomePending { defaults.set(false, forKey: "welcomeShown") }
         let savedHover = defaults.object(forKey: "hoverDelay") as? Double ?? 0.18
         // Known presets become faster; custom durations and disabled hover remain intact.
         let migrateHover = defaults.object(forKey: "hoverLatencyOptimized") == nil
@@ -180,6 +186,8 @@ final class Preferences {
         if status == .enabled || status == .requiresApproval { defaults.set(true, forKey: "launchAtLoginDefaultApplied") }
         #endif
     }
+
+    func markWelcomeShown() { defaults.set(true, forKey: "welcomeShown") }
 
     private func persist(_ value: Any, _ key: String) {
         if let previous = defaults.object(forKey: key) as? NSObject,
