@@ -376,9 +376,11 @@ final class IslandDiagnostics {
                 try? await Task.sleep(for: .seconds(1))
                 beginBenchmarkPhase("open-close")
                 let hover = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_HOVER"] == "1"
+                // OPENISLAND_BENCHMARK_TAB: açılacak sekme (varsayılan medya); ör. `nook`, uygulamanın önceden kurduğu sekme.
+                let tab = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_TAB"].flatMap(ExpandedTab.init(rawValue:)) ?? .media
                 for _ in 0..<cycles {
                     beginBenchmarkPhase("open")
-                    model.send(.selectTab(.media))
+                    model.send(.selectTab(tab))
                     // Hover yolu: kabarma → gecikmeyle genişleme (kullanıcının adayı fareyle açması).
                     model.send(hover ? .pointerEntered : .tapped)
                     try? await Task.sleep(for: .seconds(1.5))

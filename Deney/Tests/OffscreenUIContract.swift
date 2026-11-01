@@ -167,7 +167,7 @@ private final class CountingSymbolDescriptionImage: NSImage {
         let cleanLink="https://example.invalid/p%2f?id=42&x=1&x=2#keep"
         let originalItem=ClipItem(content:.text(originalLink),date:Date(),sourceApp:"Private fixture")
         linkHistory.copy(originalItem)
-        let clips=ClipboardPanelView(history:linkHistory,colors:ColorPickerService())
+        let clips=ClipboardPanelView(history:linkHistory,downloader:LinkDownloader())
         clips.frame=CGRect(x:0,y:0,width:760,height:220);root.addSubview(clips);clips.didShow();clips.layoutSubtreeIfNeeded()
         func clipRow(_ view:NSView,_ label:String)->NSView? {
             if view.accessibilityLabel()==label {return view}
@@ -406,7 +406,7 @@ private final class CountingSymbolDescriptionImage: NSImage {
         let file=AppPaths.support.appendingPathComponent("OpenIsland format 你好.bin")
         let bytes=Data([0,1,2,127,128,255]);try! bytes.write(to:file)
         let formats:[ClipItem.Content]=[.text("OpenIsland private format"),.image(png),.files([file])]
-        let panel=ClipboardPanelView(history:history,colors:ColorPickerService())
+        let panel=ClipboardPanelView(history:history,downloader:LinkDownloader())
         panel.frame=CGRect(x:0,y:0,width:760,height:220);root.addSubview(panel);panel.didShow()
         defer{panel.didHide();panel.removeFromSuperview()}
         func row(_ v:NSView,_ label:String)->NSView? { if v.accessibilityLabel()==label{return v};return v.subviews.lazy.compactMap{row($0,label)}.first }
