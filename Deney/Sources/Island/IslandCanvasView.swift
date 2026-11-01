@@ -36,6 +36,10 @@ final class IslandCanvasView: NSView {
     private var lastRelaxScale: CGFloat = -1
     private var lastRelaxHeight: CGFloat = -1
     var spareExpanded: ExpandedContentView?
+    /// Kapanışta sönen açık içerik: kapatma işi (`suspend`) yüzey durunca yapılır (bkz. `tick`).
+    private var pendingSuspend: ExpandedContentView?
+    /// Açılıştan sonraki ilk saniyeler: ön çizim kompakt adadaki canlı etkinliği beklemez (ilk hover önceliklidir).
+    private let warmupDeadline = CACurrentMediaTime() + 15
     /// Açık adanın içeriğinin üstünde tek görünüm (ilk kurulum karşılaması); bkz. `presentOverlay`.
     private var overlay: NSView?
     private var onOverlayCollapse: (() -> Void)?
@@ -315,27 +319,39 @@ final class IslandCanvasView: NSView {
 
     private func tick(_ dt: Double) -> Bool {
         width.step(dt); height.step(dt); topRadius.step(dt); bottomRadius.step(dt); topInset.step(dt); relax.step(dt)
-        var active = width.isActive || height.isActive || topRadius.isActive || bottomRadius.isActive
+        var surface = width.isActive || height.isActive || topRadius.isActive || bottomRadius.isActive
             || topInset.isActive || relax.isActive
-        active = media.step(dt) || active
-        for slot in slots { active = slot.step(dt) || active }
+        for slot in slots { surface = slot.step(dt) || surface }
+        let mediaActive = media.step(dt)
         let finished = slots.filter { $0.isRemoving && $0.isFinished }
         for slot in finished {
             if slot.isExpanded, spareExpanded == nil, let view = slot.view as? ExpandedContentView {
                 // Keep the already retained cache attached: hiding excludes it
                 // from mouse/keyboard/AX navigation while preserving its layers.
-                // suspend still releases every panel's visibility ownership.
-                view.suspend()
+                // Kapatma işi (panellerin `didHide`'ı, gözlemlerin durması, geçici durum sıfırlama) bu karede
+                // yapılmaz: kapanış hareketi sürerken karenin işlenmesini geciktiriyordu (Instruments: kapanışın
+                // ~60 ms'sinde tek kare takılma). Yüzey durunca, son kare sunulduktan sonra çalışır.
                 view.isHidden = true
                 spareExpanded = view
-                scheduleSparePanelWarmup(after: 1) // açılış yarıda kaldıysa kurulmamış paneller
+                pendingSuspend = view
             } else {
                 slot.view.removeFromSuperview()
             }
         }
         slots.removeAll { slot in finished.contains { $0 === slot } }
         applyFrame()
-        return active || !finished.isEmpty
+        // Müzik nabzı kanatta sürekli canlanabilir: kapatma işi yalnız yüzeyin durmasını bekler.
+        if !surface, finished.isEmpty, let view = pendingSuspend {
+            pendingSuspend = nil
+            DispatchQueue.main.async { [weak self, weak view] in
+                MainActor.assumeIsolated {
+                    guard let self, let view, self.spareExpanded === view, view.isHidden else { return }
+                    view.suspend()
+                    self.scheduleSparePanelWarmup(after: 1) // açılış yarıda kaldıysa kurulmamış paneller
+                }
+            }
+        }
+        return surface || mediaActive || !finished.isEmpty
     }
 
     /// Canlanan değerleri katmanlara uygular (tek CATransaction, örtük animasyon yok).
@@ -724,9 +740,15 @@ extension IslandCanvasView {
     }
 
     private func warmNextSparePanel() {
-        guard let spare = spareExpanded, spare.isDormant, spare.hasBeenShown, window != nil else { return }
+        guard let spare = spareExpanded, spare.isDormant, spare.hasBeenShown, spare.hasUnbuiltPanels, window != nil else { return }
         guard !model.machine.isEngaged, !model.presentation.isExpanded, !driver.isRunning else {
             scheduleSparePanelWarmup(after: 0.5)
+            return
+        }
+        // Açılış penceresinden sonra kompakt adada canlı etkinlik (müzik nabzı) varken ağır bir birleştirme nabızda
+        // tek kare kaçırabilir: ada boşta kalana kadar beklenir. Kurulmamış panel ilk ziyarette çizilir.
+        guard model.presentation == .idle || CACurrentMediaTime() < warmupDeadline else {
+            scheduleSparePanelWarmup(after: 2)
             return
         }
         let t0 = CACurrentMediaTime()
@@ -737,6 +759,7 @@ extension IslandCanvasView {
 
     func takeSpareExpanded() -> ExpandedContentView? {
         defer { spareExpanded = nil }
+        if pendingSuspend === spareExpanded { pendingSuspend = nil } // kapatma işi yapılmadan yeniden açıldı
         return spareExpanded
     }
 }

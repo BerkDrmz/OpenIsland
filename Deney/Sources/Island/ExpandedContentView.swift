@@ -47,7 +47,8 @@ final class ExpandedContentView: FlippedView, IslandContentView {
 
     /// Önceden kurulmuş görünümü açılış anında devreye alır (panelin `didShow`'u burada).
     func activate() {
-        guard isDormant else { return }
+        // Kapanış işi ertelenmişken yeniden açıldı: görünüm hâlâ etkin, yalnız başlık/sekme eşitlenir.
+        guard isDormant else { refresh(); return }
         isDormant = false
         defer { hasBeenShown = true }
         endPanelPrewarm()
@@ -65,6 +66,8 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         guard isDormant else { return }
         hasBeenShown = true
     }
+
+    var hasUnbuiltPanels: Bool { environment.preferences.visibleTabs.contains { panels[$0] == nil } }
 
     /// Boşta: henüz kurulmamış görünür bir sekmenin panelini uyku hâlinde kurar, yerleştirir ve bir sonraki
     /// birleştirmede çizilsin diye görünür bırakır (`didShow` yok; gözlem/örnekleme başlamaz). Kalmadıysa nil.
