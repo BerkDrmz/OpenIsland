@@ -341,7 +341,7 @@ private final class CountingSymbolDescriptionImage: NSImage {
             "İndirme / aktarım canlı etkinliği":"transferActivity"
         ]
         func all(_ v:NSView)->[NSView] { [v]+v.subviews.flatMap(all) }
-        let forms=[SettingsContent.general(env),SettingsContent.modules(env.preferences)]
+        let forms=[SettingsContent.general(env),SettingsContent.notifications(env),SettingsContent.system(env),SettingsContent.modules(env.preferences)]
         var tested=Set<String>()
         for view in forms {
             guard let form=view as? SettingsFormView else{check(false,"settings form missing");continue}

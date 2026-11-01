@@ -44,10 +44,9 @@ final class IslandPreviewView: FlippedView {
         wantsLayer = true
         layerContentsRedrawPolicy = .never
         guard let root = layer else { return }
-        root.cornerRadius = 8
-        root.cornerCurve = .continuous
-        root.masksToBounds = true
-        gradient.colors = [CGColor(srgbRed: 0.34, green: 0.34, blue: 0.34, alpha: 1), CGColor(srgbRed: 0.2, green: 0.2, blue: 0.2, alpha: 1)]
+        root.masksToBounds = true // köşeler ayarlar kartıyla kırpılır
+        // Uygulama simgesinin gece mavisi zemini (üstte açık, altta koyu).
+        gradient.colors = [CGColor(srgbRed: 0.157, green: 0.188, blue: 0.4, alpha: 1), CGColor(srgbRed: 0.071, green: 0.082, blue: 0.18, alpha: 1)]
         gradient.startPoint = CGPoint(x: 0.5, y: 0)
         gradient.endPoint = CGPoint(x: 0.5, y: 1)
         band.backgroundColor = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.06)
