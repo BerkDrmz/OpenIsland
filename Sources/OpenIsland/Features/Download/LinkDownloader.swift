@@ -1,8 +1,8 @@
 import AppKit
 import IslandCore
 
-/// "Bağlantıdan indir" koordinatörü. Yalnız kullanıcının "İncele"/"İndir" basışıyla çalışır; boştayken süreç,
-/// zamanlayıcı, pano izleme veya ağ isteği yoktur. Aynı anda tek iş vardır. Her iş yeni bir kuşak alır; iptal edilen
+/// "Bağlantıdan indir" koordinatörü. Yalnız kullanıcının "İncele"/"İndir" basışıyla çalışır; boştayken ağ isteği,
+/// zamanlayıcı, pano izleme veya yardımcı süreç yoktur (motor uygulama içidir, `NativeEngine`). Aynı anda tek iş vardır. Her iş yeni bir kuşak alır; iptal edilen
 /// veya yerini yenisine bırakan işin geç gelen sonucu durumu değiştirmez. Panel kapanması işi iptal etmez.
 @MainActor
 @Observable
@@ -25,7 +25,9 @@ final class LinkDownloader {
     @ObservationIgnored var shelf: ShelfStore?
     @ObservationIgnored private var generation = DownloadGeneration()
     @ObservationIgnored private var work: Task<Void, Never>?
-    @ObservationIgnored private var run: EngineRun?
+    @ObservationIgnored private var engine: NativeEngine?
+    @ObservationIgnored private var sources: [String: DirectSource] = [:]
+    @ObservationIgnored private var referer: URL?
     @ObservationIgnored private var remux: MediaRemuxer.Handle?
     @ObservationIgnored private var inspectedURL: URL?
     @ObservationIgnored private let folderKey = "linkDownloadFolder"
@@ -61,45 +63,48 @@ final class LinkDownloader {
 
     func inspect(_ text: String) {
         guard !phase.isBusy else { return } // art arda basış ikinci işi başlatmaz
+        // Aynı bağlantı zaten incelenmişse yeni istek yapılmaz (hata sonrası yeniden inceleme serbesttir).
+        if case .valid(let u, _) = LinkDownloadRules.validate(text), u == inspectedURL, phase == .ready || phase == .finished { return }
         inspectedURL = nil
         clearResult()
-        let url: URL
+        let url: URL, platform: LinkPlatform
         switch LinkDownloadRules.validate(text) {
         case .invalid: return fail("Geçerli bir http(s) bağlantısı yapıştırın.")
         case .unsupportedPlatform: return fail("Yalnız Facebook, X ve TikTok video bağlantıları destekleniyor.")
         case .valid(let u, let p): url = u; platform = p
         }
-        guard let engine = DownloadEngine.executable() else { return fail(DownloadFailure.engineMissing.message) }
+        self.platform = platform
         let gen = generation.next()
+        let engine = NativeEngine(platform: platform)
+        self.engine = engine
         phase = .inspecting
         message = nil
         work = Task { [weak self] in
-            guard let directory = await Self.prepareJobDirectory() else { self?.finish(gen, failure: .writePermission); return }
-            defer { Self.discard(directory) }
-            let run = EngineRun(executable: engine, arguments: Self.common + ["--skip-download", "--dump-single-json", "--", url.absoluteString],
-                                workingDirectory: directory, collectStdout: true)
-            guard self?.attach(run, gen) == true else { return }
-            let outcome = await run.run(timeout: DownloadEngine.timeouts.inspect, stallTimeout: nil)
-            self?.inspected(gen, url: url, outcome: outcome)
+            do {
+                let (media, referer) = try await engine.inspect(url)
+                self?.inspected(gen, url: url, media: media, referer: referer)
+            } catch is CancellationError {
+                self?.finishCancelledIfCurrent(gen)
+            } catch let failure as DownloadFailure {
+                self?.finish(gen, failure: failure)
+            } catch {
+                self?.finish(gen, failure: .other)
+            }
         }
     }
 
-    private func inspected(_ gen: UInt64, url: URL, outcome: EngineRun.Outcome) {
+    private func inspected(_ gen: UInt64, url: URL, media: ExtractedMedia, referer: URL?) {
         guard generation.accepts(gen) else { return }
-        run = nil; work = nil
-        if outcome.cancelled { return finishCancelled() }
-        if outcome.timedOut { return finish(gen, failure: .timedOut) }
-        guard outcome.status == 0, !outcome.stdoutOverflow,
-              let info = try? JSONDecoder().decode(MediaInfo.self, from: outcome.stdout) else {
-            return finish(gen, failure: DownloadFailure.classify(outcome.stderrTail))
-        }
-        guard info.isSingleVideo else { return fail("Oynatma listesi ve profil indirmesi desteklenmiyor; tek bir video bağlantısı verin.") }
-        videoOptions = DownloadPlanner.videoOptions(info.formats)
-        audioPlan = DownloadPlanner.audioPlan(info.formats)
-        hasAudio = DownloadPlanner.hasAudio(info.formats)
+        work = nil
+        let formats = media.formats
+        videoOptions = DownloadPlanner.videoOptions(formats)
+        audioPlan = DownloadPlanner.audioPlan(formats)
+        hasAudio = DownloadPlanner.hasAudio(formats)
         guard !videoOptions.isEmpty || audioPlan != nil else { return finish(gen, failure: .unsupported) }
+        sources = Dictionary(media.sources.map { ($0.format.id, $0) }, uniquingKeysWith: { a, _ in a })
+        self.referer = referer
         inspectedURL = url
-        title = info.title
+        title = media.title
         tier = videoOptions.first(where: \.isAvailable)?.tier
         if videoOptions.allSatisfy({ !$0.isAvailable }) { mode = .audioOnly } else if mode == .audioOnly && audioPlan == nil { mode = .videoWithAudio }
         phase = .ready
@@ -110,8 +115,7 @@ final class LinkDownloader {
 
     func download() {
         guard phase == .ready || phase == .failed || phase == .cancelled || phase == .finished,
-              let url = inspectedURL, let plan = selectedPlan else { return }
-        guard let engine = DownloadEngine.executable() else { return fail(DownloadFailure.engineMissing.message) }
+              inspectedURL != nil, let plan = selectedPlan, let engine else { return }
         let destination = folder
         guard FileManager.default.isWritableFile(atPath: destination.path) else { return finishLocal(.writePermission) }
         let gen = generation.next()
@@ -125,13 +129,15 @@ final class LinkDownloader {
             defer { Self.discard(directory) } // yalnız bu işin geçici klasörü
             if let need = plan.estimatedBytes, Self.availableBytes(directory) < need * 2 { self?.finish(gen, failure: .diskFull); return }
             do {
-                let produced = try await self?.perform(plan, url: url, engine: engine, directory: directory, gen: gen)
+                let produced = try await self?.perform(plan, engine: engine, directory: directory, gen: gen)
                 guard let produced, self?.publishFinalizing(gen) == true else { return }
                 let saved = try await Task.detached(priority: .utility) { try Self.move(produced, to: destination, base: base) }.value
                 self?.finished(gen, saved: saved)
             } catch let failure as DownloadFailure {
                 self?.finish(gen, failure: failure)
             } catch MediaRemuxer.Failure.cancelled {
+                self?.finishCancelledIfCurrent(gen)
+            } catch is CancellationError {
                 self?.finishCancelledIfCurrent(gen)
             } catch {
                 self?.finish(gen, failure: .mergeFailed)
@@ -140,21 +146,21 @@ final class LinkDownloader {
     }
 
     /// Görüntü + ses ayrıysa iki indirme ve passthrough birleştirme; tek akışta indirme; birleşik akıştan ses ayırma.
-    private func perform(_ plan: DownloadPlan, url: URL, engine: URL, directory: URL, gen: UInt64) async throws -> URL? {
+    private func perform(_ plan: DownloadPlan, engine: NativeEngine, directory: URL, gen: UInt64) async throws -> URL? {
         switch plan.kind {
         case .single(let f):
-            return try await fetch(f, role: "media", span: 0...1, url: url, engine: engine, directory: directory, gen: gen)
+            return try await fetch(f, role: "media", span: 0...1, engine: engine, directory: directory, gen: gen)
         case .merge(let video, let audio):
             let total = Double((video.size ?? 0) + (audio.size ?? 0))
             let split = total > 0 ? Double(video.size ?? 0) / total : 0.85
-            guard let v = try await fetch(video, role: "video", span: 0...split, url: url, engine: engine, directory: directory, gen: gen),
-                  let a = try await fetch(audio, role: "audio", span: split...1, url: url, engine: engine, directory: directory, gen: gen) else { return nil }
+            guard let v = try await fetch(video, role: "video", span: 0...split, engine: engine, directory: directory, gen: gen),
+                  let a = try await fetch(audio, role: "audio", span: split...1, engine: engine, directory: directory, gen: gen) else { return nil }
             guard publishFinalizing(gen) else { return nil }
             let output = directory.appendingPathComponent("merged.mp4")
             try await remux(gen) { try await MediaRemuxer.merge(video: v, audio: a, to: output, handle: $0) }
             return output
         case .extractAudio(let source):
-            guard let m = try await fetch(source, role: "source", span: 0...1, url: url, engine: engine, directory: directory, gen: gen) else { return nil }
+            guard let m = try await fetch(source, role: "source", span: 0...1, engine: engine, directory: directory, gen: gen) else { return nil }
             guard publishFinalizing(gen) else { return nil }
             let output = directory.appendingPathComponent("audio.m4a")
             try await remux(gen) { try await MediaRemuxer.extractAudio(from: m, to: output, handle: $0) }
@@ -162,29 +168,17 @@ final class LinkDownloader {
         }
     }
 
-    private func fetch(_ format: MediaFormat, role: String, span: ClosedRange<Double>, url: URL, engine: URL,
+    private func fetch(_ format: MediaFormat, role: String, span: ClosedRange<Double>, engine: NativeEngine,
                        directory: URL, gen: UInt64) async throws -> URL? {
-        let template = "download:OIPROG %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s"
-        let arguments = Self.common + ["--newline", "--progress", "--progress-template", template, "--no-mtime",
-                                       "-f", format.id, "-o", directory.path + "/" + role + ".%(ext)s", "--", url.absoluteString]
+        guard generation.accepts(gen), let source = sources[format.id] else { throw DownloadFailure.formatGone }
+        let file = directory.appendingPathComponent(role + "." + format.ext)
         let gate = ProgressGate()
-        let run = EngineRun(executable: engine, arguments: arguments, workingDirectory: directory, collectStdout: false) { [weak self] line in
-            guard let f = DownloadProgressParser.fraction(line) else { return }
-            // Birleştirme arka planda yapılır; ana iş parçacığına yalnız yayınlanacak değerler gelir.
-            guard let value = gate.pass(span.lowerBound + (span.upperBound - span.lowerBound) * f) else { return }
+        try await engine.fetch(source, referer: referer, to: file) { [weak self] fraction in
+            // Ana iş parçacığına yalnız yayınlanacak (birleştirilmiş) değerler gelir.
+            guard let value = gate.pass(span.lowerBound + (span.upperBound - span.lowerBound) * fraction) else { return }
             Task { @MainActor in self?.publishProgress(value, gen) }
         }
-        guard attach(run, gen) else { return nil }
-        let outcome = await run.run(timeout: nil, stallTimeout: DownloadEngine.timeouts.stall)
         guard generation.accepts(gen) else { return nil }
-        self.run = nil
-        if outcome.cancelled { throw MediaRemuxer.Failure.cancelled }
-        if outcome.timedOut { throw DownloadFailure.timedOut }
-        guard outcome.status == 0 else { throw DownloadFailure.classify(outcome.stderrTail) }
-        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        guard let file = files.first(where: { $0.lastPathComponent.hasPrefix(role + ".") && !$0.lastPathComponent.hasSuffix(".part") }) else {
-            throw DownloadFailure.other
-        }
         return file
     }
 
@@ -198,23 +192,24 @@ final class LinkDownloader {
 
     // MARK: - Denetim
 
-    /// Yalnız bu özelliğin başlattığı süreç/dışa aktarma durdurulur; geçici dosyalar işin kendi temizliğiyle silinir.
+    /// Yalnız bu özelliğin istekleri/dışa aktarması durdurulur; geçici dosyalar işin kendi temizliğiyle silinir.
     func cancel() {
         guard phase.isBusy else { return }
+        let inspecting = phase == .inspecting
         _ = generation.next() // geç gelen sonuçlar artık kabul edilmez
-        run?.cancel(); run = nil
+        work?.cancel(); work = nil
         remux?.cancel(); remux = nil
-        work = nil
+        if inspecting { engine?.invalidate(); engine = nil } // incelenmiş bağlantının oturumu indirme için korunur
         finishCancelled()
     }
 
-    /// Uygulama kapanışı: çalışan motor beklenerek durdurulur, bu özelliğin geçici klasörü silinir.
+    /// Uygulama kapanışı: çalışan istekler kesilir, bu özelliğin geçici klasörü silinir.
     func shutdown() {
+        engine?.invalidate(); engine = nil
         guard phase.isBusy else { return }
         _ = generation.next()
-        run?.terminateSynchronously(); run = nil
+        work?.cancel(); work = nil
         remux?.cancel(); remux = nil
-        work = nil
         if let root = Self.jobRoot() { try? FileManager.default.removeItem(at: root) }
     }
 
@@ -225,6 +220,7 @@ final class LinkDownloader {
         phase = .idle
         platform = nil
         inspectedURL = nil
+        engine?.invalidate(); engine = nil
         clearResult()
         message = nil
     }
@@ -256,12 +252,6 @@ final class LinkDownloader {
 
     // MARK: - Durum geçişleri
 
-    private func attach(_ run: EngineRun, _ gen: UInt64) -> Bool {
-        guard generation.accepts(gen) else { return false }
-        self.run = run
-        return true
-    }
-
     private func publishProgress(_ value: Double, _ gen: UInt64) {
         guard generation.accepts(gen), phase == .downloading, progress != value else { return }
         progress = value
@@ -289,7 +279,7 @@ final class LinkDownloader {
     }
 
     private func finishLocal(_ failure: DownloadFailure) {
-        run = nil; work = nil
+        work = nil
         phase = .failed
         progress = nil
         message = failure.message
@@ -301,7 +291,7 @@ final class LinkDownloader {
     }
 
     private func finishCancelled() {
-        run = nil; work = nil
+        work = nil
         phase = .cancelled
         progress = nil
         message = "İptal edildi."
@@ -318,17 +308,14 @@ final class LinkDownloader {
         videoOptions = []
         audioPlan = nil
         hasAudio = false
+        sources = [:]
+        referer = nil
         tier = nil
         progress = nil
         savedFile = nil
     }
 
     // MARK: - Dosya sistemi (ana iş parçacığı dışında da çağrılabilir)
-
-    nonisolated private static let common = [
-        "--ignore-config", "--no-playlist", "--no-cache-dir", "--no-update", "--no-warnings",
-        "--socket-timeout", "20", "--retries", "3", "--fragment-retries", "3", "--extractor-retries", "2",
-    ]
 
     nonisolated private static func prepareJobDirectory() async -> URL? {
         await Task.detached(priority: .utility) { makeJobDirectory() }.value
