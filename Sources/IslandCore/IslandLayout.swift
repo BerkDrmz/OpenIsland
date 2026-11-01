@@ -212,7 +212,7 @@ public enum IslandLayoutEngine {
         /// 6 pt boşluk + 14 pt alt bilgi satırı.
         public static let footerHeight: CGFloat = 20
         public static let historyWidth: CGFloat = 190
-        /// Damlalık düğmesi + tek sıra renk (5 × 20 + 4 × 6; fazlası yatay kayar).
+        /// "Bağlantıdan indir" girişi (eski damlalık yeri) + tek sıra renk (5 × 20 + 4 × 6; fazlası yatay kayar).
         public static let colorColumnWidth: CGFloat = 124
         public static let colorColumnHeight: CGFloat = 55
         /// Boş/engelli durum: simge + başlık + iki satır açıklama.

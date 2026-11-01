@@ -1,7 +1,8 @@
 import AppKit
 import IslandCore
 
-/// Pano geçmişi (sol) + renk damlalığı ve son renkler (sağ) (SwiftUI `ClipboardPanel`).
+/// Pano geçmişi (sol) + "Bağlantıdan indir" girişi ve son renkler (sağ). İndirme formu aynı panel alanında açılır
+/// (panel boyutu değişmez); kapatılınca geçmiş geri gelir.
 /// Liste sanallaştırılmıştır: yalnız görünen satırlar kurulur ve kaydırınca yeniden kullanılır.
 @MainActor
 final class ClipboardPanelView: FlippedView, IslandPanel {
@@ -16,34 +17,65 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
     private let placeholder = PlaceholderStack(symbol: "doc.on.clipboard", title: "", detail: "", spacing: 6)
     private let separator = SeparatorView()
     private let colorColumn: ColorColumnView
-    private lazy var observer = Observer(track: { [history, colors] in
+    private let downloadView: LinkDownloadView
+    private var showsDownload = false
+    private var isShown = false
+    private lazy var observer = Observer(track: { [history, colors, downloader] in
         _ = history.items; _ = history.isBlockedBySystem; _ = history.isRunning; _ = colors.recentColors
+        _ = downloader.phase; _ = downloader.progress
     }, apply: { [weak self] in self?.update() })
+    private let downloader: LinkDownloader
 
-    init(history: ClipboardHistory, colors: ColorPickerService) {
+    init(history: ClipboardHistory, colors: ColorPickerService, downloader: LinkDownloader) {
         self.history = history
         self.colors = colors
+        self.downloader = downloader
         list = ClipListView(history: history)
         clear = PlainButton { history.clear() }
-        colorColumn = ColorColumnView(colors: colors)
+        colorColumn = ColorColumnView(colors: colors, downloader: downloader)
+        downloadView = LinkDownloadView(downloader: downloader)
         super.init(frame: .zero)
         clear.addSubview(clearLabel)
         clear.setAccessibilityLabel("Geçmişi temizle")
         clearLabel.setAccessibilityElement(false)
-        [list, hint, clear, placeholder, separator, colorColumn].forEach(addSubview)
+        downloadView.isHidden = true
+        colorColumn.onDownload = { [weak self] in self?.setShowsDownload(true) }
+        downloadView.onClose = { [weak self] in self?.setShowsDownload(false) }
+        [list, hint, clear, placeholder, separator, colorColumn, downloadView].forEach(addSubview)
+    }
+
+    /// Form ile geçmiş arasında geçiş (animasyonsuz, aynı alan). Sürmekte olan indirme etkilenmez.
+    private func setShowsDownload(_ value: Bool) {
+        guard showsDownload != value else { return }
+        showsDownload = value
+        if isShown { value ? downloadView.didShow() : downloadView.didHide() }
+        update()
+        if value { downloadView.focusField() } else { window?.makeFirstResponder(nil) }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
-    func didShow() { observer.start() }
-    func didHide() { observer.stop(); list.endHover() }
+    func didShow() {
+        isShown = true
+        observer.start()
+        if showsDownload { downloadView.didShow() }
+    }
+
+    func didHide() {
+        isShown = false
+        observer.stop(); list.endHover()
+        if showsDownload { downloadView.didHide() }
+    }
 
     private func update() {
+        downloadView.isHidden = !showsDownload
+        colorColumn.isHidden = showsDownload
+        separator.isHidden = showsDownload
         let blocked = history.isBlockedBySystem
         let empty = history.items.isEmpty
-        placeholder.isHidden = !(blocked || empty)
-        [list, hint, clear].forEach { $0.isHidden = blocked || empty }
+        placeholder.isHidden = !(blocked || empty) || showsDownload
+        [list, hint, clear].forEach { $0.isHidden = blocked || empty || showsDownload }
         if blocked {
             placeholder.update(symbol: "hand.raised.fill", title: "Pano erişimi engellendi",
                                detail: "Sistem Ayarları › Gizlilik ve Güvenlik bölümünden OpenIsland'in panoya erişimine izin verin.")
@@ -72,6 +104,7 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
         clearLabel.frame = clear.bounds
         separator.frame = pixelRect(CGRect(x: historyWidth + gap, y: 0, width: 0.5, height: bounds.height))
         colorColumn.frame = CGRect(x: bounds.width - colorWidth, y: 0, width: colorWidth, height: bounds.height)
+        downloadView.frame = bounds
     }
 }
 
@@ -373,29 +406,34 @@ private enum ClipThumbnails {
     }
 }
 
-/// Ekrandan renk damlalığı ve son seçilen renkler (tıklayınca HEX kopyalanır).
+/// "Bağlantıdan indir" girişi (eski damlalık düğmesinin yeri ve ölçüsü) ve son seçilen renkler (tıklayınca HEX
+/// kopyalanır). İndirme sürerken giriş düğmesi ilerlemeyi gösterir.
 @MainActor
 private final class ColorColumnView: FlippedView {
+    var onDownload: (() -> Void)?
     private let colors: ColorPickerService
+    private let downloader: LinkDownloader
     private let picker: PlainButton
     private let pickerBackground = RoundedView(radius: Spacing.cardRadius - 4, fill: Palette.fill)
-    private let pickerIcon = SymbolView("eyedropper.halffull", size: 12, weight: .medium, color: Palette.primary)
-    private let pickerTitle = TextLabel("Damlalık", font: Fonts.bodyEmphasized)
+    private let pickerIcon = SymbolView("arrow.down.circle", size: 12, weight: .medium, color: Palette.primary)
+    private let pickerTitle = TextLabel("İndir", font: Fonts.bodyEmphasized)
     private let emptyText = TextLabel("Seçilen renkler burada", font: Fonts.caption2, color: Palette.tertiary)
     private let swatches = NSScrollView()
     private let swatchDocument = FlippedView()
     private var shown: [String] = []
 
-    init(colors: ColorPickerService) {
+    init(colors: ColorPickerService, downloader: LinkDownloader) {
         self.colors = colors
-        picker = PlainButton { colors.pick() }
+        self.downloader = downloader
+        picker = PlainButton()
         super.init(frame: .zero)
+        picker.action = { [weak self] in self?.onDownload?() }
         picker.addSubview(pickerBackground)
         pickerBackground.addSubview(pickerIcon)
         pickerBackground.addSubview(pickerTitle)
-        picker.toolTip = "Ekrandan renk seç, HEX kodunu kopyala"
-        picker.setAccessibilityLabel("Damlalık")
-        picker.setAccessibilityHelp("Ekrandan renk seç, HEX kodunu kopyala")
+        picker.toolTip = "Bağlantıdan video veya ses indir"
+        picker.setAccessibilityLabel("Bağlantıdan indir")
+        picker.setAccessibilityHelp("Bağlantıdan video veya ses indir")
         pickerTitle.setAccessibilityElement(false)
         emptyText.minimumScaleFactor = 0.8
         swatches.drawsBackground = false
@@ -409,6 +447,15 @@ private final class ColorColumnView: FlippedView {
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
     func update() {
+        let title: String
+        switch downloader.phase {
+        case .inspecting: title = "İnceleniyor…"
+        case .downloading: title = downloader.progress.map { String(format: "%%%d", Int(($0 * 100).rounded())) } ?? "İndiriliyor"
+        case .finalizing: title = "Birleştiriliyor"
+        default: title = "İndir"
+        }
+        if pickerTitle.stringValue != title { pickerTitle.set(title); needsLayout = true }
+        picker.setAccessibilityValue(downloader.phase.isBusy ? title : nil)
         let recent = colors.recentColors
         emptyText.isHidden = !recent.isEmpty
         swatches.isHidden = recent.isEmpty
