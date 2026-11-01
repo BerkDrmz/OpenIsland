@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import IslandCore
 
@@ -5,6 +6,10 @@ import IslandCore
 /// parlaklık ve klavye ışığı yalnızca okunur.
 @main struct SystemMonitorCheck {
     @MainActor static func main() async throws {
+        // Koruma sürüm 1, çökmeden dönen geçersiz okumayı da kalıcı engel olarak saklıyordu (Ekim 2026: dahili ekran
+        // parlaklığı tek bir geçici hatadan sonra o macOS yapısı boyunca kapalı kaldı). Eski engel bir kez silinmeli.
+        UserDefaults.standard.removeObject(forKey: "privateAPI.guardVersion")
+        UserDefaults.standard.set(PrivateAPIGuard.build, forKey: "privateAPI.brightness.blocked")
         // The kernel right is shared by name, but every mach_host_self call adds a reference.
         // Repeated real sensor reads must leave the reference count unchanged.
         let host = mach_host_self()
@@ -143,6 +148,18 @@ import IslandCore
             precondition(UserDefaults.standard.string(forKey: "privateAPI.\(feature).pending") == nil,
                          "\(feature): başarılı ilk çağrıdan sonra çökme işareti silinmeli")
         }
+        precondition(UserDefaults.standard.integer(forKey: "privateAPI.guardVersion") == 2, "Koruma sürüm geçişi yapılmadı")
+        for feature in ["temperature", "brightness", "keyboard"] {
+            precondition(UserDefaults.standard.string(forKey: "privateAPI.\(feature).blocked") == nil,
+                         "\(feature): çökme olmadan kalıcı engel kalmamalı")
+        }
+        var displays = [CGDirectDisplayID](repeating: 0, count: 8), displayCount: UInt32 = 0
+        _ = CGGetActiveDisplayList(8, &displays, &displayCount)
+        if displays.prefix(Int(displayCount)).contains(where: { CGDisplayIsBuiltin($0) != 0 }) {
+            precondition(monitor.brightness != nil && monitor.canAdjustBrightness,
+                         "Dahili ekran etkin ama parlaklık kaydırıcısı kullanılamıyor")
+        }
+        print("PASS: eski kalıcı engel silindi; dahili ekran parlaklığı okunuyor ve ayarlanabilir")
 
         // Kapatma: görev ve sensör istemcisi bırakılır; tekrar açılabilir.
         monitor.stop()

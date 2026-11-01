@@ -45,6 +45,8 @@ final class SystemMonitor {
     @ObservationIgnored private var displayControl: ManagedLevelControl?
     @ObservationIgnored private var keyboardControl: ManagedLevelControl?
     @ObservationIgnored private var didTryPrivate = false
+    /// Parlaklık/klavye ışığı o an okunamadıysa panel yeniden açılınca ya da uyanınca bir kez daha denenir.
+    @ObservationIgnored private var retryLevelControls = false
     /// Kaydırıcı sürüklenirken değeri kullanıcı belirler; ölçüm onu ezmez.
     @ObservationIgnored private var adjusting = false
     @ObservationIgnored private var lastSampleInstant: ContinuousClock.Instant = .now - .seconds(10)
@@ -79,6 +81,7 @@ final class SystemMonitor {
 
     func start() {
         guard task == nil else { return }
+        if didTryPrivate, displayControl == nil || keyboardControl == nil { retryLevelControls = true }
         generation &+= 1
         let token = generation
         let elapsed = ContinuousClock.now - lastSampleInstant
@@ -126,6 +129,7 @@ final class SystemMonitor {
         privateRevision &+= 1 // re-enumerate cached sensor services after wake/display changes
         displayControl?.reset()
         keyboardControl?.reset()
+        if didTryPrivate, displayControl == nil || keyboardControl == nil { retryLevelControls = true }
     }
 
     func setBrightness(_ value: Float) {
@@ -217,6 +221,10 @@ final class SystemMonitor {
             didTryPrivate = true
             displayControl = PrivateLevelBackends.displayBrightness().map(ManagedLevelControl.init)
             keyboardControl = PrivateLevelBackends.keyboardBacklight().map(ManagedLevelControl.init)
+        } else if retryLevelControls {
+            retryLevelControls = false
+            if displayControl == nil { displayControl = PrivateLevelBackends.displayBrightness().map(ManagedLevelControl.init) }
+            if keyboardControl == nil { keyboardControl = PrivateLevelBackends.keyboardBacklight().map(ManagedLevelControl.init) }
         }
         var nextTemperature = temperatures
         if PrivateAPIGuard.begin("temperature") {
@@ -238,6 +246,7 @@ final class SystemMonitor {
         displayControl = nil
         keyboardControl = nil
         didTryPrivate = false
+        retryLevelControls = false
         temperatures = nil
         brightness = nil
         keyboardBacklight = nil

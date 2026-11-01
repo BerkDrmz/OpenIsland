@@ -360,13 +360,14 @@ private final class SliderRow: FlippedView {
     private var isTracking = false
 
     @objc private func changed(_ sender: NSSlider) {
-        let event = NSApp.currentEvent
-        let began = event?.type == .leftMouseDown
-        let ended = event?.type == .leftMouseUp
-        if began || !isTracking { isTracking = true; system?.setAdjusting(true) }
+        // Sürükleme dışındaki her değişiklik (bırakma, klavye, VoiceOver) tek adımdır: ölçüm hemen yeniden devralır.
+        // Önceden yalnız fare bırakma izlemeyi bitiriyordu; klavyeyle değişiklikten sonra kaydırıcı güncellenmiyordu.
+        let type = NSApp.currentEvent?.type
+        let dragging = type == .leftMouseDown || type == .leftMouseDragged
+        if !isTracking { isTracking = true; system?.setAdjusting(true) }
         set(Float(sender.doubleValue))
         slider.setAccessibilityValueDescription("%\(Int((sender.doubleValue * 100).rounded()))")
-        if ended { isTracking = false; system?.setAdjusting(false) }
+        if !dragging { isTracking = false; system?.setAdjusting(false) }
     }
 
     override func layout() {

@@ -162,7 +162,9 @@ enum PrivateLevelBackends {
             var value: Float = -1
             return get(display, &value) == 0 ? value : nil
         }
-        guard let first = read(), first.isFinite, (0...1).contains(first) else { PrivateAPIGuard.failed("brightness"); return nil }
+        // Dahili ekran etkin değilse (uyanma, ekran yeniden yapılandırması) okuma geçici olarak yoktur; API bozuk değildir.
+        guard let first = read() else { PrivateAPIGuard.unavailable("brightness"); return nil }
+        guard first.isFinite, (0...1).contains(first) else { PrivateAPIGuard.failed("brightness"); return nil }
         PrivateAPIGuard.succeeded("brightness")
         return LevelControlBackend(read: read) { value in
             guard let display = builtInDisplay(), set(display, value) == 0, let back = read() else { return false }
