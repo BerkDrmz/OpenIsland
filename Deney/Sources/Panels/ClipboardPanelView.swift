@@ -48,6 +48,8 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
         addPendingLabel.setAccessibilityElement(false)
         pasteSettings.addSubview(pasteSettingsLabel)
         pasteSettings.setAccessibilityLabel("Pano izin ayarını aç")
+        pasteSettings.toolTip = "\"Her zaman izin ver\" seçilirse macOS bir daha sormaz"
+        pasteSettings.setAccessibilityHelp("\"Her zaman izin ver\" seçilirse macOS bir daha sormaz")
         pasteSettingsLabel.setAccessibilityElement(false)
         downloadView.isHidden = true
         downloadEntry.onDownload = { [weak self] in self?.setShowsDownload(true) }
@@ -95,8 +97,7 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
                                detail: "Sistem Ayarları › Gizlilik ve Güvenlik bölümünden OpenIsland'in panoya erişimine izin verin.")
         } else if empty && pending {
             placeholder.update(symbol: "doc.on.clipboard", title: "Yeni kopya izin bekliyor",
-                               detail: "macOS başka uygulamadan kopyalananı okumadan önce sorar. "
-                                   + "İzin ayarında \"Her zaman izin ver\" seçilirse bir daha sorulmaz.")
+                               detail: "macOS okumadan önce izin ister.")
         } else if empty {
             placeholder.update(symbol: "doc.on.clipboard", title: "Pano geçmişi boş",
                                detail: history.isRunning ? "Kopyaladığınız metin, görsel ve dosyalar burada görünür." : "Pano geçmişi Ayarlar'dan kapatılmış.")
