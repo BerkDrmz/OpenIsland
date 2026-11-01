@@ -71,6 +71,7 @@ final class MixerPanelView: FlippedView, IslandPanel {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
+    func prewarm() { mixer.prefetch() }
     func didShow() { mixer.showPanel(); observer.start() }
     func didHide() { observer.stop(); mixer.hidePanel() }
 

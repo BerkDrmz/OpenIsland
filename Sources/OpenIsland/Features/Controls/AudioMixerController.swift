@@ -43,6 +43,9 @@ final class AudioMixerController {
     @ObservationIgnored private var directPending: [pid_t: Float] = [:]
     @ObservationIgnored private var directWorkers: [pid_t: Task<Void, Never>] = [:]
     @ObservationIgnored private var isSleeping = false
+    @ObservationIgnored private var snapshotGeneration: UInt64 = 0
+    @ObservationIgnored private var snapshotReading = false
+    @ObservationIgnored private var snapshotAgain = false
 
     var supportsApplicationMixer: Bool { if #available(macOS 14.2, *) { true } else { false } }
     var listenerCount: Int { listeners.count }
@@ -56,10 +59,17 @@ final class AudioMixerController {
         if #available(macOS 14.2, *) { (engines[pid] as? ApplicationAudioRoute)?.interruptForDiagnostics() }
     }
 
+    /// İlk gösterimde gösterilecek veri yoktur: eşzamanlı okunur. Sonraki açılışlarda önceki liste hemen görünür, taze
+    /// okuma ana iş parçacığı dışında yapılır; açılış animasyonu Core Audio ve LaunchServices sorgularını beklemez.
     func showPanel() {
         panels += 1
-        refresh()
+        if applications.isEmpty && devices.isEmpty { refresh() } else { refreshOffMain() }
         attachListeners()
+    }
+    /// Panel uyku hâlinde önceden kurulurken: ilk açılışın verisi ana iş parçacığı dışında hazırlanır (dinleyici yok).
+    func prefetch() {
+        guard applications.isEmpty && devices.isEmpty else { return }
+        refreshOffMain()
     }
     func hidePanel() {
         panels = max(0, panels - 1)
@@ -69,6 +79,7 @@ final class AudioMixerController {
         panels = 0
         refreshTask?.cancel()
         refreshTask = nil
+        cancelSnapshot()
         detachListeners()
         if #available(macOS 14.2, *) { for engine in engines.values { (engine as? ApplicationAudioRoute)?.stop() } }
         engines.removeAll()
@@ -137,53 +148,50 @@ final class AudioMixerController {
     }
 
     func refresh() {
-        let hardware = AudioHardwareAccess.self
-        let nextDevices = MixerDevice.read()
-        if devices != nextDevices { devices = nextDevices }
-        let nextOutput = hardware.defaultDevice(kAudioHardwarePropertyDefaultOutputDevice)
-        let nextSystemOutput = hardware.defaultDevice(kAudioHardwarePropertyDefaultSystemOutputDevice)
-        let nextInput = hardware.defaultDevice(kAudioHardwarePropertyDefaultInputDevice)
-        if output != nextOutput { output = nextOutput }
-        if systemOutput != nextSystemOutput { systemOutput = nextSystemOutput }
-        if input != nextInput { input = nextInput }
-        let nextOutputLevel = hardware.level(output, input: false)
-        let nextInputLevel = hardware.level(input, input: true)
-        if outputLevel != nextOutputLevel { outputLevel = nextOutputLevel }
-        if inputLevel != nextInputLevel { inputLevel = nextInputLevel }
-        var processMap: [pid_t: [AudioObjectID]] = [:]
-        var playing = Set<pid_t>()
-        let running = NSWorkspace.shared.runningApplications.filter {
-            $0.activationPolicy == .regular && !$0.isTerminated && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+        apply(MixerSnapshot.read(excluding: ProcessInfo.processInfo.processIdentifier))
+    }
+
+    /// Core Audio ve uygulama listesi ana iş parçacığı dışında okunur, sonuç ana aktörde uygulanır. Okuma sürerken gelen
+    /// istekler tek bir yeni okumada birleşir; `cancelSnapshot()` sonrasında gelen sonuç uygulanmaz.
+    private func refreshOffMain() {
+        guard !snapshotReading else { snapshotAgain = true; return }
+        snapshotReading = true
+        snapshotAgain = false
+        let generation = snapshotGeneration
+        let pid = ProcessInfo.processInfo.processIdentifier
+        Task { [weak self] in
+            let snapshot = await Task.detached(priority: .userInitiated) { MixerSnapshot.read(excluding: pid) }.value
+            guard let self else { return }
+            self.snapshotReading = false
+            if self.snapshotAgain { self.refreshOffMain(); return }
+            guard generation == self.snapshotGeneration, !self.isSleeping else { return }
+            self.apply(snapshot)
+            self.attachListeners()
         }
-        let owners = running.map { (app: $0, pid: $0.processIdentifier, bundleID: $0.bundleIdentifier, path: $0.bundleURL?.path) }
-        if #available(macOS 14.2, *) {
-            for object in hardware.objects(hardware.system, kAudioHardwarePropertyProcessObjectList) {
-                guard let pid = hardware.scalar(object, kAudioProcessPropertyPID, initial: pid_t(0)), pid != 0 else { continue }
-                let process = NSRunningApplication(processIdentifier: pid)
-                let bundleID = hardware.string(object, kAudioProcessPropertyBundleID) ?? process?.bundleIdentifier ?? ""
-                let processPath = process?.bundleURL?.path
-                let owner = owners.first { candidate in
-                    candidate.pid == pid
-                    || (candidate.bundleID.map { bundleID == $0 || bundleID.hasPrefix($0 + ".") } ?? false)
-                    || (candidate.path.map { processPath?.hasPrefix($0 + "/") == true } ?? false)
-                }?.app
-                guard let owner else { continue }
-                processMap[owner.processIdentifier, default: []].append(object)
-                if hardware.scalar(object, kAudioProcessPropertyIsRunningOutput, initial: UInt32(0)) == 1 {
-                    playing.insert(owner.processIdentifier)
-                }
-            }
-        }
+    }
+
+    private func cancelSnapshot() {
+        snapshotGeneration &+= 1
+        snapshotAgain = false
+    }
+
+    private func apply(_ snapshot: MixerSnapshot) {
+        if devices != snapshot.devices { devices = snapshot.devices }
+        if output != snapshot.output { output = snapshot.output }
+        if systemOutput != snapshot.systemOutput { systemOutput = snapshot.systemOutput }
+        if input != snapshot.input { input = snapshot.input }
+        if outputLevel != snapshot.outputLevel { outputLevel = snapshot.outputLevel }
+        if inputLevel != snapshot.inputLevel { inputLevel = snapshot.inputLevel }
         // Core Audio status changes do not change application icons. Reuse the
         // already loaded icon instead of asking LaunchServices to read it again.
         let previous = Dictionary(uniqueKeysWithValues: applications.map { ($0.id, $0) })
-        let next = running.map { app in
-            let cached = previous[app.processIdentifier]
-            let icon = cached?.bundleID == app.bundleIdentifier ? cached?.icon : nil
-            return MixerApplication(id: app.processIdentifier, name: app.localizedName ?? "Uygulama", bundleID: app.bundleIdentifier ?? "",
-                             icon: icon ?? app.icon,
-                             processes: (processMap[app.processIdentifier] ?? []).sorted(), isPlaying: playing.contains(app.processIdentifier))
-        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let next = snapshot.applications.map { app in
+            let cached = previous[app.pid]
+            let icon = cached?.bundleID == app.bundleID ? cached?.icon : nil
+            return MixerApplication(id: app.pid, name: app.name, bundleID: app.bundleID,
+                                    icon: icon ?? NSRunningApplication(processIdentifier: app.pid)?.icon,
+                                    processes: app.processes, isPlaying: app.isPlaying)
+        }
         if applications != next { applications = next }
         let existing = Set(next.map(\.id))
         volumes = volumes.filter { existing.contains($0.key) }
@@ -255,8 +263,7 @@ final class AudioMixerController {
             do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
             guard let self, !Task.isCancelled else { return }
             self.refreshTask = nil
-            self.refresh()
-            self.attachListeners()
+            self.refreshOffMain()
         }
     }
 
@@ -268,6 +275,7 @@ final class AudioMixerController {
             isSleeping = false
             refreshTask?.cancel()
             refreshTask = nil
+            cancelSnapshot()
             return
         }
         var properties: [(AudioObjectID, AudioObjectPropertyAddress)] = []
@@ -331,6 +339,7 @@ final class AudioMixerController {
                 self.isSleeping = true
                 self.refreshTask?.cancel()
                 self.refreshTask = nil
+                self.cancelSnapshot()
                 self.stopHardwareRoutes()
             }
         })
@@ -413,5 +422,63 @@ final class AudioMixerController {
         listeners.removeAll()
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         workspaceObservers.removeAll()
+    }
+}
+
+/// Mikserin ana iş parçacığı dışında okunabilen durumu: aygıtlar, varsayılanlar, seviyeler ve normal uygulamaların
+/// Core Audio süreçleri. Simgeler (NSImage) ana aktörde, önbellekten eklenir.
+struct MixerSnapshot: Sendable {
+    struct Application: Sendable {
+        let pid: pid_t
+        let name: String
+        let bundleID: String
+        let processes: [AudioObjectID]
+        let isPlaying: Bool
+    }
+
+    let devices: [MixerDevice]
+    let output: AudioObjectID
+    let systemOutput: AudioObjectID
+    let input: AudioObjectID
+    let outputLevel: Float?
+    let inputLevel: Float?
+    let applications: [Application]
+
+    static func read(excluding ownPID: pid_t) -> MixerSnapshot {
+        let hardware = AudioHardwareAccess.self
+        let output = hardware.defaultDevice(kAudioHardwarePropertyDefaultOutputDevice)
+        let input = hardware.defaultDevice(kAudioHardwarePropertyDefaultInputDevice)
+        var processMap: [pid_t: [AudioObjectID]] = [:]
+        var playing = Set<pid_t>()
+        let running = NSWorkspace.shared.runningApplications.filter {
+            $0.activationPolicy == .regular && !$0.isTerminated && $0.processIdentifier != ownPID
+        }
+        let owners = running.map { (app: $0, pid: $0.processIdentifier, bundleID: $0.bundleIdentifier, path: $0.bundleURL?.path) }
+        if #available(macOS 14.2, *) {
+            for object in hardware.objects(hardware.system, kAudioHardwarePropertyProcessObjectList) {
+                guard let pid = hardware.scalar(object, kAudioProcessPropertyPID, initial: pid_t(0)), pid != 0 else { continue }
+                let process = NSRunningApplication(processIdentifier: pid)
+                let bundleID = hardware.string(object, kAudioProcessPropertyBundleID) ?? process?.bundleIdentifier ?? ""
+                let processPath = process?.bundleURL?.path
+                let owner = owners.first { candidate in
+                    candidate.pid == pid
+                    || (candidate.bundleID.map { bundleID == $0 || bundleID.hasPrefix($0 + ".") } ?? false)
+                    || (candidate.path.map { processPath?.hasPrefix($0 + "/") == true } ?? false)
+                }?.app
+                guard let owner else { continue }
+                processMap[owner.processIdentifier, default: []].append(object)
+                if hardware.scalar(object, kAudioProcessPropertyIsRunningOutput, initial: UInt32(0)) == 1 {
+                    playing.insert(owner.processIdentifier)
+                }
+            }
+        }
+        let applications = running.map { app in
+            Application(pid: app.processIdentifier, name: app.localizedName ?? "Uygulama", bundleID: app.bundleIdentifier ?? "",
+                        processes: (processMap[app.processIdentifier] ?? []).sorted(), isPlaying: playing.contains(app.processIdentifier))
+        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return MixerSnapshot(devices: MixerDevice.read(), output: output,
+                             systemOutput: hardware.defaultDevice(kAudioHardwarePropertyDefaultSystemOutputDevice),
+                             input: input, outputLevel: hardware.level(output, input: false),
+                             inputLevel: hardware.level(input, input: true), applications: applications)
     }
 }
