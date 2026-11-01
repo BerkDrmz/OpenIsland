@@ -46,7 +46,7 @@ enum SettingsParityHarness {
             MainActor.assumeIsolated {
                 // Görünüm ağacı dökümü (sınıf, çerçeve, katman rengi/köşe/kenarlık, malzeme): `klasör/tree.txt`
                 var out: [String] = []
-                func walk(_ v: NSView, _ d: Int) {
+                @MainActor func walk(_ v: NSView, _ d: Int) {
                     guard d < 14 else { return }
                     var extra = ""
                     if let e = v as? NSVisualEffectView { extra += " material=\(e.material.rawValue) blend=\(e.blendingMode.rawValue) state=\(e.state.rawValue)" }

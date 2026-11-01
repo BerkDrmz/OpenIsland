@@ -132,7 +132,7 @@ private struct SlotItem {
         return x.isActive || y.isActive || w.isActive || h.isActive || r.isActive || progress.isActive
     }
 
-    func apply(to view: NSView, offset: CGPoint, radius: ((CGFloat) -> Void)?) {
+    @MainActor func apply(to view: NSView, offset: CGPoint, radius: ((CGFloat) -> Void)?) {
         let p = max(0, min(1, progress.value))
         let hidden = p <= 0.001
         if view.isHidden != hidden { view.isHidden = hidden }

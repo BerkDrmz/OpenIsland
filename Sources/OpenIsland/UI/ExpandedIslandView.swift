@@ -118,7 +118,7 @@ struct ExpandedIslandView: View {
         /// Görünmez iskeletin (dolgu dahil) yerleşim genişliği: satır sığmazsa en küçük satır genişliği.
         let skeletonWidth: CGFloat
 
-        init(bodyWidth: CGFloat, boxWidth: CGFloat, padding: CGFloat, metrics: NotchMetrics, visible: [ExpandedTab]) {
+        @MainActor init(bodyWidth: CGFloat, boxWidth: CGFloat, padding: CGFloat, metrics: NotchMetrics, visible: [ExpandedTab]) {
             let tab = IslandLayoutEngine.tabButtonSize.width
             let spacing = IslandLayoutEngine.tabSpacing
             let leading = CGFloat(IslandLayoutEngine.leadingTabOrder.filter(visible.contains).count)

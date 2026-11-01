@@ -13,6 +13,11 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
     private let hint = TextLabel("Tıkla: kopyala", font: Fonts.caption2, color: Palette.tertiary)
     private let clear: PlainButton
     private let clearLabel = TextLabel("Geçmişi temizle", font: Fonts.caption2)
+    /// macOS 27.2+ pano izni "Sor": bekleyen kopyayı kullanıcı isteğiyle ekler / izin ayarını açar.
+    private let addPending: PlainButton
+    private let addPendingLabel = TextLabel("Yeni kopyayı ekle", font: Fonts.caption2, color: Palette.primary)
+    private let pasteSettings = PlainButton { NSWorkspace.shared.open(PermissionsCenter.Pane.pasteboard.url) }
+    private let pasteSettingsLabel = TextLabel("İzin ayarı", font: Fonts.caption2)
     private let placeholder = PlaceholderStack(symbol: "doc.on.clipboard", title: "", detail: "", spacing: 6)
     private let separator = SeparatorView()
     private let downloadEntry: DownloadEntryView
@@ -20,7 +25,7 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
     private var showsDownload = false
     private var isShown = false
     private lazy var observer = Observer(track: { [history, downloader] in
-        _ = history.items; _ = history.isBlockedBySystem; _ = history.isRunning
+        _ = history.items; _ = history.isBlockedBySystem; _ = history.isRunning; _ = history.needsPasteAccess
         _ = downloader.phase; _ = downloader.progress
     }, apply: { [weak self] in self?.update() })
     private let downloader: LinkDownloader
@@ -30,16 +35,24 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
         self.downloader = downloader
         list = ClipListView(history: history)
         clear = PlainButton { history.clear() }
+        addPending = PlainButton { history.addPendingCopy() }
         downloadEntry = DownloadEntryView(downloader: downloader)
         downloadView = LinkDownloadView(downloader: downloader)
         super.init(frame: .zero)
         clear.addSubview(clearLabel)
         clear.setAccessibilityLabel("Geçmişi temizle")
         clearLabel.setAccessibilityElement(false)
+        addPending.addSubview(addPendingLabel)
+        addPending.setAccessibilityLabel("Yeni kopyayı ekle")
+        addPending.setAccessibilityHelp("macOS panodan okumak için izin isteyebilir")
+        addPendingLabel.setAccessibilityElement(false)
+        pasteSettings.addSubview(pasteSettingsLabel)
+        pasteSettings.setAccessibilityLabel("Pano izin ayarını aç")
+        pasteSettingsLabel.setAccessibilityElement(false)
         downloadView.isHidden = true
         downloadEntry.onDownload = { [weak self] in self?.setShowsDownload(true) }
         downloadView.onClose = { [weak self] in self?.setShowsDownload(false) }
-        [list, hint, clear, placeholder, separator, downloadEntry, downloadView].forEach(addSubview)
+        [list, hint, clear, addPending, pasteSettings, placeholder, separator, downloadEntry, downloadView].forEach(addSubview)
     }
 
     /// Form ile geçmiş arasında geçiş (animasyonsuz, aynı alan). Sürmekte olan indirme etkilenmez.
@@ -72,11 +85,18 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
         separator.isHidden = showsDownload
         let blocked = history.isBlockedBySystem
         let empty = history.items.isEmpty
+        let pending = history.needsPasteAccess && !blocked
         placeholder.isHidden = !(blocked || empty) || showsDownload
-        [list, hint, clear].forEach { $0.isHidden = blocked || empty || showsDownload }
+        list.isHidden = blocked || empty || showsDownload
+        [hint, clear].forEach { $0.isHidden = blocked || empty || pending || showsDownload }
+        [addPending, pasteSettings].forEach { $0.isHidden = !pending || showsDownload }
         if blocked {
             placeholder.update(symbol: "hand.raised.fill", title: "Pano erişimi engellendi",
                                detail: "Sistem Ayarları › Gizlilik ve Güvenlik bölümünden OpenIsland'in panoya erişimine izin verin.")
+        } else if empty && pending {
+            placeholder.update(symbol: "doc.on.clipboard", title: "Yeni kopya izin bekliyor",
+                               detail: "macOS başka uygulamadan kopyalananı okumadan önce sorar. "
+                                   + "İzin ayarında \"Her zaman izin ver\" seçilirse bir daha sorulmaz.")
         } else if empty {
             placeholder.update(symbol: "doc.on.clipboard", title: "Pano geçmişi boş",
                                detail: history.isRunning ? "Kopyaladığınız metin, görsel ve dosyalar burada görünür." : "Pano geçmişi Ayarlar'dan kapatılmış.")
@@ -92,14 +112,20 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
         let colorWidth = IslandLayoutEngine.Clipboard.colorColumnWidth
         let gap = IslandLayoutEngine.columnGap
         let historyWidth = bounds.width - colorWidth - 0.5 - 2 * gap
-        placeholder.frame = CGRect(x: 0, y: 0, width: historyWidth, height: bounds.height)
         let footer = hint.lineHeight // HStack: caption2 metin + caption2 düz düğme (13 pt)
+        placeholder.frame = CGRect(x: 0, y: 0, width: historyWidth, height: bounds.height - (addPending.isHidden ? 0 : footer + 6))
         list.frame = CGRect(x: 0, y: 0, width: historyWidth, height: bounds.height - footer - 6)
         let fy = bounds.height - footer
         hint.frame = CGRect(x: 0, y: fy + (footer - hint.lineHeight) / 2, width: pixelCeil(hint.exactWidth), height: hint.lineHeight)
         let cw = pixelCeil(clearLabel.exactWidth)
         clear.frame = CGRect(x: historyWidth - cw, y: fy + (footer - clearLabel.lineHeight) / 2, width: cw, height: clearLabel.lineHeight)
         clearLabel.frame = clear.bounds
+        let aw = pixelCeil(addPendingLabel.exactWidth)
+        addPending.frame = CGRect(x: 0, y: fy + (footer - addPendingLabel.lineHeight) / 2, width: aw, height: addPendingLabel.lineHeight)
+        addPendingLabel.frame = addPending.bounds
+        let sw = pixelCeil(pasteSettingsLabel.exactWidth)
+        pasteSettings.frame = CGRect(x: historyWidth - sw, y: fy + (footer - pasteSettingsLabel.lineHeight) / 2, width: sw, height: pasteSettingsLabel.lineHeight)
+        pasteSettingsLabel.frame = pasteSettings.bounds
         separator.frame = pixelRect(CGRect(x: historyWidth + gap, y: 0, width: 0.5, height: bounds.height))
         downloadEntry.frame = CGRect(x: bounds.width - colorWidth, y: 0, width: colorWidth, height: bounds.height)
         downloadView.frame = bounds

@@ -57,6 +57,7 @@ final class AppEnvironment {
                 clipboard?.setShortcutMonitoring(state == .granted)
                 quitOnClose?.configure(enabled: preferences?.quitOnLastWindowClose == true)
             }
+            if kind == .clipboard { clipboard?.accessChanged() }
             if kind == .accessibility || kind == .screenCapture {
                 dockPreviews?.configure(enabled: preferences?.dockWindowPreviews == true)
             }

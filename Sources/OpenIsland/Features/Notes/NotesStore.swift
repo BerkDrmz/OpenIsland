@@ -146,7 +146,8 @@ final class LauncherStore {
     func addLink() {
         let field = NSTextField(frame: CGRect(x: 0, y: 0, width: 280, height: 24))
         field.placeholderString = "https://"
-        if let clip = NSPasteboard.general.string(forType: .string), Self.normalizedURL(clip) != nil {
+        // macOS 27.2+: ön doldurma için pano uyarısı açılmaz; yalnız okuma sessizse doldurulur.
+        if PasteAccess.canReadSilently(), let clip = NSPasteboard.general.string(forType: .string), Self.normalizedURL(clip) != nil {
             field.stringValue = clip
         }
         let alert = NSAlert()

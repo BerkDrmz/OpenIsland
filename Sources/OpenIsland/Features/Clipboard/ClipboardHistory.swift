@@ -30,12 +30,15 @@ struct ClipItem: Identifiable, Equatable, Codable {
 /// - `org.nspasteboard.ConcealedType/TransientType` işaretli içerik (parola yöneticileri) kaydedilmez.
 /// - macOS 15.4+ `NSPasteboard.accessBehavior`: kullanıcı panoya erişimi "Asla" yaptıysa izleme durur.
 ///   Apple'ın pano gizlilik modelinde `changeCount` okumak uyarı tetiklemez, içerik okumak tetikler
-///   (kullanıcı "Her zaman izin ver" diyene kadar).
+///   (kullanıcı "Her zaman izin ver" diyene kadar). macOS 27.2+ "Sor" durumunda içerik arka planda okunmaz
+///   (`PasteAccess`): yeni kopya bekletilir, kullanıcı panelden tek seferlik eklemeyi başlatır.
 @MainActor
 @Observable
 final class ClipboardHistory {
     private(set) var items: [ClipItem] = []
     private(set) var isBlockedBySystem = false
+    /// macOS 27.2+ "Sor": yeni kopya var ama okumak sistem uyarısı açar; panel kullanıcıya ekleme düğmesi gösterir.
+    private(set) var needsPasteAccess = false
     private(set) var isRunning = false
     var limit = 40
 
@@ -49,6 +52,7 @@ final class ClipboardHistory {
     /// Uygulama geçişinde kopyalama önceki uygulamada yapılmıştır; kaynağı doğru atamak için tutulur.
     @ObservationIgnored private var previousFrontmostName = NSWorkspace.shared.frontmostApplication?.localizedName
     @ObservationIgnored private let storeURL: URL
+    @ObservationIgnored private var pendingSource: String?
 
     private static let ignoredTypes: Set<NSPasteboard.PasteboardType> = [
         .init("org.nspasteboard.ConcealedType"),
@@ -187,11 +191,25 @@ final class ClipboardHistory {
         return true
     }
 
-    private func capture(from pasteboard: NSPasteboard, source: String?) {
-        if #available(macOS 15.4, *) {
-            isBlockedBySystem = pasteboard.accessBehavior == .alwaysDeny
-            if isBlockedBySystem { return }
-        }
+    /// Bekleyen kopyayı kullanıcı isteğiyle okur; macOS 27.2+ "Sor" durumunda sistem uyarısını bu okuma açar.
+    func addPendingCopy() {
+        guard needsPasteAccess else { return }
+        lastChangeCount = pasteboard.changeCount
+        capture(from: pasteboard, source: pendingSource, userInitiated: true)
+    }
+
+    /// Pano izni değiştiğinde (ör. Ayarlar'da "Her zaman izin ver") bekleyen kopya sessizce alınır.
+    func accessChanged() {
+        guard needsPasteAccess, PasteAccess.behavior(of: pasteboard) != .ask else { return }
+        addPendingCopy()
+    }
+
+    private func capture(from pasteboard: NSPasteboard, source: String?, userInitiated: Bool = false) {
+        let access = PasteAccess.behavior(of: pasteboard)
+        isBlockedBySystem = access == .denied
+        needsPasteAccess = access == .ask && !userInitiated
+        pendingSource = needsPasteAccess ? source : nil
+        if isBlockedBySystem || needsPasteAccess { return }
         guard let types = pasteboard.types, Self.ignoredTypes.isDisjoint(with: types) else { return }
 
         let content: ClipItem.Content?

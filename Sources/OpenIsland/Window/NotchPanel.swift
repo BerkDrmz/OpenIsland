@@ -207,12 +207,19 @@ final class NotchSensorPanel: NSPanel {
     weak var accessibilityTarget: NSWindow?
     override func isAccessibilityElement() -> Bool { false }
     override func accessibilityChildren() -> [Any]? { nil }
-    override func accessibilityHitTest(_ point: NSPoint) -> Any? { accessibilityTarget?.accessibilityHitTest(point) }
+    // Erişilebilirlik sorguları ana iş parçacığında gelir; başka iş parçacığından gelen sorgu yanıtsız kalır.
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        guard Thread.isMainThread else { return nil }
+        return MainActor.assumeIsolated { accessibilityTarget }?.accessibilityHitTest(point)
+    }
 }
 
 final class SensorView: NSView {
     override func isAccessibilityElement() -> Bool { false }
-    override func accessibilityHitTest(_ point: NSPoint) -> Any? { (window as? NotchSensorPanel)?.accessibilityHitTest(point) }
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        guard Thread.isMainThread else { return nil }
+        return MainActor.assumeIsolated { window as? NotchSensorPanel }?.accessibilityHitTest(point)
+    }
     var onPointerEntered: (() -> Void)?
     var onPointerExited: (() -> Void)?
     var onClick: (() -> Void)?

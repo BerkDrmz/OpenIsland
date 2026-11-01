@@ -171,15 +171,14 @@ final class Preferences {
     /// Bayrak yalnızca kayıt gerçekten oluştuysa (etkin ya da kullanıcı onayı bekliyor) kalıcı olur; kayıt
     /// başarısız olursa (ör. durum `.notFound`) sonraki açılışta yeniden denenir.
     func enableLaunchAtLoginOnFirstRun() {
-        #if OPENISLAND_DENEY
-        return // AppKit deneyi kendini oturum açılış öğesi olarak kaydetmez.
-        #endif
+        #if !OPENISLAND_DENEY // AppKit deneyi kendini oturum açılış öğesi olarak kaydetmez.
         guard AppPaths.isRunningAsBundle, defaults.object(forKey: "launchAtLoginDefaultApplied") == nil else { return }
         refreshLaunchAtLogin()
         if !launchAtLogin { launchAtLogin = true }
         let status = launchAtLoginStatus
         LifecycleLog.note("login item kaydı: durum=\(status.rawValue) (0 kayıtsız, 1 etkin, 2 onay bekliyor, 3 bulunamadı)")
         if status == .enabled || status == .requiresApproval { defaults.set(true, forKey: "launchAtLoginDefaultApplied") }
+        #endif
     }
 
     private func persist(_ value: Any, _ key: String) {
