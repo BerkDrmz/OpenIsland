@@ -9,6 +9,7 @@ final class DeneyAppDelegate: NSObject, NSApplicationDelegate {
 
     static func main() {
         TestIsolationGuard.validate()
+        if SingleInstance.handOffToRunningInstance() { exit(0) }
         let app = NSApplication.shared
         let delegate = DeneyAppDelegate()
         retained = delegate
@@ -42,6 +43,14 @@ final class DeneyAppDelegate: NSObject, NSApplicationDelegate {
         let coordinator = IslandCoordinator(environment: environment)
         coordinator.start()
         self.coordinator = coordinator
+        SingleInstance.observeReopenRequests { [weak settings] in settings?.show() }
+    }
+
+    /// Çalışan uygulama yeniden açıldı (Finder, Spotlight, Launchpad): penceresiz bir menü çubuğu uygulamasında
+    /// alışılmış karşılık Ayarlar penceresidir.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { settings?.show() }
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
