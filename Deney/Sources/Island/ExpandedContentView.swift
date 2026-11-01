@@ -10,6 +10,10 @@ import IslandCore
 /// Açılışta kurulum/çizim donması olmasın diye bir sonraki açılışın görünümü ada kapalıyken **uyku halinde** önceden
 /// kurulur (`dormant`): panel yerleşir ama `didShow` çağrılmaz, gözlem/örnekleme başlamaz; `activate()` açılış anında
 /// SwiftUI'deki `onAppear` ile aynı noktada çağrılır.
+///
+/// Uyku hâlindeki görünüm, kullanıcı adaya gelmeden önce pencerede bir kez göz ayırt etmeyecek opaklıkla birleştirilir
+/// (`IslandCanvasView.presentSpare`) ve diğer sekmelerin panelleri boşta tek tek kurulup çizilir (`prewarmNextPanel`):
+/// uygulama yeni açıldığında da ilk hover açılışı ve ilk sekme geçişi soğuk kurulum/çizim beklemez.
 @MainActor
 final class ExpandedContentView: FlippedView, IslandContentView {
     private let model: IslandViewModel
@@ -21,6 +25,8 @@ final class ExpandedContentView: FlippedView, IslandContentView {
     private(set) var isDormant: Bool
     /// Bir kez pencerede gösterildi (katmanları çizili): yeniden kullanımda ilk kare beklenmez.
     private(set) var hasBeenShown = false
+    /// Ön çizim için görünür yapılan, etkin olmayan sekme panelleri (birleştirme bitince yeniden gizlenir).
+    private var prewarming: [ExpandedTab] = []
 
     init(model: IslandViewModel, environment: AppEnvironment, dormant: Bool = false) {
         self.model = model
@@ -44,6 +50,7 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         guard isDormant else { return }
         isDormant = false
         defer { hasBeenShown = true }
+        endPanelPrewarm()
         let t0 = CACurrentMediaTime()
         refresh()
         let t1 = CACurrentMediaTime()
@@ -51,6 +58,33 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         if FrameDriver.isLogging {
             FrameDriver.note(String(format: "activate refresh %.2f ms, didShow %.2f ms", (t1 - t0) * 1000, (CACurrentMediaTime() - t1) * 1000))
         }
+    }
+
+    /// Uyku hâlinde pencerede bir kez birleştirildi: katmanlar çizili, ilk açılış da beklemeden başlar.
+    func markPresented() {
+        guard isDormant else { return }
+        hasBeenShown = true
+    }
+
+    /// Boşta: henüz kurulmamış görünür bir sekmenin panelini uyku hâlinde kurar, yerleştirir ve bir sonraki
+    /// birleştirmede çizilsin diye görünür bırakır (`didShow` yok; gözlem/örnekleme başlamaz). Kalmadıysa nil.
+    func prewarmNextPanel() -> ExpandedTab? {
+        guard isDormant, let tab = environment.preferences.visibleTabs.first(where: { panels[$0] == nil }) else { return nil }
+        let container = PanelContainer(panel: PanelFactory.make(tab, model: model, environment: environment))
+        panels[tab] = container
+        addSubview(container, positioned: .below, relativeTo: banner)
+        layoutPanel(container, tab: tab)
+        container.panel.prewarm()
+        container.prepare()
+        container.layoutSubtreeIfNeeded()
+        prewarming.append(tab)
+        return tab
+    }
+
+    /// Ön çizim birleştirildi (ya da görünüm açılıyor): etkin olmayan paneller yeniden gizlenir, katmanları çizili kalır.
+    func endPanelPrewarm() {
+        for tab in prewarming where tab != activeTab { panels[tab]?.isHidden = true }
+        prewarming.removeAll()
     }
 
     /// Kapanış geçişi bitince: panelin `onDisappear`'ı (`didHide`) çalışır, geçici arayüz durumu (kaydırma konumu,

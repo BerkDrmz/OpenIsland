@@ -316,6 +316,7 @@ final class IslandCanvasView: NSView {
                 view.suspend()
                 view.isHidden = true
                 spareExpanded = view
+                scheduleSparePanelWarmup(after: 1) // açılış yarıda kaldıysa kurulmamış paneller
             } else {
                 slot.view.removeFromSuperview()
             }
@@ -643,8 +644,9 @@ extension IslandCanvasView {
         let t0 = CACurrentMediaTime()
         let view = ExpandedContentView(model: model, environment: environment, dormant: true)
         let canvas = bounds.size
-        let size = IslandLayoutEngine.layout(for: .expanded(model.machine.context.lastTab), metrics: model.metrics).size
-        view.frame = CGRect(x: 0, y: 0, width: max(canvas.width, size.width), height: size.height)
+        // Açılışta `applyFrame`'in vereceği çerçeve: yeniden kullanımda katmanlar yeniden boyutlanıp çizilmez.
+        let size = view.fittingFrameSize(canvas: canvas, metrics: model.metrics)
+        view.frame = CGRect(x: (canvas.width - size.width) / 2, y: topInset.value, width: size.width, height: size.height)
         view.layoutSubtreeIfNeeded()
         if !didWarmDrawing, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
             view.cacheDisplay(in: view.bounds, to: rep) // önbellek ısıtma; sonuç kullanılmaz
@@ -652,6 +654,46 @@ extension IslandCanvasView {
         }
         spareExpanded = view
         if FrameDriver.isLogging { FrameDriver.note(String(format: "spare expanded ready %.2f ms", (CACurrentMediaTime() - t0) * 1000)) }
+        presentSpare(view) { [weak self] in self?.scheduleSparePanelWarmup(after: 0.4) }
+    }
+
+    /// Uyku hâlindeki içeriği pencerede bir kez, göz ayırt etmeyecek opaklıkla (%0,4; bkz. `ContentSlot.apply`)
+    /// birleştirir: katman dokuları kullanıcı adaya gelmeden önce çizilir, ilk hover açılışı da önceden çizilmiş içerikle
+    /// hemen başlar. Ada maskesi içeriği kapalı yüzeyle sınırlar. İki sunulan kareden sonra görünüm yeniden gizlenir;
+    /// bu arada açılış başlarsa (`takeSpareExpanded`) görünüm açılışa devredilir ve burada dokunulmaz.
+    private func presentSpare(_ view: ExpandedContentView, then next: @escaping @MainActor () -> Void) {
+        view.wantsLayer = true
+        if view.superview !== contentView { contentView.addSubview(view, positioned: .below, relativeTo: media) }
+        view.layer?.opacity = 0.004
+        view.isHidden = false
+        FrameDriver.afterPresentedFrame(of: self) { [weak self, weak view] in
+            guard let self, let view, self.spareExpanded === view else { return }
+            view.isHidden = true
+            view.layer?.opacity = 0
+            view.endPanelPrewarm()
+            view.markPresented()
+            next()
+        }
+    }
+
+    /// Diğer sekmelerin panelleri boşta, her seferinde bir tane kurulup çizilir (ada kapalı ve hareketsizken).
+    /// Böylece bir sekmeye ilk geçiş ya da başka sekmede açılış da soğuk kurulum/çizim beklemez.
+    func scheduleSparePanelWarmup(after delay: Double) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            MainActor.assumeIsolated { self?.warmNextSparePanel() }
+        }
+    }
+
+    private func warmNextSparePanel() {
+        guard let spare = spareExpanded, spare.isDormant, spare.hasBeenShown, window != nil else { return }
+        guard !model.machine.isEngaged, !model.presentation.isExpanded, !driver.isRunning else {
+            scheduleSparePanelWarmup(after: 0.5)
+            return
+        }
+        let t0 = CACurrentMediaTime()
+        guard let tab = spare.prewarmNextPanel() else { return }
+        if FrameDriver.isLogging { FrameDriver.note(String(format: "panel prewarm %@ %.2f ms", "\(tab)", (CACurrentMediaTime() - t0) * 1000)) }
+        presentSpare(spare) { [weak self] in self?.scheduleSparePanelWarmup(after: 0.3) }
     }
 
     func takeSpareExpanded() -> ExpandedContentView? {
