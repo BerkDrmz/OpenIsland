@@ -165,6 +165,7 @@ final class FrameDriver: NSObject {
     private weak var clock: FrameClock?
     fileprivate lazy var clockEntry = FrameClock.WeakDriver(self)
     private var lastTimestamp: CFTimeInterval?
+    private var isFirstStep = false
     private let tick: (Double) -> Bool
 
     /// `tick(dt)` sürüş gerekiyorsa `true` döndürür.
@@ -195,8 +196,11 @@ final class FrameDriver: NSObject {
             self.link = link
             linkTarget = target
         }
-        // Animasyon şimdi başladı: ilk kare, şimdiden o karenin gösterim anına kadar ilerler.
+        // Animasyon şimdi başladı. İlk kare en çok bir kare süresi ilerler (`step`): bağlantının ilk geri çağrısı
+        // gecikirse yay o kadar yolu tek karede atlamaz (açılışın başında görünen sıçrama); hareket ilk görünen
+        // kareden başlar, Core Animation animasyonlarının başlangıcı gibi.
         lastTimestamp = CACurrentMediaTime()
+        isFirstStep = true
     }
 
     func stop() {
@@ -228,15 +232,18 @@ final class FrameDriver: NSObject {
         let now = link.targetTimestamp
         let dt = lastTimestamp.map { max(now - $0, 0) } ?? (1.0 / 60)
         lastTimestamp = now
+        let frame = link.targetTimestamp - link.timestamp
+        let step = isFirstStep ? min(dt, frame > 0 ? frame : 1.0 / 60) : dt
+        isFirstStep = false
         guard let log = Self.frameLog else {
-            if !tick(dt) { stop() }
+            if !tick(step) { stop() }
             return
         }
-        // Geliştirici tanısı (OPENISLAND_DENEY_FRAMELOG): kare aralığı, tick süresi, hedefe kalan süre.
+        // Geliştirici tanısı (OPENISLAND_DENEY_FRAMELOG): kare aralığı (ham), uygulanan adım, tick süresi, hedefe kalan süre.
         let start = CACurrentMediaTime()
-        let active = tick(dt)
+        let active = tick(step)
         let end = CACurrentMediaTime()
-        let line = String(format: "%.3f dt=%.2f tick=%.2f slack=%.2f %@\n", start, dt * 1000, (end - start) * 1000,
+        let line = String(format: "%.3f dt=%.2f step=%.2f tick=%.2f slack=%.2f %@\n", start, dt * 1000, step * 1000, (end - start) * 1000,
                           (link.targetTimestamp - end) * 1000, String(describing: type(of: view ?? NSView())))
         log.write(Data(line.utf8))
         if !active { stop() }
