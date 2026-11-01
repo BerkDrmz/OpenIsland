@@ -46,6 +46,9 @@ fi
 plutil -replace CFBundleExecutable -string OpenIslandDeney "$APP/Contents/Info.plist"
 plutil -replace CFBundleName -string "OpenIsland Deney" "$APP/Contents/Info.plist"
 plutil -replace CFBundleDisplayName -string "OpenIsland Deney" "$APP/Contents/Info.plist"
+# Simge `Deney/Assets/make-app-icon.swift` ile üretilir.
+cp "$ROOT/Deney/Assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+plutil -replace CFBundleIconFile -string AppIcon "$APP/Contents/Info.plist"
 
 IDENTITY="${CODESIGN_IDENTITY:-}"
 if [[ -z "$IDENTITY" ]]; then
