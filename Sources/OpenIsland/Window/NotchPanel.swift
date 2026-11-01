@@ -137,8 +137,19 @@ final class NotchPanel: NSPanel {
         #endif
         // 48 = Tab (kVK_Tab); Shift/Control ile birlikte de aynı tuş kodu.
         if event.type == .keyDown, event.keyCode == 48 { refreshKeyViewLoopIfStale() }
-        super.sendEvent(event)
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            isDispatchingMouseDown = true
+            defer { isDispatchingMouseDown = false }
+            super.sendEvent(event)
+        default:
+            super.sendEvent(event)
+        }
     }
+
+    /// Fare basışı işlenirken doğru. AppKit tıklanan görünümü bu sırada first responder yapar; düğmeler buna bakıp
+    /// tıklamayla odak almaz (`NSButton` ve SwiftUI düğmesi gibi). Klavyeyle gezinme ve VoiceOver odağı etkilenmez.
+    private(set) var isDispatchingMouseDown = false
 
     override func becomeKey() {
         refreshKeyViewLoopIfStale()

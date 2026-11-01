@@ -556,6 +556,11 @@ extension NSView {
         frame = CGRect(x: (rect.minX * scale).rounded() / scale, y: (rect.minY * scale).rounded() / scale,
                        width: (rect.width * scale).rounded() / scale, height: (rect.height * scale).rounded() / scale)
     }
+
+    /// Düğmeler için: "Klavyeyle gezinme" açıkken klavye odağı alınabilir, ama fareyle tıklamada değil.
+    var acceptsKeyboardFocus: Bool {
+        NSApp.isFullKeyboardAccessEnabled && !((window as? NotchPanel)?.isDispatchingMouseDown ?? false)
+    }
 }
 
 extension NSColor {
