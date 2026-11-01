@@ -62,6 +62,8 @@ final class ShelfPanelView: FlippedView, IslandPanel {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
+    /// Uyku hâlindeki ön kurulum: raf hücreleri mevcut öğelerle kurulur (`isShown` yanlış: görünme bildirimi yok).
+    func prewarm() { update() }
     func didShow() { isShown = true; observer.start() }
     func didHide() { isShown = false; announcedAppear = false; observer.stop() }
 

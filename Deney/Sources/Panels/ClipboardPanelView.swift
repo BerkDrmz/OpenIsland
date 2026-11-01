@@ -69,6 +69,9 @@ final class ClipboardPanelView: FlippedView, IslandPanel {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
+    /// Uyku hâlindeki ön kurulum: geçmiş satırları mevcut veriden kurulur (gözlem başlamaz).
+    func prewarm() { update() }
+
     func didShow() {
         isShown = true
         observer.start()

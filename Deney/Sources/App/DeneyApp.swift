@@ -44,6 +44,11 @@ final class DeneyAppDelegate: NSObject, NSApplicationDelegate {
         coordinator.start()
         self.coordinator = coordinator
         SingleInstance.observeReopenRequests { [weak settings] in settings?.show() }
+        // Ses Mikseri'nin ilk okuması Core Audio sürücülerini yükler (ölçüldü: ~50–70 ms). Açılıştan hemen sonra ana iş
+        // parçacığı dışında yapılır; mikserin ilk açılışı da hazır veriyle ve beklemeden başlar.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            MainActor.assumeIsolated { self?.environment.audioMixer.prefetch() }
+        }
 
         if WelcomeController.shouldShowAtLaunch(welcomePending: environment.preferences.welcomePending) {
             // Ada kurulup açılış içeriği önceden çizildikten sonra (bkz. `IslandCanvasView.prepareSpareExpanded`).

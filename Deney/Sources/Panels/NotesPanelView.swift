@@ -76,6 +76,10 @@ final class NotesPanelView: FlippedView, IslandPanel, NSTextViewDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
+    /// Uyku hâlindeki ön kurulum: not metni, menü ve kutucuklar mevcut veriden doldurulur; metin yerleşimi ve ilk çizim
+    /// ilk açılıştan önce boşta yapılır (ölçüldü: ilk açılışta ~70 ms). Gözlem başlamaz.
+    func prewarm() { update() }
+
     func didShow() {
         observer.start()
         refreshTask = Task { [launcher] in await launcher.refreshShortcutsIfNeeded() } // SwiftUI `.task`

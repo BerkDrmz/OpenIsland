@@ -37,6 +37,9 @@ final class SystemPanelView: FlippedView, IslandPanel {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
+    /// Uyku hâlindeki ön kurulum: son ölçülen değerlerle etiketler doldurulur (örnekleme başlamaz).
+    func prewarm() { update() }
+
     func didShow() {
         system.panelDidAppear()
         observer.start()
