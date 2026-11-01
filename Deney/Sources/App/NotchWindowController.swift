@@ -30,6 +30,7 @@ final class NotchWindowController {
     let model: IslandViewModel
     let panel = NotchPanel()
     let sensor = NotchSensorPanel()
+    let canvas: IslandCanvasView
     /// Ada genişlediğinde (ör. pano geçmişini tazelemek için).
     var onExpanded: (() -> Void)?
 
@@ -58,6 +59,7 @@ final class NotchWindowController {
         let contextMenu = IslandContextMenu(model: model, environment: environment)
         self.contextMenu = contextMenu
         let canvas = IslandCanvasView(model: model, environment: environment)
+        self.canvas = canvas
         canvas.fallbackMenu = { contextMenu.make() }
         container = IslandContainerView(content: canvas)
 

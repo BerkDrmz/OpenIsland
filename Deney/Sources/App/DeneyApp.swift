@@ -45,26 +45,26 @@ final class DeneyAppDelegate: NSObject, NSApplicationDelegate {
         self.coordinator = coordinator
         SingleInstance.observeReopenRequests { [weak settings] in settings?.show() }
 
-        if WelcomeWindowController.shouldShowAtLaunch(welcomePending: environment.preferences.welcomePending) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+        if WelcomeController.shouldShowAtLaunch(welcomePending: environment.preferences.welcomePending) {
+            // Ada kurulup açılış içeriği önceden çizildikten sonra (bkz. `IslandCanvasView.prepareSpareExpanded`).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
                 MainActor.assumeIsolated { self?.showWelcome() }
             }
         }
     }
 
-    private var welcome: WelcomeWindowController?
+    private var welcome: WelcomeController?
 
-    /// İlk kurulumda (ve menüden) "merhaba" karşılaması. Kapanınca bir daha kendiliğinden açılmaz.
+    /// İlk kurulumda (ve menüden) adanın içinde "merhaba" karşılaması. Tamamlanınca bir daha kendiliğinden açılmaz;
+    /// ada açılamadıysa (ör. tam ekranda gizli) bir sonraki açılışta yeniden denenir.
     func showWelcome() {
-        guard welcome == nil else { welcome?.bringToFront(); return }
-        let controller = WelcomeWindowController { [weak self] in
-            MainActor.assumeIsolated {
-                self?.environment.preferences.markWelcomeShown()
-                self?.welcome = nil
-            }
+        guard welcome == nil, let island = coordinator?.primaryController else { return }
+        let controller = WelcomeController(island: island, hold: environment.hold) { [weak self] completed in
+            if completed { self?.environment.preferences.markWelcomeShown() }
+            self?.welcome = nil
         }
         welcome = controller
-        controller.show()
+        controller.start()
     }
 
     /// Çalışan uygulama yeniden açıldı (Finder, Spotlight, Launchpad): penceresiz bir menü çubuğu uygulamasında

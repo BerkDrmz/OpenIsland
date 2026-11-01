@@ -36,6 +36,9 @@ final class IslandCanvasView: NSView {
     private var lastRelaxScale: CGFloat = -1
     private var lastRelaxHeight: CGFloat = -1
     var spareExpanded: ExpandedContentView?
+    /// Açık adanın içeriğinin üstünde tek görünüm (ilk kurulum karşılaması); bkz. `presentOverlay`.
+    private var overlay: NSView?
+    private var onOverlayCollapse: (() -> Void)?
     var didWarmDrawing = false
     /// Sürükleme sırasında etkin bölge (SwiftUI `@State dropZone`).
     var dropZone: DropZone? {
@@ -169,6 +172,15 @@ final class IslandCanvasView: NSView {
         // A previously displayed, still-attached host needs no run-loop hop.
         // Activate/refresh it first, then start the original spring in this event.
         if let readyOpening, !readyOpening.isCancelled { readyOpening.perform() }
+        if let overlay, !model.presentation.isExpanded {
+            // Ada kapandı (Esc, kısayol): üst görünüm içerikle birlikte söner, sonra kaldırılır.
+            let collapsed = onOverlayCollapse
+            self.overlay = nil
+            onOverlayCollapse = nil
+            NSAnimationContext.runAnimationGroup({ $0.duration = 0.15; overlay.animator().alphaValue = 0 },
+                                                 completionHandler: { MainActor.assumeIsolated { overlay.removeFromSuperview() } })
+            collapsed?()
+        }
         let relaxTarget = model.isRelaxing ? Double(DeneyMotion.relaxScale) : 1
         if relax.target != relaxTarget {
             relax.animate(to: relaxTarget, spec: style == .reduced ? DeneyMotion.reduced : DeneyMotion.relax)
@@ -370,6 +382,13 @@ final class IslandCanvasView: NSView {
             slot.apply()
         }
         if media.frame != contentView.bounds { media.frame = contentView.bounds }
+        if let overlay {
+            // Hedef açık yüzeyin dikdörtgeni: ada maskesi açılırken görünümü kademeli ortaya çıkarır.
+            let target = model.presentation.isExpanded ? model.layout : surfaceLayout
+            let frame = CGRect(x: (canvas.width - target.size.width) / 2, y: target.topInset,
+                               width: target.size.width, height: target.size.height)
+            if overlay.frame != frame { overlay.frame = frame }
+        }
         media.apply(surfaceWidth: surfaceSize.width, canvasWidth: canvas.width, topInset: inset)
         CATransaction.commit()
     }
@@ -621,6 +640,26 @@ extension IslandCanvasView {
             if let url = item.string(forType: .fileURL).flatMap(URL.init(string:)) { provider.suggestedName = url.lastPathComponent }
             return provider
         }
+    }
+}
+
+// MARK: - Açık adanın üstündeki görünüm
+
+extension IslandCanvasView {
+    /// İlk kurulum karşılaması gibi tek bir görünümü açık adanın içeriğinin üstüne koyar: ada maskesiyle kırpılır,
+    /// yüzeyle birlikte açılır. Ada kapanırsa görünüm söner, kaldırılır ve `onCollapse` çağrılır.
+    func presentOverlay(_ view: NSView, onCollapse: @escaping () -> Void) {
+        dismissOverlay()
+        overlay = view
+        onOverlayCollapse = onCollapse
+        contentView.addSubview(view)
+        applyFrame()
+    }
+
+    func dismissOverlay() {
+        overlay?.removeFromSuperview()
+        overlay = nil
+        onOverlayCollapse = nil
     }
 }
 

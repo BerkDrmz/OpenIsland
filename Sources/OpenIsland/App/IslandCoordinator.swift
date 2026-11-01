@@ -106,6 +106,11 @@ final class IslandCoordinator {
 
     // MARK: - Ekranlar
 
+    /// Tek ekranlık sunumlar (ilk kurulum karşılaması): donanım çentikli ekranın adası, yoksa ilk ada.
+    var primaryController: NotchWindowController? {
+        controllers.values.first { $0.screen.hasNotch } ?? controllers.values.first
+    }
+
     private func reconcileScreens(updatePresentation: Bool = true) {
         let targets = environment.screens.targets(for: environment.preferences.displayTarget)
         let targetIDs = Set(targets.map(\.id))
