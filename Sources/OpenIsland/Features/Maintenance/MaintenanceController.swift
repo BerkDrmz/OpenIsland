@@ -49,7 +49,11 @@ final class MaintenanceController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         #if OPENISLAND_DENEY
-        // AppKit deneyi: aynı denetleyiciyle AppKit görünümü (Deney/Sources/Tools/MaintenanceWindowView.swift).
+        // AppKit deneyi: aynı denetleyiciyle AppKit görünümü (Deney/Sources/Tools/MaintenanceWindowView.swift). Başlık
+        // çubuğu saydam; kenar çubuğu onun altına uzanır (Ayarlar penceresiyle aynı düzen).
+        window.styleMask.insert(.fullSizeContentView)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.contentView = MaintenanceWindowView(controller: self)
         #else
         let hosting = NSHostingView(rootView: MaintenanceView(controller: self))

@@ -6,10 +6,13 @@ import IslandCore
 @MainActor
 final class MaintenanceWindowView: FlippedView {
     private let controller: MaintenanceController
+    /// Başlık çubuğu saydam ve içerik onun altına uzanır (`MaintenanceController.open`): içerik bu kadar aşağıdan başlar.
+    static let titlebarHeight: CGFloat = 28
+    private let sidebarMaterial = NSVisualEffectView()
     private let sidebar = MaintenanceSidebarView()
     private let divider = MaintenanceDividerView()
     private let main = FlippedView()
-    private let title = TextLabel("", font: .systemFont(ofSize: 17, weight: .bold), color: .labelColor)
+    private let title = TextLabel("", font: .systemFont(ofSize: 22, weight: .bold), color: .labelColor)
     private let refresh = MaintenanceButton(title: "", symbol: "arrow.clockwise")
     private let summary = TextLabel("", font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
     private let content = FlippedView()
@@ -28,13 +31,16 @@ final class MaintenanceWindowView: FlippedView {
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         summary.maximumLines = 0
-        title.lineHeightOverride = 20.5 // SwiftUI `.title2.bold()` (ölçüldü)
+        sidebarMaterial.material = .sidebar
+        sidebarMaterial.blendingMode = .behindWindow
+        sidebarMaterial.state = .followsWindowActiveState
         refresh.target = self
         refresh.action = #selector(reload)
         sidebar.onSelect = { [weak controller] section in controller?.select(section) }
         statusRow.onCancel = { [weak controller] in controller?.cancel() }
         [title, refresh, summary, content, bottomDivider, statusRow].forEach(main.addSubview)
-        [sidebar, divider, main].forEach(addSubview)
+        sidebarMaterial.addSubview(sidebar)
+        [sidebarMaterial, divider, main].forEach(addSubview)
         observe()
     }
 
@@ -105,15 +111,16 @@ final class MaintenanceWindowView: FlippedView {
 
     override func layout() {
         super.layout()
-        sidebar.frame = CGRect(x: 0, y: 0, width: 220, height: bounds.height)
+        sidebarMaterial.frame = CGRect(x: 0, y: 0, width: 220, height: bounds.height)
+        sidebar.frame = sidebarMaterial.bounds
         divider.frame = CGRect(x: 220, y: 0, width: 1, height: bounds.height)
-        main.frame = CGRect(x: 221, y: 0, width: bounds.width - 221, height: bounds.height)
-        // VStack(spacing: 14).padding(20): başlık, açıklama, bölüm, ayırıcı, durum (54 pt).
-        let pad: CGFloat = 20
+        main.frame = CGRect(x: 221, y: Self.titlebarHeight, width: bounds.width - 221, height: bounds.height - Self.titlebarHeight)
+        // Başlık, açıklama, bölüm, ayırıcı, durum (54 pt); 14 pt aralıklarla, kenarlardan 24 pt.
+        let pad: CGFloat = 24
         let width = main.bounds.width - 2 * pad
         let titleHeight = title.lineHeight
         let summaryHeight = summaryHeight(forWidth: width)
-        let statusHeight: CGFloat = 54
+        let statusHeight: CGFloat = 40
         // Bölüm sıkıştırılamazsa SwiftUI VStack'i taşar ve pencerede ortalanır: tüm sütun yarı taşma kadar yukarı kayar.
         let fixed = titleHeight + 14 + summaryHeight + 14 + 14 + 1 + 14 + statusHeight
         let available = main.bounds.height - 2 * pad
@@ -143,18 +150,13 @@ final class MaintenanceWindowView: FlippedView {
 @MainActor
 private final class MaintenanceSidebarView: FlippedView {
     var onSelect: ((MaintenanceController.Section) -> Void)?
-    private let header = IconLabelView("Araçlar", symbol: "wrench.and.screwdriver", font: .systemFont(ofSize: 13, weight: .bold),
-                                       color: .labelColor)
+    private let header = TextLabel("Araçlar", font: .systemFont(ofSize: 11, weight: .semibold), color: .secondaryLabelColor)
     private var buttons: [MaintenanceController.Section: MaintenanceSectionButton] = [:]
     private let note = TextLabel("Yalnızca ihtiyaç olduğunda çalışır.", font: .systemFont(ofSize: 10), color: .secondaryLabelColor)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
-        header.text.lineHeightOverride = 16.4 // SwiftUI `.headline` (ölçüldü)
-        header.icon.setConfiguration(size: 13, weight: .bold) // Label simgesi yazının kalınlığını alır
-        header.textNudge = -0.5 // SwiftUI kalın simgeyi metne göre 0,5 pt aşağıda çizer (ölçüldü)
+        header.setAccessibilityRole(NSAccessibility.Role(rawValue: "AXHeading"))
         addSubview(header)
         for section in MaintenanceController.Section.allCases {
             let button = MaintenanceSectionButton(section: section) { [weak self] in self?.onSelect?(section) }
@@ -167,28 +169,22 @@ private final class MaintenanceSidebarView: FlippedView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
-    nonisolated override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() {
-        effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor }
-    }
-
     func update(selected: MaintenanceController.Section, enabled: Bool) {
         for (section, button) in buttons { button.setSelected(section == selected); button.isEnabled = enabled }
     }
 
     override func layout() {
         super.layout()
-        let pad: CGFloat = 16
+        let pad: CGFloat = 10
         let width = bounds.width - 2 * pad
-        let headerSize = header.fittingSize
-        header.frame = CGRect(x: pad, y: pad + 0.5, width: headerSize.width, height: headerSize.height)
-        // VStack(spacing: 8): başlık + 12 pt alt boşluk, düğmeler (Label + 10 pt dolgu).
-        var y = pad + 0.5 + headerSize.height + 12 + 8
+        // Trafik ışıklarının altından: küçük bölüm başlığı, sonra renkli simgeli düğmeler.
+        header.frame = CGRect(x: pad + 10, y: MaintenanceWindowView.titlebarHeight + 18, width: pixelCeil(header.exactWidth), height: header.lineHeight)
+        var y = header.frame.maxY + 8
         for section in MaintenanceController.Section.allCases {
             guard let button = buttons[section] else { continue }
             let h = button.preferredHeight
             button.frame = pixelRect(CGRect(x: pad, y: y, width: width, height: h))
-            y += h + 8
+            y += h + 2
         }
         note.frame = CGRect(x: pad, y: bounds.height - pad - note.lineHeight, width: pixelCeil(note.exactWidth), height: note.lineHeight)
     }
@@ -197,14 +193,20 @@ private final class MaintenanceSidebarView: FlippedView {
 /// Bölüm düğmesi: Label (body) 10 pt dolgulu, tam genişlik; seçiliyse vurgu rengi %15 zemin.
 @MainActor
 private final class MaintenanceSectionButton: PlainButton {
-    private let label: IconLabelView
+    private let label: TextLabel
+    private let tile: SettingsIconTile
     private let background = MaintenanceFillView(radius: 8)
     private var selected = false
 
     init(section: MaintenanceController.Section, action: @escaping () -> Void) {
-        label = IconLabelView(section.rawValue, symbol: section.symbol, font: .systemFont(ofSize: 13), color: .labelColor)
+        label = TextLabel(section.rawValue, font: .systemFont(ofSize: 13), color: .labelColor)
+        tile = switch section {
+        case .uninstaller: SettingsIconTile(symbol: "trash.fill", tint: .systemRed)
+        case .cleaner: SettingsIconTile(symbol: "sparkles", tint: .systemIndigo)
+        }
         super.init(action: action)
         addSubview(background)
+        addSubview(tile)
         addSubview(label)
         setAccessibilityLabel(section.rawValue)
     }
@@ -212,9 +214,7 @@ private final class MaintenanceSectionButton: PlainButton {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
-    /// Label yüksekliği piksele aşağı yuvarlanır (SwiftUI; simgeye göre 16,5 ya da 16 pt, ölçüldü) + 2 × 10 pt dolgu.
-    private var labelHeight: CGFloat { (label.fittingSize.height * 2).rounded(.down) / 2 }
-    var preferredHeight: CGFloat { labelHeight + 20 }
+    var preferredHeight: CGFloat { 34 }
 
     func setSelected(_ value: Bool) {
         guard value != selected else { return }
@@ -225,17 +225,14 @@ private final class MaintenanceSectionButton: PlainButton {
 
     /// SwiftUI: etiket düğmenin içindedir (ayrı AX öğesi yok); zeminsiz düğmenin AX çerçevesi etiketinkidir.
     override func accessibilityChildren() -> [Any]? { [] }
-    override func accessibilityFrame() -> NSRect { selected ? super.accessibilityFrame() : label.accessibilityFrame() }
-
-    override var isEnabled: Bool { didSet { label.alphaValue = isEnabled ? 1 : 0.5 } }
+    override var isEnabled: Bool { didSet { label.alphaValue = isEnabled ? 1 : 0.5; tile.alphaValue = isEnabled ? 1 : 0.5 } }
 
     override func layout() {
         super.layout()
         background.frame = bounds
-        let s = label.fittingSize
-        // SwiftUI metni yuvarlanmış etiket yüksekliğinin dibine oturtur (ölçüldü).
-        label.textNudge = label.text.lineHeight - labelHeight
-        label.frame = CGRect(x: 10, y: 10, width: s.width, height: s.height)
+        tile.frame = CGRect(x: 6, y: (bounds.height - SettingsIconTile.size) / 2, width: SettingsIconTile.size, height: SettingsIconTile.size)
+        let x = 6 + SettingsIconTile.size + 10
+        label.frame = CGRect(x: x, y: (bounds.height - label.lineHeight) / 2, width: min(pixelCeil(label.exactWidth), bounds.width - x - 6), height: label.lineHeight)
     }
 }
 
@@ -454,7 +451,7 @@ class MaintenanceSectionView: FlippedView {
 final class MaintenanceFileListView: FlippedView, NSOutlineViewDataSource, NSOutlineViewDelegate {
     private let controller: MaintenanceController
     private let symbol: SymbolView
-    private let hint = TextLabel("Dosyaları görmek için taramayı başlat.", font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
+    private let hint = TextLabel("Taramayı başlat; bulunan öğeler boyutlarıyla burada listelenir.", font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
     private let scroll = NSScrollView()
     private let outline = MaintenanceOutlineView()
     private var files: [MaintenanceFile] = []
@@ -466,9 +463,10 @@ final class MaintenanceFileListView: FlippedView, NSOutlineViewDataSource, NSOut
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = 10
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
+        layer?.borderWidth = 0.5
         symbol.exposeAsImage()
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
         outline.addTableColumn(column)
@@ -495,9 +493,9 @@ final class MaintenanceFileListView: FlippedView, NSOutlineViewDataSource, NSOut
     override func updateLayer() {
         // Liste varken SwiftUI `List` kendi (yarı saydam) zeminini pencere zemini üstüne çizer; metin zemini yalnız
         // boş durumda görünür (ölçüldü).
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = files.isEmpty ? NSColor.textBackgroundColor.cgColor : NSColor.clear.cgColor
-        }
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        layer?.backgroundColor = files.isEmpty ? (dark ? CGColor(gray: 1, alpha: 0.04) : CGColor(gray: 1, alpha: 0.85)) : NSColor.clear.cgColor
+        layer?.borderColor = dark ? CGColor(gray: 1, alpha: 0.09) : CGColor(gray: 0, alpha: 0.08)
     }
 
     func update() {
@@ -773,6 +771,7 @@ final class MaintenanceTrashControls: FlippedView {
         self.showsSelectAll = showsSelectAll
         super.init(frame: .zero)
         selectAll.toolTip = "Korunan ve açık uygulamalara ait bilinen önbellekleri seçmez"
+        trash.bezelColor = .systemRed // geri alınabilir ama yıkıcı eylem: kırmızı tonlu
         selectAll.isHidden = !showsSelectAll
         [summary, selectAll, clear, trash].forEach(addSubview)
         for b in [selectAll, clear, trash] { b.target = self }
@@ -822,6 +821,9 @@ final class MaintenanceUninstallView: MaintenanceSectionView {
                                         color: .systemOrange)
     private let list: MaintenanceFileListView
     private let controls: MaintenanceTrashControls
+    private let card = MaintenanceCardView()
+    private let appIcon = NSImageView()
+    private var iconPath: String?
     private var pickerIDs: [String] = []
 
     override init(controller: MaintenanceController) {
@@ -833,7 +835,10 @@ final class MaintenanceUninstallView: MaintenanceSectionView {
         picker.action = #selector(choose)
         scan.target = self
         scan.action = #selector(scanFiles)
-        [pickerLabel, picker, scan, path, running, list, controls].forEach(addSubview)
+        scan.bezelColor = .controlAccentColor
+        appIcon.imageScaling = .scaleProportionallyUpOrDown
+        appIcon.setAccessibilityElement(false)
+        [card, appIcon, pickerLabel, picker, scan, path, running, list, controls].forEach(addSubview)
     }
 
     @objc private func choose() {
@@ -859,6 +864,10 @@ final class MaintenanceUninstallView: MaintenanceSectionView {
         picker.isEnabled = !controller.busy
         scan.isEnabled = !(controller.busy || controller.selectedApplication == nil)
         let app = controller.selectedApplication
+        if iconPath != app?.url.path {
+            iconPath = app?.url.path
+            appIcon.image = app.map { NSWorkspace.shared.icon(forFile: $0.url.path) }
+        }
         path.set(app?.url.path ?? "")
         path.toolTip = app?.url.path
         path.isHidden = app == nil
@@ -870,53 +879,54 @@ final class MaintenanceUninstallView: MaintenanceSectionView {
 
     override func layout() {
         super.layout()
-        // VStack(spacing: 12): seçici satırı, yol satırı, liste, alt satır.
+        // Uygulama kartı: simge | (Uygulama etiketi, seçici, yol + açıksa uyarı) | Kalıntıları tara; altında liste ve alt satır.
         let width = bounds.width
-        let rowHeight = max(picker.alignmentSize.height, scan.alignmentSize.height, pickerLabel.lineHeight)
-        let labelWidth = pixelCeil(pickerLabel.exactWidth)
-        pickerLabel.frame = CGRect(x: 0, y: (rowHeight - pickerLabel.lineHeight) / 2, width: labelWidth, height: pickerLabel.lineHeight)
+        let cardHeight: CGFloat = 76
+        card.frame = CGRect(x: 0, y: 0, width: width, height: cardHeight)
+        appIcon.frame = CGRect(x: 14, y: (cardHeight - 44) / 2, width: 44, height: 44)
         let scanSize = scan.alignmentSize
-        scan.setAlignmentFrame(CGRect(x: width - scanSize.width, y: (rowHeight - scanSize.height) / 2, width: scanSize.width, height: scanSize.height))
-        let pickerX = labelWidth + 8
+        scan.setAlignmentFrame(CGRect(x: width - 14 - scanSize.width, y: (cardHeight - scanSize.height) / 2, width: scanSize.width, height: scanSize.height))
+        let x: CGFloat = 14 + 44 + 12
+        let labelWidth = pixelCeil(pickerLabel.exactWidth)
         let pickerHeight = picker.alignmentSize.height
-        picker.setAlignmentFrame(CGRect(x: pickerX, y: (rowHeight - pickerHeight) / 2, width: width - scanSize.width - 8 - pickerX, height: pickerHeight))
-        var y = rowHeight + 12
+        let rowY: CGFloat = path.isHidden ? (cardHeight - pickerHeight) / 2 : 14
+        pickerLabel.frame = CGRect(x: x, y: rowY + (pickerHeight - pickerLabel.lineHeight) / 2, width: labelWidth, height: pickerLabel.lineHeight)
+        let pickerX = x + labelWidth + 8
+        picker.setAlignmentFrame(CGRect(x: pickerX, y: rowY, width: max(width - 14 - scanSize.width - 12 - pickerX, 120), height: pickerHeight))
         if !path.isHidden {
-            let lineHeight = max(path.lineHeight, running.isHidden ? 0 : running.fittingSize.height)
-            path.frame = CGRect(x: 0, y: y + (lineHeight - path.lineHeight) / 2, width: min(pixelCeil(path.exactWidth), width), height: path.lineHeight)
+            let y = rowY + pickerHeight + 6
+            var pathWidth = width - 14 - scanSize.width - 12 - x
             if !running.isHidden {
                 let s = running.fittingSize
-                running.frame = CGRect(x: width - s.width, y: y + (lineHeight - s.height) / 2, width: s.width, height: s.height)
+                running.frame = CGRect(x: width - 14 - scanSize.width - 12 - s.width, y: y + (path.lineHeight - s.height) / 2, width: s.width, height: s.height)
+                pathWidth -= s.width + 8
             }
-            y += lineHeight + 12
+            path.frame = CGRect(x: x, y: y, width: min(pixelCeil(path.exactWidth), max(pathWidth, 0)), height: path.lineHeight)
         }
+        let y = cardHeight + 14
         let controlsHeight = controls.preferredHeight
         controls.frame = CGRect(x: 0, y: bounds.height - controlsHeight, width: width, height: controlsHeight)
         list.frame = CGRect(x: 0, y: y, width: width, height: bounds.height - controlsHeight - 12 - y)
     }
 }
 
-/// Önbellek temizleyici: "~/Library/Caches" etiketi + Önbellekleri tara, dosya listesi, alt satır (Tümünü seç ile).
+/// Önbellek temizleyici: özet kartı (bulunan/seçili boyut + Önbellekleri tara), dosya listesi, alt satır (Tümünü seç ile).
 @MainActor
 final class MaintenanceCleanerView: MaintenanceSectionView {
-    private let location = IconLabelView("~/Library/Caches", symbol: "folder", font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
-    private let scan = MaintenanceButton(title: "Önbellekleri tara", symbol: "magnifyingglass")
+    private let hero: MaintenanceCleanerHero
     private let list: MaintenanceFileListView
     private let controls: MaintenanceTrashControls
 
     override init(controller: MaintenanceController) {
+        hero = MaintenanceCleanerHero(controller: controller)
         list = MaintenanceFileListView(controller: controller, symbol: "sparkles")
         controls = MaintenanceTrashControls(controller: controller, showsSelectAll: true)
         super.init(controller: controller)
-        scan.target = self
-        scan.action = #selector(scanFiles)
-        [location, scan, list, controls].forEach(addSubview)
+        [hero, list, controls].forEach(addSubview)
     }
 
-    @objc private func scanFiles() { controller.scan() }
-
     override func update() {
-        scan.isEnabled = !controller.busy
+        hero.update()
         list.update()
         controls.update()
         needsLayout = true
@@ -925,15 +935,150 @@ final class MaintenanceCleanerView: MaintenanceSectionView {
     override func layout() {
         super.layout()
         let width = bounds.width
-        let ls = location.fittingSize
-        let scanSize = scan.alignmentSize
-        let rowHeight = max(ls.height, scanSize.height)
-        location.frame = CGRect(x: 0, y: (rowHeight - ls.height) / 2, width: ls.width, height: ls.height)
-        scan.setAlignmentFrame(CGRect(x: width - scanSize.width, y: (rowHeight - scanSize.height) / 2, width: scanSize.width, height: scanSize.height))
-        let y = rowHeight + 12
+        hero.frame = CGRect(x: 0, y: 0, width: width, height: MaintenanceCleanerHero.height)
+        let y = MaintenanceCleanerHero.height + 14
         let controlsHeight = controls.preferredHeight
         controls.frame = CGRect(x: 0, y: bounds.height - controlsHeight, width: width, height: controlsHeight)
         list.frame = CGRect(x: 0, y: y, width: width, height: bounds.height - controlsHeight - 12 - y)
+    }
+}
+
+/// Özet kartı: uygulama simgesinin renklerinde (camgöbeği → mor → pembe) kutucuk, durum başlığı, büyük boyut değeri ve
+/// açıklama; sağda öne çıkan "Önbellekleri tara". Zemin gece mavisi (koyu) / lavanta (açık) geçişli.
+@MainActor
+final class MaintenanceCleanerHero: FlippedView {
+    static let height: CGFloat = 96
+    private let controller: MaintenanceController
+    private let gradient = CAGradientLayer()
+    private let iconBackground = CAGradientLayer()
+    private let icon = NSImageView()
+    private let headline = TextLabel("", font: .systemFont(ofSize: 12, weight: .semibold), color: .secondaryLabelColor)
+    private let value = TextLabel("", font: .systemFont(ofSize: 24, weight: .bold), color: .labelColor)
+    private let caption = TextLabel("~/Library/Caches · Açık uygulamaların bilinen önbellekleri korunur", font: .systemFont(ofSize: 11),
+                                    color: .secondaryLabelColor)
+    private let scan = MaintenanceButton(title: "Önbellekleri tara", symbol: "magnifyingglass")
+    private let spinner = NSProgressIndicator()
+
+    init(controller: MaintenanceController) {
+        self.controller = controller
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        layer?.borderWidth = 0.5
+        gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1, y: 0.5)
+        layer?.addSublayer(gradient)
+        iconBackground.colors = [NSColor(srgbRed: 0.212, green: 0.820, blue: 1, alpha: 1).cgColor,
+                                 NSColor(srgbRed: 0.478, green: 0.424, blue: 1, alpha: 1).cgColor,
+                                 NSColor(srgbRed: 1, green: 0.373, blue: 0.722, alpha: 1).cgColor]
+        iconBackground.startPoint = CGPoint(x: 0, y: 0)
+        iconBackground.endPoint = CGPoint(x: 1, y: 1)
+        iconBackground.cornerRadius = 12
+        iconBackground.cornerCurve = .continuous
+        layer?.addSublayer(iconBackground)
+        icon.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 22, weight: .semibold))
+        icon.contentTintColor = .white
+        icon.imageScaling = .scaleNone
+        icon.setAccessibilityElement(false)
+        scan.bezelColor = .controlAccentColor
+        scan.target = self
+        scan.action = #selector(scanFiles)
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        caption.lineBreakMode = .byTruncatingTail
+        [icon, headline, value, caption, spinner, scan].forEach(addSubview)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Önbellek özeti")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
+
+    @objc private func scanFiles() { controller.scan() }
+
+    func update() {
+        let files = controller.files
+        let busy = controller.busy
+        let total = files.reduce(Int64(0)) { $0 + $1.bytes }
+        if busy && files.isEmpty {
+            headline.set("TARANIYOR")
+            value.set("Önbellekler ölçülüyor…")
+        } else if files.isEmpty {
+            headline.set("KULLANICI ÖNBELLEKLERİ")
+            value.set("Taramaya hazır")
+        } else {
+            headline.set("\(files.count) ÖNBELLEK KLASÖRÜ BULUNDU")
+            value.set(MaintenanceController.size(total) + (controller.selectedFiles.isEmpty ? "" : "  ·  \(MaintenanceController.size(controller.selectedBytes)) seçili"))
+        }
+        setAccessibilityValue("\(headline.stringValue.capitalized(with: Locale(identifier: "tr_TR"))), \(value.stringValue)")
+        if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        scan.isEnabled = !busy
+        needsLayout = true
+    }
+
+    nonisolated override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        gradient.colors = dark
+            ? [NSColor(srgbRed: 0.157, green: 0.188, blue: 0.4, alpha: 0.85).cgColor, NSColor(srgbRed: 0.071, green: 0.082, blue: 0.18, alpha: 0.85).cgColor]
+            : [NSColor(srgbRed: 0.91, green: 0.92, blue: 1, alpha: 1).cgColor, NSColor(srgbRed: 0.97, green: 0.94, blue: 1, alpha: 1).cgColor]
+        layer?.borderColor = dark ? CGColor(gray: 1, alpha: 0.1) : CGColor(gray: 0, alpha: 0.08)
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = bounds
+        let iconFrame = CGRect(x: 18, y: (bounds.height - 52) / 2, width: 52, height: 52)
+        iconBackground.frame = iconFrame
+        CATransaction.commit()
+        icon.frame = iconFrame
+        let s = scan.alignmentSize
+        let right = bounds.width - 18
+        scan.setAlignmentFrame(CGRect(x: right - s.width, y: (bounds.height - s.height) / 2, width: s.width, height: s.height))
+        let x = iconFrame.maxX + 16
+        let textWidth = max(right - s.width - 16 - x, 60)
+        let block = headline.lineHeight + 2 + value.lineHeight + 2 + caption.lineHeight
+        var y = pixelRound((bounds.height - block) / 2)
+        headline.frame = CGRect(x: x, y: y, width: min(pixelCeil(headline.exactWidth), textWidth), height: headline.lineHeight)
+        if controller.busy {
+            spinner.frame = CGRect(x: headline.frame.maxX + 6, y: y - 1, width: 16, height: 16)
+        }
+        y += headline.lineHeight + 2
+        value.frame = CGRect(x: x, y: y, width: min(pixelCeil(value.exactWidth), textWidth), height: value.lineHeight)
+        y += value.lineHeight + 2
+        caption.frame = CGRect(x: x, y: y, width: min(pixelCeil(caption.exactWidth), textWidth), height: caption.lineHeight)
+    }
+}
+
+/// Bölümlerin üst kartı: hafif dolgu ve kenarlık (12 pt sürekli köşe).
+@MainActor
+final class MaintenanceCardView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        layer?.cornerRadius = 12
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = 0.5
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    nonisolated override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        layer?.backgroundColor = dark ? CGColor(gray: 1, alpha: 0.055) : CGColor(gray: 1, alpha: 0.92)
+        layer?.borderColor = dark ? CGColor(gray: 1, alpha: 0.09) : CGColor(gray: 0, alpha: 0.08)
     }
 }
 
