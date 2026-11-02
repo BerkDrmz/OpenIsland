@@ -11,6 +11,7 @@ Docs/*
 !Docs/ARCHITECTURE.md
 !Docs/PERFORMANCE.md
 !Docs/PERFORMANCE-OPTIMIZATION-2026-10-11.md
+!Docs/images/
 *.log
 *.sample
 *.trace/

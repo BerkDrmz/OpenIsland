@@ -2,7 +2,13 @@
 
 OpenIsland, MacBook için geliştirilen ücretsiz ve açık kaynaklı bir Dynamic Island uygulamasıdır.
 Müzik kontrollerini, bildirimleri ve günlük araçları ekranın üst kısmında bir araya getirir.
-Swift ve SwiftUI ile geliştirilmiştir; boşta gereksiz işlem yapmamaya odaklanır.
+Swift ile geliştirilmiştir; günlük kullanılan sürümün arayüzü AppKit ve Core Animation'dır ([Deney/](Deney/README.md)).
+Boşta gereksiz işlem yapmamaya odaklanır.
+
+<p align="center">
+  <img src="Docs/images/island-focus.png" width="400" alt="Pomodoro sekmesi açık ada">
+  <img src="Docs/images/island-system.png" width="400" alt="Sistem sekmesi: CPU, GPU, bellek ve depolama">
+</p>
 
 | Özellik | Uygulama |
 |---|---|
@@ -13,10 +19,11 @@ Swift ve SwiftUI ile geliştirilmiştir; boşta gereksiz işlem yapmamaya odakla
 | Geçici bildirimler | Pil/şarj (adaptör, %20, %10, %100), AirPods/kulaklık bağlandı-ayrıldı, parça değişimi, toplantı hatırlatması, Pomodoro, indirme/aktarım sonucu, AirDrop, kilit açma, ağ yolu değişimi, harici ekran — tek sunum modeli, deterministik öncelik |
 | Canlı etkinlikler | Kanatlarda indirme/aktarım halkası ve yüzde (App Store dahil, macOS ilerleme yayını sağladığında), Pomodoro geri sayımı, çalan müzik |
 | Dosya rafı | Çift bölge (raf + AirDrop), çoklu seçim, Quick Look, topluca sürükleme, yeniden açılışta kalıcı, Fotoğraflar/Mail'den file promise; dosya işlemleri: Zip'le, Arşivi aç, Resmi sıkıştır, Yolu kopyala |
-| Araçlar | Pano geçmişi + renk damlalığı, Pomodoro, takvim (etkinlik → Takvim'de açılır, Katıl → toplantı), Apple Anımsatıcılar (bugün, tamamla, ekle; başlık → Anımsatıcılar), Quick Notes, uygulama/bağlantı/Shortcuts başlatıcı; isteğe bağlı kaldırıcı ve önbellek temizleyici |
+| Araçlar | Pano geçmişi + bağlantıdan indirme, Pomodoro, takvim (etkinlik → Takvim'de açılır, Katıl → toplantı), Apple Anımsatıcılar (bugün, tamamla, ekle; başlık → Anımsatıcılar), Quick Notes, uygulama/bağlantı/Shortcuts başlatıcı; isteğe bağlı kaldırıcı ve önbellek temizleyici |
 | Sistem | Eşit yükseklikte CPU/GPU, bellek ve ekran kontrol sütunları; disklerin kullanılabilir alanı. Sıcaklık, eşleşen sensör grubunun son okumadaki en yüksek geçerli değeridir; ortalama veya geçmiş tepe tutulmaz. CPU/GPU sensör gruplaması belgelenmemiştir. Canlı ölçüm yalnızca sekme görünürken çalışır; desteklenmeyen sensörler değer uydurmadan gösterilir |
 | Ses Mikseri | Çıkış, sistem sesi ve mikrofon aygıtları; uygulama bazında ses seviyesi ve çıkış yönlendirme. macOS 14.2+ Core Audio desteği ve sistem sesi izni gerekir; ses dosyası kaydedilmez. Varsayılan seviyede ses işleme yolu kurulmaz |
 | Son pencerede çıkış | Ayarlar → Genel'den yönetilir. Erişilebilirlik izniyle son pencerenin kırmızı düğmesi uygulamadan normal çıkış ister; diğer pencereler, kaydetme uyarıları ve Finder korunur |
+| Bağlantıdan indirme | Pano'daki **İndir**: YouTube, Facebook, X ve TikTok video bağlantısı; **Video + ses / Yalnız video / Yalnız ses**, kaynakta gerçekten bulunan kaliteler (büyütme yok), yeniden kodlamadan birleştirme. YouTube için isteğe bağlı motor ilk kullanımda onayla indirilir — ayrıntılar aşağıda |
 | Bağlantı temizleme | Pano'daki bağlantıya sağ tık → **Takipsiz bağlantıyı kopyala**. Yalnızca tanımlı UTM/tıklama takip parametrelerini çevrimdışı kaldırır; asıl geçmiş kaydını ve diğer parametreleri korur. Bilinen imzalı/kimlik bilgili bağlantılar değiştirilmez; otomatik izleme veya ağ isteği yoktur |
 | Dock pencere önizlemeleri | Dock simgesine gelince yapay bekleme olmadan uygulamanın açık ve küçültülmüş pencere kartları açılır; küçük resimler hazır oldukça yüklenir; önizlemeye tıklayınca seçili pencereye geçilir. Ayarlar → Genel'den kapatılabilir. Erişilebilirlik ve ekran erişimi gerekir; gösterilen kartlar için tek kare alınır, ses/video/dosya kaydı ve boşta pencere taraması yapılmaz. Panel kapanınca görüntüler bırakılır |
 | Jestler | İki parmak yatay: parça (yön ters çevrilebilir); dikey: ses |
@@ -47,6 +54,55 @@ klasör taraması veya ağ sorgusu yapılmaz. TestFlight indirmesinde başlangı
 doğrulandı. macOS/App Store'un bu yayını sağlamadığı durumlarda yüzde gösterilemez.
 
 Ayrıntılı teknik mimari: [Docs/ARCHITECTURE.md](Docs/ARCHITECTURE.md)
+
+## Ekran görüntüleri
+
+| | |
+|---|---|
+| ![Pano geçmişi ve İndir](Docs/images/island-clipboard.png) | ![Hızlı not ve başlatıcı](Docs/images/island-notes.png) |
+| Pano geçmişi ve **İndir** | Hızlı not ve uygulama başlatıcı |
+| ![Bağlantıdan indirme formu](Docs/images/link-download.png) | ![Dosya rafı](Docs/images/island-shelf.png) |
+| Bağlantıdan indirme: tür ve kalite | Dosya rafı |
+
+<p align="center"><img src="Docs/images/settings.png" width="640" alt="Ayarlar penceresi"></p>
+
+Görüntüler örnek verilerle, yalıtılmış bir test ortamında alınır; gerçek takvim, pano, not veya rafa dokunulmaz
+(`Deney/Tests/ReadmeShots.swift`).
+
+## Bağlantıdan indirme
+
+Pano sekmesindeki **İndir** düğmesi bir bağlantı kutusu açar. **İncele** kaynakta gerçekten bulunan kaliteleri listeler;
+sunulmayan basamaklar nedeniyle birlikte devre dışı gösterilir, sessizce başka kaliteye düşülmez.
+
+- **Video + ses:** ayrı görüntü ve ses akışları AVFoundation ile yeniden kodlamadan MP4'e birleştirilir.
+- **Yalnız video:** ayrı görüntü akışı varsa yalnız o indirilir; yoksa birleşik dosyanın görüntü izi yeniden kodlamadan
+  ayrılır (sessiz MP4).
+- **Yalnız ses:** kaynağın ses biçimi korunur; MP3'e dönüştürülmez.
+- Dosya adı başlıktan güvenli biçimde üretilir, var olan dosyanın üzerine yazılmaz; kayıt klasörü seçilebilir,
+  sonuç Raf'a eklenebilir.
+
+**Facebook, X ve TikTok** uygulamanın içinde çözülür: yardımcı süreç yoktur, her inceleme kendi geçici oturumunu kullanır
+ve çerezler yalnız bellekte tutulur.
+
+**YouTube** için uygulamada motor gelmez. İlk YouTube bağlantısında aynı panelde onay istenir; onaylanırsa
+[yt-dlp](https://github.com/yt-dlp/yt-dlp) (klasör sürümü, yalnız bu Mac'in mimarisi) ve YouTube'un JS sınamasını çözen
+[QuickJS](https://github.com/quickjs-ng/quickjs) GitHub sürüm sayfalarından indirilir (~55 MB indirme, ~72 MB disk):
+
+- Sürüm ve SHA-256 özeti sabittir; eşleşmeyen dosya kurulmaz. Her çalıştırmadan önce imza denetlenir.
+- Motor yalnız inceleme ve indirme sırasında, ayrı süreçte ve düşük öncelikte (utility QoS) çalışır; iş bitince kapanır.
+  Boştayken süreç, zamanlayıcı veya ağ isteği yoktur.
+- YouTube sayfası ve JS sınaması incelemede bir kez çözülür; indirme incelemenin sonucunu kullanır.
+- Güncelleme yalnız kullanıcı **Motoru güncelle** derse yapılır; GitHub'ın bildirdiği özetle doğrulanır, yeni sürüm
+  çalışmazsa eskisine dokunulmaz.
+- YouTube DASH dosyalarında süre, parçalı MP4 başlığından okunur (AVFoundation'ın iki katı okuduğu süre düzeltilir).
+- M3 ve sonrası AV1'i donanımda çözdüğü için 1440p/4K (AV1) de yeniden kodlamadan alınabilir.
+
+2 Kasım 2026'da M4 MacBook Air'de önceki sürümle karşılaştırma: boşta CPU %0,041 ↔ %0,041, uygulama GPU'su 0;
+aç/kapa takılmaları aynı düzeyde; 1080p YouTube indirmesi (257 MB, ~20 sn, toplam ~1,7 sn CPU) sürerken ada
+akıcılığı değişmedi.
+
+YouTube'un [kullanım şartları](https://www.youtube.com/t/terms) video indirmeyi genel olarak sınırlar. Özellik kişisel
+kullanım içindir ve motor yalnız kullanıcı açıkça onaylarsa indirilir.
 
 ## Gereksinimler
 

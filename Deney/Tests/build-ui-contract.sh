@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$1"
 ENTRY="${2:-OffscreenUIContract.swift}"
-case "$ENTRY" in OffscreenUIContract.swift|MotionLifecycleCheck.swift|YouTubeDownloadCheck.swift) ;; *) echo "Unsupported UI contract entry: $ENTRY" >&2; exit 64;; esac
+case "$ENTRY" in OffscreenUIContract.swift|MotionLifecycleCheck.swift|YouTubeDownloadCheck.swift|ReadmeShots.swift) ;; *) echo "Unsupported UI contract entry: $ENTRY" >&2; exit 64;; esac
 mkdir -p "$OUT"
 cd "$ROOT"
 cp Support/Info.plist "$OUT/TestInfo.plist"
