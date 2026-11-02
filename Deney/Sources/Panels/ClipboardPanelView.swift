@@ -468,7 +468,8 @@ private final class DownloadEntryView: FlippedView {
         switch downloader.phase {
         case .inspecting: title = "İnceleniyor…"
         case .downloading: title = downloader.progress.map { String(format: "%%%d", Int(($0 * 100).rounded())) } ?? "İndiriliyor"
-        case .finalizing: title = "Birleştiriliyor"
+        case .finalizing: title = "Hazırlanıyor"
+        case .installingEngine: title = downloader.progress.map { "Motor " + String(format: "%%%d", Int(($0 * 100).rounded())) } ?? "Motor"
         default: title = "İndir"
         }
         if pickerTitle.stringValue != title { pickerTitle.set(title); needsLayout = true }

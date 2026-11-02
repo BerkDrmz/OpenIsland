@@ -59,6 +59,8 @@ final class NativeEngine: @unchecked Sendable {
 
     private func extract(_ url: URL) async throws -> (ExtractedMedia, URL?) {
         switch platform {
+        case .youtube:
+            throw DownloadFailure.unsupported // YouTube uygulama içinde çözülmez: isteğe bağlı motor (`YouTubeEngine`)
         case .x:
             guard let id = XExtractor.statusID(url), let api = XExtractor.syndicationURL(id: id) else { throw DownloadFailure.unsupported }
             let (data, status) = try await get(api, agent: "Googlebot")

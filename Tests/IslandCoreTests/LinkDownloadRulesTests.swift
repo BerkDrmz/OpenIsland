@@ -21,7 +21,14 @@ struct LinkDownloadRulesTests {
         }
         if case .valid(_, let platform) = LinkDownloadRules.validate("https://vt.tiktok.com/x") { #expect(platform == .tiktok) }
         if case .valid(_, let platform) = LinkDownloadRules.validate("https://twitter.com/a/status/2") { #expect(platform == .x) }
-        #expect(LinkDownloadRules.validate("https://www.youtube.com/watch?v=1") == .unsupportedPlatform)
+        for text in ["https://www.youtube.com/watch?v=1", "https://youtu.be/abc", "https://m.youtube.com/shorts/abc",
+                     "https://music.youtube.com/watch?v=1"] {
+            guard case .valid(_, let platform) = LinkDownloadRules.validate(text) else { Issue.record("rejected \(text)"); continue }
+            #expect(platform == .youtube && platform.needsEngine)
+        }
+        #expect(!LinkPlatform.x.needsEngine && !LinkPlatform.tiktok.needsEngine && !LinkPlatform.facebook.needsEngine)
+        #expect(LinkDownloadRules.validate("https://youtube.com.evil.test/watch?v=1") == .unsupportedPlatform)
+        #expect(LinkDownloadRules.validate("https://notyoutube.com/watch?v=1") == .unsupportedPlatform)
         #expect(LinkDownloadRules.validate("https://notx.com/u/status/1") == .unsupportedPlatform)
         #expect(LinkDownloadRules.validate("https://x.com.evil.test/u") == .unsupportedPlatform)
         #expect(LinkDownloadRules.validate("https://evilfacebook.com/v") == .unsupportedPlatform)
@@ -149,6 +156,11 @@ struct LinkDownloadRulesTests {
         #expect(DownloadFailure.classify("ERROR: unable to open for writing: [Errno 13] Permission denied") == .writePermission)
         #expect(DownloadFailure.classify("something odd") == .other)
         #expect(!DownloadFailure.other.message.contains("http"))
+        #expect(DownloadFailure.classify("ERROR: [youtube] abc: Sign in to confirm you’re not a bot. Use --cookies-from-browser") == .botCheck)
+        #expect(DownloadFailure.classify("ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate") == .loginRequired)
+        #expect(DownloadFailure.classify("ERROR: [youtube] abc: This live event will begin in 3 hours.") == .live)
+        #expect(DownloadFailure.classify("ERROR: [youtube] abc: Video unavailable. This video has been removed by the uploader") == .removed)
+        #expect(DownloadFailure.classify("ERROR: unable to download video data: HTTP Error 403: Forbidden") == .formatGone)
     }
 
     @Test func generationRejectsLateResults() {
@@ -156,5 +168,48 @@ struct LinkDownloadRulesTests {
         let first = g.next(); let second = g.next()
         #expect(!g.accepts(first) && g.accepts(second))
         #expect(LinkDownloadPhase.downloading.isBusy && !LinkDownloadPhase.ready.isBusy && !LinkDownloadPhase.cancelled.isBusy)
+        #expect(LinkDownloadPhase.installingEngine.isBusy && !LinkDownloadPhase.needsEngine.isBusy)
+    }
+
+    // MARK: - Yalnız video
+
+    @Test func videoOnlyPrefersTheSeparateVideoStreamAndKeepsItsTier() {
+        let formats = [video("v1080", 1920, 1080, tbr: 3000), video("m360", 640, 360, acodec: "mp4a.40.2", tbr: 400),
+                       video("v360", 640, 360, tbr: 230), audio("a")]
+        let options = DownloadPlanner.videoOnlyOptions(formats)
+        #expect(options.map(\.tier) == [.p1080, .p360])
+        #expect(options[0].plan?.kind == .single(formats[0]) && options[0].plan?.outputExtension == "mp4")
+        // 360p'de ayrı görüntü akışı var: birleşik akış (daha çok veri) indirilmez.
+        #expect(options[1].plan?.kind == .single(formats[2]))
+    }
+
+    @Test func videoOnlyStripsSoundFromMuxedOnlySources() {
+        let muxed = video("m", 1280, 720, acodec: "mp4a.40.2", size: 9_000)
+        let options = DownloadPlanner.videoOnlyOptions([muxed])
+        #expect(options.map(\.tier) == [.p720])
+        #expect(options[0].plan?.kind == .extractVideo(from: muxed))
+        #expect(options[0].plan?.outputExtension == "mp4" && options[0].plan?.estimatedBytes == 9_000)
+        // MP4 dışı birleşik akıştan ses yeniden kodlamadan ayrılamaz: basamak nedeniyle devre dışı.
+        let webm = video("w", 1280, 720, ext: "webm", vcodec: "vp9", acodec: "opus")
+        let disabled = DownloadPlanner.videoOnlyOptions([webm])
+        #expect(!disabled[0].isAvailable && disabled[0].reason != nil)
+        // Kaynakta hiç ses yoksa görüntü olduğu gibi indirilir.
+        #expect(DownloadPlanner.videoOnlyOptions([video("s", 1280, 720, ext: "webm", vcodec: "vp9")])[0].plan?.outputExtension == "webm")
+    }
+
+    @Test func av1IsPassthroughOnlyWhenTheMacDecodesIt() {
+        let av1 = video("401", 3840, 2160, vcodec: "av01.0.13M.08"), h264 = video("299", 1920, 1080), sound = audio("140")
+        #expect(!av1.isMP4Video && av1.isPassthroughVideo(av1: true) && !av1.isPassthroughVideo(av1: false))
+        #expect(!video("vp9", 3840, 2160, ext: "webm", vcodec: "vp9").isPassthroughVideo(av1: true))
+        let without = DownloadPlanner.videoOptions([av1, h264, sound], av1: false)
+        #expect(without.map(\.tier) == [.p2160, .p1080] && !without[0].isAvailable && without[1].isAvailable)
+        let with = DownloadPlanner.videoOptions([av1, h264, sound], av1: true)
+        if case .merge(let v, let a) = with[0].plan?.kind { #expect(v.id == "401" && a.id == "140") } else { Issue.record("4K AV1 not merged") }
+        #expect(DownloadPlanner.videoOnlyOptions([av1, sound], av1: true)[0].plan?.kind == .single(av1))
+    }
+
+    @Test func modesHaveTurkishTitlesAndQualityUse() {
+        #expect(DownloadMode.allCases.map(\.title) == ["Video + ses", "Yalnız video", "Yalnız ses"])
+        #expect(DownloadMode.videoOnly.usesQuality && DownloadMode.videoWithAudio.usesQuality && !DownloadMode.audioOnly.usesQuality)
     }
 }

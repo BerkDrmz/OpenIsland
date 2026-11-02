@@ -3,22 +3,29 @@ import Foundation
 /// İsteğe bağlı "Bağlantıdan indir" özelliğinin saf kuralları: bağlantı doğrulama, motorun format listesinden gerçekten
 /// sunulan kaliteleri çıkarma, indirme planı, dosya adı ve hata sınıflandırması. Ağ, süreç veya zamanlayıcı içermez.
 public enum LinkPlatform: String, Sendable, CaseIterable {
-    case facebook, x, tiktok
+    case youtube, facebook, x, tiktok
 
     public var displayName: String {
         switch self {
+        case .youtube: "YouTube"
         case .facebook: "Facebook"
         case .x: "X"
         case .tiktok: "TikTok"
         }
     }
 
+    /// YouTube uygulama içi çıkarıcıyla değil, kullanıcının onayıyla indirilen ayrı motorla (yt-dlp + QuickJS) çözülür.
+    public var needsEngine: Bool { self == .youtube }
+
     /// Yalnız bu alan adları (ve alt alan adları) kabul edilir; CDN yönlendirmelerini motor kendisi izler.
     static let hosts: [(String, LinkPlatform)] = [
+        ("youtube.com", .youtube), ("youtu.be", .youtube),
         ("facebook.com", .facebook), ("fb.watch", .facebook), ("fb.com", .facebook),
         ("x.com", .x), ("twitter.com", .x),
         ("tiktok.com", .tiktok),
     ]
+
+    public static let supportedNames = "YouTube, Facebook, X veya TikTok"
 }
 
 public enum LinkValidation: Equatable, Sendable {
@@ -58,16 +65,24 @@ public struct MediaFormat: Decodable, Equatable, Sendable {
     public var filesize: Int64?
     public var filesizeApprox: Int64?
     public var tbr: Double?
+    /// Yalnız motor (yt-dlp) bildirir: indirme yolu (`https`, `m3u8_native`…), dil önceliği, ses kanalı sayısı, DRM.
+    public var protocolName: String?
+    public var languagePreference: Int?
+    public var audioChannels: Int?
+    public var hasDRM: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id = "format_id", ext, vcodec, acodec, width, height, filesize, tbr
-        case filesizeApprox = "filesize_approx"
+        case filesizeApprox = "filesize_approx", protocolName = "protocol", languagePreference = "language_preference"
+        case audioChannels = "audio_channels", hasDRM = "has_drm"
     }
 
     public init(id: String, ext: String, vcodec: String?, acodec: String?, width: Int? = nil, height: Int? = nil,
-                filesize: Int64? = nil, filesizeApprox: Int64? = nil, tbr: Double? = nil) {
+                filesize: Int64? = nil, filesizeApprox: Int64? = nil, tbr: Double? = nil, protocolName: String? = nil,
+                languagePreference: Int? = nil, audioChannels: Int? = nil, hasDRM: Bool? = nil) {
         (self.id, self.ext, self.vcodec, self.acodec, self.width, self.height) = (id, ext, vcodec, acodec, width, height)
         (self.filesize, self.filesizeApprox, self.tbr) = (filesize, filesizeApprox, tbr)
+        (self.protocolName, self.languagePreference, self.audioChannels, self.hasDRM) = (protocolName, languagePreference, audioChannels, hasDRM)
     }
 
     /// Codec bildirilmemişse (nil) yt-dlp gibi "var" sayılır; yalnız açık "none" yok demektir.
@@ -79,10 +94,13 @@ public struct MediaFormat: Decodable, Equatable, Sendable {
     public var shortSide: Int? { hasVideo ? min(width!, height!) : nil }
 
     /// AVFoundation ile yeniden kodlamadan MP4'e taşınabilir mi.
-    public var isMP4Video: Bool {
+    public var isMP4Video: Bool { isPassthroughVideo(av1: false) }
+
+    /// `av1`: bu Mac AV1'i donanımda çözüyorsa (M3 ve sonrası) MP4 içindeki AV1 de yeniden kodlamadan taşınır.
+    public func isPassthroughVideo(av1: Bool) -> Bool {
         guard hasVideo, ["mp4", "m4v", "mov"].contains(ext.lowercased()) else { return false }
         let codec = (vcodec ?? "").lowercased()
-        return ["avc1", "avc3", "h264", "hvc1", "hev1", "h265"].contains { codec.hasPrefix($0) }
+        return ["avc1", "avc3", "h264", "hvc1", "hev1", "h265"].contains { codec.hasPrefix($0) } || (av1 && codec.hasPrefix("av01"))
     }
     public var isMP4Audio: Bool {
         let codec = (acodec ?? "").lowercased()
@@ -96,19 +114,24 @@ public struct MediaInfo: Decodable, Sendable {
     public var type: String?
     public var formats: [MediaFormat]
     public var duration: Double?
+    /// `is_live`, `is_upcoming`, `post_live`, `was_live`, `not_live`; bilinmiyorsa nil.
+    public var liveStatus: String?
 
-    enum CodingKeys: String, CodingKey { case title, type = "_type", formats, duration }
+    enum CodingKeys: String, CodingKey { case title, type = "_type", formats, duration, liveStatus = "live_status" }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         title = try c.decodeIfPresent(String.self, forKey: .title)
         type = try c.decodeIfPresent(String.self, forKey: .type)
         duration = try? c.decodeIfPresent(Double.self, forKey: .duration)
+        liveStatus = try? c.decodeIfPresent(String.self, forKey: .liveStatus)
         // Tek bir bozuk format tüm incelemeyi düşürmesin.
         formats = ((try? c.decodeIfPresent([FailableFormat].self, forKey: .formats)) ?? []).compactMap(\.value)
     }
 
     public var isSingleVideo: Bool { type == nil || type == "video" }
+    /// Süren veya başlamamış yayın: dosyası yoktur, indirilmez (biten yayının kaydı indirilebilir).
+    public var isLive: Bool { ["is_live", "is_upcoming", "post_live"].contains(liveStatus ?? "") }
 
     private struct FailableFormat: Decodable {
         var value: MediaFormat?
@@ -135,7 +158,19 @@ public enum QualityTier: Int, Comparable, Sendable, CaseIterable {
     public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
 }
 
-public enum DownloadMode: String, Sendable { case videoWithAudio, audioOnly }
+public enum DownloadMode: String, Sendable, CaseIterable {
+    case videoWithAudio, videoOnly, audioOnly
+
+    public var title: String {
+        switch self {
+        case .videoWithAudio: "Video + ses"
+        case .videoOnly: "Yalnız video"
+        case .audioOnly: "Yalnız ses"
+        }
+    }
+
+    public var usesQuality: Bool { self != .audioOnly }
+}
 
 /// Kullanıcının seçebileceği somut indirme: tek akış ya da ayrı görüntü + ses (yeniden kodlamadan birleştirilir).
 public struct DownloadPlan: Equatable, Sendable {
@@ -146,6 +181,8 @@ public struct DownloadPlan: Equatable, Sendable {
         case merge(video: MediaFormat, audio: MediaFormat)
         /// Yalnız birleşik akış var: indirilir, ses izi yeniden kodlamadan M4A'ya ayrılır.
         case extractAudio(from: MediaFormat)
+        /// Yalnız birleşik akış var: indirilir, görüntü izi yeniden kodlamadan sessiz MP4'e ayrılır.
+        case extractVideo(from: MediaFormat)
     }
     public var kind: Kind
     public var tier: QualityTier?
@@ -165,14 +202,14 @@ public struct QualityOption: Equatable, Sendable {
 public enum DownloadPlanner {
     /// Kaynakta gerçekten bulunan görüntü basamakları (yüksekten düşüğe). Birleştirilemeyen bir basamak, nedeniyle
     /// birlikte devre dışı gösterilir; sessizce başka basamağa düşülmez.
-    public static func videoOptions(_ formats: [MediaFormat]) -> [QualityOption] {
+    public static func videoOptions(_ formats: [MediaFormat], av1: Bool = false) -> [QualityOption] {
         let videos = formats.filter(\.hasVideo)
-        let tiers = Set(videos.compactMap { $0.shortSide.map(QualityTier.init(shortSide:)) }).sorted(by: >)
         let audio = bestAudioOnly(formats, mp4Only: true)
-        return tiers.map { tier in
+        return tiers(videos).map { tier in
             let atTier = videos.filter { QualityTier(shortSide: $0.shortSide!) == tier }
-            if let muxed = best(atTier.filter { $0.hasAudio && $0.isMP4Video }) ?? best(atTier.filter(\.hasAudio)) {
-                if let audio, let video = best(atTier.filter { !$0.hasAudio && $0.isMP4Video }), rank(video) > rank(muxed) {
+            let passthrough = atTier.filter { $0.isPassthroughVideo(av1: av1) }
+            if let muxed = best(passthrough.filter(\.hasAudio)) ?? best(atTier.filter(\.hasAudio)) {
+                if let audio, let video = best(passthrough.filter { !$0.hasAudio }), rank(video) > rank(muxed) {
                     return QualityOption(tier: tier, plan: mergePlan(video, audio, tier))
                 }
                 return QualityOption(tier: tier, plan: DownloadPlan(kind: .single(muxed), tier: tier, outputExtension: muxed.ext, estimatedBytes: muxed.size))
@@ -185,7 +222,7 @@ public enum DownloadPlanner {
             guard formats.contains(where: { !$0.hasVideo && $0.hasAudio }) else {
                 return QualityOption(tier: tier, plan: nil, reason: "Bu kalite sesli sunulmuyor")
             }
-            guard let video = best(atTier.filter(\.isMP4Video)) else {
+            guard let video = best(passthrough) else {
                 return QualityOption(tier: tier, plan: nil, reason: "Bu kalite yalnız MP4 dışı biçimde sunuluyor")
             }
             guard let audio else { return QualityOption(tier: tier, plan: nil, reason: "Uyumlu ses akışı yok") }
@@ -193,13 +230,38 @@ public enum DownloadPlanner {
         }
     }
 
+    /// Yalnız görüntü (sessiz): o basamakta ayrı görüntü akışı varsa yalnız o indirilir (daha az veri); yoksa birleşik
+    /// akış indirilip görüntü izi yeniden kodlamadan ayrılır. Kaynakta hiç ses yoksa görüntü olduğu gibi indirilir.
+    public static func videoOnlyOptions(_ formats: [MediaFormat], av1: Bool = false) -> [QualityOption] {
+        let videos = formats.filter(\.hasVideo)
+        let silentSource = !hasAudio(formats)
+        return tiers(videos).map { tier in
+            let atTier = videos.filter { QualityTier(shortSide: $0.shortSide!) == tier }
+            if silentSource, let video = best(atTier) {
+                return QualityOption(tier: tier, plan: DownloadPlan(kind: .single(video), tier: tier, outputExtension: video.ext, estimatedBytes: video.size))
+            }
+            let passthrough = atTier.filter { $0.isPassthroughVideo(av1: av1) }
+            if let video = best(passthrough.filter { !$0.hasAudio }) {
+                return QualityOption(tier: tier, plan: DownloadPlan(kind: .single(video), tier: tier, outputExtension: video.ext, estimatedBytes: video.size))
+            }
+            if let muxed = best(passthrough) {
+                return QualityOption(tier: tier, plan: DownloadPlan(kind: .extractVideo(from: muxed), tier: tier, outputExtension: "mp4", estimatedBytes: muxed.size))
+            }
+            return QualityOption(tier: tier, plan: nil, reason: "Bu kalite yalnız MP4 dışı biçimde sunuluyor")
+        }
+    }
+
+    static func tiers(_ videos: [MediaFormat]) -> [QualityTier] {
+        Set(videos.compactMap { $0.shortSide.map(QualityTier.init(shortSide:)) }).sorted(by: >)
+    }
+
     /// Yalnız ses: ayrı ses akışı varsa yalnız o indirilir (kaynağın biçimi korunur); yoksa birleşik akıştan ses izi
     /// ayrılır. Kaynakta ses yoksa nil.
-    public static func audioPlan(_ formats: [MediaFormat]) -> DownloadPlan? {
+    public static func audioPlan(_ formats: [MediaFormat], av1: Bool = false) -> DownloadPlan? {
         if let audio = bestAudioOnly(formats, mp4Only: false) {
             return DownloadPlan(kind: .single(audio), tier: nil, outputExtension: audio.ext, estimatedBytes: audio.size)
         }
-        let muxed = formats.filter { $0.hasVideo && $0.hasAudio && $0.isMP4Video }
+        let muxed = formats.filter { $0.hasVideo && $0.hasAudio && $0.isPassthroughVideo(av1: av1) }
         guard let source = muxed.min(by: { rank($0) < rank($1) }) else { return nil }
         return DownloadPlan(kind: .extractAudio(from: source), tier: nil, outputExtension: "m4a", estimatedBytes: source.size)
     }
@@ -261,9 +323,13 @@ public enum DownloadFileNaming {
 public enum DownloadFailure: Error, Equatable, Sendable {
     case loginRequired, unavailableInRegion, removed, unsupported, network, timedOut, formatGone
     case diskFull, writePermission, engineMissing, mergeFailed, other
+    case live, botCheck, engineInvalid
 
     public var message: String {
         switch self {
+        case .live: "Canlı veya başlamamış yayın indirilemez."
+        case .botCheck: "YouTube bu bağlantı için doğrulama istiyor; biraz sonra yeniden deneyin."
+        case .engineInvalid: "YouTube motoru doğrulanamadı; yeniden indirin."
         case .loginRequired: "Bu içerik giriş gerektiriyor veya gizli; indirilemez."
         case .unavailableInRegion: "İçerik bu bölgede erişilebilir değil."
         case .removed: "İçerik kaldırılmış veya bulunamadı."
@@ -273,7 +339,7 @@ public enum DownloadFailure: Error, Equatable, Sendable {
         case .formatGone: "Seçilen kalite artık sunulmuyor; bağlantıyı yeniden inceleyin."
         case .diskFull: "Diskte yeterli alan yok."
         case .writePermission: "Seçilen klasöre yazılamıyor."
-        case .engineMissing: "İndirme motoru bu pakette bulunmuyor."
+        case .engineMissing: "YouTube motoru kurulu değil."
         case .mergeFailed: "Görüntü ve ses birleştirilemedi."
         case .other: "İndirme başarısız oldu. Platform değişmiş olabilir."
         }
@@ -283,9 +349,12 @@ public enum DownloadFailure: Error, Equatable, Sendable {
     public static func classify(_ stderr: String) -> DownloadFailure {
         let text = stderr.lowercased()
         func any(_ needles: [String]) -> Bool { needles.contains { text.contains($0) } }
-        if any(["requested format is not available", "requested format not available"]) { return .formatGone }
+        // Süresi dolmuş (YouTube ~6 sa) veya geri çekilmiş akış adresi: başka kaliteye sessizce geçilmez, yeniden incelenir.
+        if any(["requested format is not available", "requested format not available", "http error 403"]) { return .formatGone }
         if any(["no space left"]) { return .diskFull }
         if any(["permission denied", "operation not permitted", "read-only file system"]) { return .writePermission }
+        if any(["not a bot", "confirm you're not", "confirm you’re not"]) { return .botCheck }
+        if any(["live event will begin", "is live", "premieres in", "this live event"]) { return .live }
         if any(["login", "log in", "cookies", "private", "sign in", "authentication", "age-restricted", "age restricted"]) { return .loginRequired }
         if any(["available in your country", "geo restrict", "geo-restrict", "your region", "your location"]) { return .unavailableInRegion }
         if any(["unsupported url", "no video formats", "no video could be found", "there's no video", "not a video"]) { return .unsupported }
@@ -297,10 +366,12 @@ public enum DownloadFailure: Error, Equatable, Sendable {
 }
 
 /// İşlem yaşam döngüsü. Her inceleme/indirme yeni bir kuşak alır; eski kuşağın geç gelen sonucu yok sayılır.
+/// `needsEngine`: YouTube bağlantısı için motorun indirilmesine onay bekleniyor; `installingEngine`: motor indirilip
+/// doğrulanıyor (ilk kurulum ya da kullanıcının başlattığı güncelleme).
 public enum LinkDownloadPhase: Equatable, Sendable {
-    case idle, inspecting, ready, downloading, finalizing, finished, cancelled, failed
+    case idle, inspecting, ready, downloading, finalizing, finished, cancelled, failed, needsEngine, installingEngine
 
-    public var isBusy: Bool { [.inspecting, .downloading, .finalizing].contains(self) }
+    public var isBusy: Bool { [.inspecting, .downloading, .finalizing, .installingEngine].contains(self) }
 }
 
 public struct DownloadGeneration: Equatable, Sendable {
