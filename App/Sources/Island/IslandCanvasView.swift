@@ -32,6 +32,8 @@ final class IslandCanvasView: NSView {
     private var pendingOpening: DispatchWorkItem?
     /// Hızlı hover'da yüzey açılışa peek sırasında başladı; içerik açılış kesinleşince belirir.
     private var anticipatedOpening = false
+    /// İmleç çıktı, kapanma beklemesi sürüyor: yüzey kapanışa başladı (imleç dönerse yeniden açılır).
+    private var anticipatedClosing = false
 
     private var slots: [ContentSlot] = []
     private var lastShapeKey: [CGFloat] = []
@@ -184,6 +186,25 @@ final class IslandCanvasView: NSView {
             }
         }
         if !model.presentation.isExpanded { anticipatedOpening = false } // gecikme dolmadan çıkıldı: yüzey geri kapanır
+        // Kapanış da Ayarlar önizlemesindeki gibi imleç çıkar çıkmaz başlar: yanlışlıkla çıkmaya karşı bekleme (Canlı 0,1 sn,
+        // Sakin 0,35 sn) sürerken yüzey kapalı boyuta ilerler ve içerik söner; imleç bu sürede dönerse aynı yaydan yeniden
+        // açılır. Önceden ada bekleme boyunca duruyor (yalnız %0,6 küçülüyordu), sonra kapanıyordu.
+        if case .expanded = model.presentation, model.hud == nil, model.notice == nil {
+            if model.isRelaxing {
+                if !anticipatedClosing {
+                    anticipatedClosing = true
+                    let resting = model.machine.restingActivity.map(IslandPresentation.compact) ?? .idle
+                    if FrameDriver.isLogging { FrameDriver.note("closing anticipated \(resting)") }
+                    applySurface(layout: IslandLayoutEngine.layout(for: resting, metrics: model.metrics), presentation: resting,
+                                 spec: AppMotion.morph(from: surfacePresentation, to: resting, style: AppMotion.effectiveStyle(model.motionStyle)))
+                }
+                return
+            }
+            if anticipatedClosing, FrameDriver.isLogging { FrameDriver.note("closing cancelled (pointer returned)") }
+            anticipatedClosing = false // imleç döndü: aşağıdaki morph yüzeyi açılış yayıyla geri açar
+        } else {
+            anticipatedClosing = false
+        }
         let target = (layout: model.layout, presentation: model.presentation)
         if FrameDriver.isLogging {
             FrameDriver.note("model \(model.presentation) \(Int(model.layout.size.width))x\(Int(model.layout.size.height)) pinned=\(model.isPinned) relax=\(model.isRelaxing) hud=\(model.hud != nil) notice=\(model.notice != nil) content=\(model.metrics.content) hovering=\(model.machine.context.isHovering)")
