@@ -27,6 +27,10 @@ final class ExpandedContentView: FlippedView, IslandContentView {
     private(set) var hasBeenShown = false
     /// Ön çizim için görünür yapılan, etkin olmayan sekme panelleri (birleştirme bitince yeniden gizlenir).
     private var prewarming: [ExpandedTab] = []
+    private var preparedObserver: NSObjectProtocol?
+
+    /// Panel, uyku hâlinde içeriğini sonradan kurdu (ör. Mikser satırları veri gelince): bir kez daha ön çizim ister.
+    static let panelPreparedContent = Notification.Name("OpenIsland.panelPreparedContent")
 
     init(model: IslandViewModel, environment: AppEnvironment, dormant: Bool = false) {
         self.model = model
@@ -38,6 +42,10 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         addSubview(header)
         addSubview(banner)
         setAccessibilityElement(false)
+        preparedObserver = NotificationCenter.default.addObserver(forName: Self.panelPreparedContent, object: nil, queue: .main) { [weak self] note in
+            let sender = (note.object as AnyObject?).map(ObjectIdentifier.init)
+            MainActor.assumeIsolated { self?.redrawDormant(sender) }
+        }
         if dormant {
             prepare(model.machine.context.lastTab)
         } else {
@@ -82,6 +90,20 @@ final class ExpandedContentView: FlippedView, IslandContentView {
         container.layoutSubtreeIfNeeded()
         prewarming.append(tab)
         return tab
+    }
+
+    /// Uyku hâlinde içeriği sonradan kurulan panel bir kare görünür bırakılır (ada kapalı: kırpılmış, ekranda görünmez) ve
+    /// çizilince yeniden gizlenir; ilk açılışta satırların ilk çizimi açılış yayının ortasına düşmez.
+    private func redrawDormant(_ sender: ObjectIdentifier?) {
+        guard isDormant, let (tab, container) = panels.first(where: { ObjectIdentifier($0.value.panel) == sender }), container.isHidden,
+              !prewarming.contains(tab) else { return }
+        container.prepare()
+        container.layoutSubtreeIfNeeded()
+        prewarming.append(tab)
+        FrameDriver.afterPresentedFrame(of: self) { [weak self] in
+            guard let self, self.isDormant else { return }
+            self.endPanelPrewarm()
+        }
     }
 
     /// Ön çizim birleştirildi (ya da görünüm açılıyor): etkin olmayan paneller yeniden gizlenir, katmanları çizili kalır.
@@ -129,7 +151,10 @@ final class ExpandedContentView: FlippedView, IslandContentView {
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
     deinit {
-        MainActor.assumeIsolated { panels.values.forEach { $0.suspend() } }
+        MainActor.assumeIsolated {
+            panels.values.forEach { $0.suspend() }
+            if let preparedObserver { NotificationCenter.default.removeObserver(preparedObserver) }
+        }
     }
 
     /// Yükseklik sekmeden bağımsız (bütün sekmelerin en büyüğü): çocukların yerleşimi yalnız genişliğe bağlı ve görünüm

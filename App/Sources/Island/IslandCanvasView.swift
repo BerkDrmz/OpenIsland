@@ -30,6 +30,8 @@ final class IslandCanvasView: NSView {
     private var width: Spring, height: Spring, topRadius: Spring, bottomRadius: Spring, topInset: Spring
     private var relax = Spring(1)
     private var pendingOpening: DispatchWorkItem?
+    /// Hızlı hover'da yüzey açılışa peek sırasında başladı; içerik açılış kesinleşince belirir.
+    private var anticipatedOpening = false
 
     private var slots: [ContentSlot] = []
     private var lastShapeKey: [CGFloat] = []
@@ -146,6 +148,10 @@ final class IslandCanvasView: NSView {
         }
     }
 
+    static func anticipatesOpening(_ configuration: IslandConfiguration) -> Bool {
+        configuration.expandsOnHover && configuration.hoverExpandDelay <= 0.12
+    }
+
     private func modelDidChange() {
         observeModel()
         let style = AppMotion.effectiveStyle(model.motionStyle)
@@ -161,6 +167,23 @@ final class IslandCanvasView: NSView {
         } else if !model.machine.context.isFileDragActive {
             dropZone = nil
         }
+        // Hızlı hover (hover ile açılma açık, gecikme ≤ 120 ms): peek, açılış yayının başlangıcıdır. İmleç girer girmez
+        // yüzey açık boyuta tek yayla ilerler (Ayarlar önizlemesindeki gibi); açılış kesinleşince içerik belirir, imleç
+        // gecikme dolmadan çıkarsa yüzey aynı yaydan geri kapanır. Ayrı peek yayı açılışı "yavaş büyü → fırla" kırığıyla
+        // başlatıyordu (gerçek fareyle kare kare ölçüldü, 2 Kasım).
+        if case .peek = model.presentation, model.hud == nil, model.notice == nil {
+            if anticipatedOpening { return }
+            if !surfacePresentation.isExpanded, Self.anticipatesOpening(model.machine.configuration) {
+                let tab = model.machine.context.lastTab
+                let opening = IslandPresentation.expanded(tab)
+                anticipatedOpening = true
+                if FrameDriver.isLogging { FrameDriver.note("opening anticipated (fast hover) \(tab)") }
+                applySurface(layout: IslandLayoutEngine.layout(for: opening, metrics: model.metrics), presentation: opening,
+                             spec: AppMotion.morph(from: surfacePresentation, to: opening, style: AppMotion.effectiveStyle(model.motionStyle)))
+                return
+            }
+        }
+        if !model.presentation.isExpanded { anticipatedOpening = false } // gecikme dolmadan çıkıldı: yüzey geri kapanır
         let target = (layout: model.layout, presentation: model.presentation)
         if FrameDriver.isLogging {
             FrameDriver.note("model \(model.presentation) \(Int(model.layout.size.width))x\(Int(model.layout.size.height)) pinned=\(model.isPinned) relax=\(model.isRelaxing) hud=\(model.hud != nil) notice=\(model.notice != nil) content=\(model.metrics.content) hovering=\(model.machine.context.isHovering)")
@@ -305,7 +328,12 @@ final class IslandCanvasView: NSView {
             contentView.addSubview(view, positioned: .below, relativeTo: media)
         }
         spare?.activate()
-        if key.isExpanded {
+        if key.isExpanded, anticipatedOpening {
+            // Yüzey peek'ten beri açılıyor: içerik şimdi, açılış yayının giriş eğrisiyle belirir.
+            anticipatedOpening = false
+            slot.begin(visible: false, animated: false, spec: nil)
+            slot.setVisible(true, spec: AppMotion.contentIn(style))
+        } else if key.isExpanded {
             // Yüzey hazırlanıp hareket etmeye başlayınca belirir (surfacePresentation genişlediğinde).
             slot.begin(visible: surfacePresentation.isExpanded, animated: false, spec: nil)
         } else {
@@ -363,6 +391,7 @@ final class IslandCanvasView: NSView {
         let surfaceSize = CGSize(width: width.value, height: height.value)
         let shape = IslandShape(style: metrics.style, topRadius: topRadius.value, bottomRadius: bottomRadius.value)
         let rect = CGRect(x: canvas.width / 2 - surfaceSize.width / 2, y: inset, width: surfaceSize.width, height: surfaceSize.height)
+        if FrameDriver.isLogging { FrameDriver.note(String(format: "geo w=%.2f h=%.2f", surfaceSize.width, surfaceSize.height)) }
         // SwiftUI yolu y-aşağı koordinatta üretir; görünüm de çevrilmiş (flipped).
         CATransaction.begin()
         CATransaction.setDisableActions(true)

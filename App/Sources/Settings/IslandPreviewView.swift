@@ -217,6 +217,7 @@ final class IslandPreviewView: FlippedView {
         let l1 = IslandLayoutEngine.layout(for: .expanded(.nook), metrics: m)
         func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * p }
         let size = CGSize(width: mix(l0.size.width, l1.size.width), height: mix(l0.size.height, l1.size.height))
+        if FrameDriver.isLogging { FrameDriver.note(String(format: "geo w=%.2f h=%.2f", size.width, size.height)) }
         gradient.frame = bounds
         band.frame = CGRect(x: 0, y: 0, width: bounds.width, height: pixelRound(notchSize.height * Self.scale))
         // ZStack(alignment: .top): ölçeklenmiş ada yatayda ortalı, üstte; kare kare piksele yuvarlanır.

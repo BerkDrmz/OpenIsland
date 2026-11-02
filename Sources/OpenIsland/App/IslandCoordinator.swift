@@ -96,6 +96,11 @@ final class IslandCoordinator {
            let controller = controllers.values.first {
             IslandDiagnostics.shared?.runScript(on: controller, environment: env)
         }
+        // Yalnız tanı koşusu: gerçek fareyle sekme bazlı aç/kapa ölçümü için açılış sekmesi (OPENISLAND_START_TAB=media…).
+        if ProcessInfo.processInfo.environment["OPENISLAND_DIAGNOSTICS"] != nil,
+           let tab = ProcessInfo.processInfo.environment["OPENISLAND_START_TAB"].flatMap(ExpandedTab.init(rawValue:)) {
+            controllers.values.forEach { $0.model.send(.selectTab(tab)) }
+        }
 
         // Oturum az önce açıldıysa (yeniden başlatma, çıkış → giriş, oturum açılışında başlatma) animasyonu
         // ilk karede, doğru geometriyle oynat: masaüstü açıldıktan sonra geç belirme olmaz.

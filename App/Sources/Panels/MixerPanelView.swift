@@ -71,8 +71,29 @@ final class MixerPanelView: FlippedView, IslandPanel {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("desteklenmiyor") }
 
-    func prewarm() { mixer.prefetch() }
-    func didShow() { mixer.showPanel(); observer.start() }
+    /// Uyku hâlinde: veri ana iş parçacığı dışında okunur ve gelir gelmez satırlar (uygulama simgeleriyle) kurulur. İlk
+    /// açılışta kurulum ~24 ms sürüyor ve açılış yayının ortasında kare kaçırıyordu (2 Kasım, gerçek fareyle ölçüldü).
+    func prewarm() {
+        mixer.prefetch()
+        prewarmRows.start()
+    }
+
+    private lazy var prewarmRows: Observer = Observer(track: { [mixer] in _ = mixer.applications; _ = mixer.devices }, apply: { [weak self] in
+        guard let self, !self.mixer.applications.isEmpty || !self.mixer.devices.isEmpty else { return }
+        self.update()
+        self.prewarmRows.stop()
+        NotificationCenter.default.post(name: ExpandedContentView.panelPreparedContent, object: self)
+    })
+    func didShow() {
+        prewarmRows.stop()
+        let t0 = CACurrentMediaTime()
+        mixer.showPanel()
+        let t1 = CACurrentMediaTime()
+        observer.start()
+        if FrameDriver.isLogging {
+            FrameDriver.note(String(format: "mixer.didShow showPanel %.2f ms, observer %.2f ms", (t1 - t0) * 1000, (CACurrentMediaTime() - t1) * 1000))
+        }
+    }
     func didHide() { observer.stop(); mixer.hidePanel() }
 
     private func update() {
