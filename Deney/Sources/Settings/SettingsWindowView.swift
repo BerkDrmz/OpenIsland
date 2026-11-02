@@ -15,7 +15,7 @@ enum SettingsWindowFactory {
         window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.title = "OpenIsland Deney Ayarları"
+        window.title = "OpenIsland Ayarları"
         window.setContentSize(contentSize)
         return window
     }
@@ -128,7 +128,7 @@ final class SettingsRootView: NSView, NSTableViewDataSource, NSTableViewDelegate
 @MainActor
 private final class SettingsSidebarHeader: FlippedView {
     private let icon = NSImageView()
-    private let name = TextLabel("OpenIsland Deney", font: .systemFont(ofSize: 13, weight: .semibold), color: .labelColor)
+    private let name = TextLabel("OpenIsland", font: .systemFont(ofSize: 13, weight: .semibold), color: .labelColor)
     private let version: TextLabel
 
     override init(frame: NSRect) {

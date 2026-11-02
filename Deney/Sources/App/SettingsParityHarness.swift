@@ -29,7 +29,7 @@ enum SettingsParityHarness {
         // _ONLY=sui|ak: yalnız biri, ilk konumda (duvar kâğıdı tonu konuma bağlı; karşılaştırma için sırayla aynı yerde).
         if let only = env["OPENISLAND_DENEY_SETTINGSPARITY_ONLY"] { made = made.filter { $0.0.hasSuffix(only) } }
         for (index, (_, window)) in made.enumerated() {
-            window.title = "OpenIsland Deney Ayarları"
+            window.title = "OpenIsland Ayarları"
             window.isReleasedWhenClosed = false
             window.setFrameTopLeftPoint(CGPoint(x: screen.minX + 40 + CGFloat(index) * (window.frame.width + 30), y: screen.maxY - 20))
             window.orderFrontRegardless()

@@ -229,7 +229,7 @@ final class LinkDownloader {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.urlCache = nil
             configuration.timeoutIntervalForRequest = 30
-            configuration.httpAdditionalHeaders = ["User-Agent": "OpenIsland-Deney"]
+            configuration.httpAdditionalHeaders = ["User-Agent": "OpenIsland"]
             let session = URLSession(configuration: configuration)
             defer { session.invalidateAndCancel() }
             do {
