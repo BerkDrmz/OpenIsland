@@ -48,8 +48,8 @@ final class MaintenanceController: NSObject, NSWindowDelegate {
         window.minSize = NSSize(width: 780, height: 540)
         window.isReleasedWhenClosed = false
         window.delegate = self
-        #if OPENISLAND_DENEY
-        // AppKit deneyi: aynı denetleyiciyle AppKit görünümü (Deney/Sources/Tools/MaintenanceWindowView.swift). Başlık
+        #if OPENISLAND_APPKIT
+        // AppKit deneyi: aynı denetleyiciyle AppKit görünümü (App/Sources/Tools/MaintenanceWindowView.swift). Başlık
         // çubuğu saydam; kenar çubuğu onun altına uzanır (Ayarlar penceresiyle aynı düzen).
         window.styleMask.insert(.fullSizeContentView)
         window.titlebarAppearsTransparent = true

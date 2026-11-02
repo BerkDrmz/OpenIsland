@@ -380,8 +380,8 @@ final class DockPreviewController {
             panel.acceptsMouseMovedEvents = true
             self.panel = panel
         }
-        #if OPENISLAND_DENEY
-        // AppKit deneyi: aynı model ve yerleşimle AppKit paneli (Deney/Sources/Panels/DockPreviewPanelView.swift).
+        #if OPENISLAND_APPKIT
+        // AppKit deneyi: aynı model ve yerleşimle AppKit paneli (App/Sources/Panels/DockPreviewPanelView.swift).
         panel?.contentView = DockPreviewPanelView(model: model, size: frame.size)
         #else
         let hosting = NSHostingView(rootView: DockPreviewPanel(model: model).frame(width: frame.width, height: frame.height))

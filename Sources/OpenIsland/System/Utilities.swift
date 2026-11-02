@@ -13,12 +13,8 @@ enum AppPaths {
             return url
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        #if OPENISLAND_DENEY
-        // AppKit deneyi: kullanıcının gerçek verisine (raf, notlar, pano) dokunmaz.
-        let url = base.appendingPathComponent("io.github.openisland.deney", isDirectory: true)
-        #else
+        // SwiftUI ve AppKit sürümü aynı uygulamadır (io.github.openisland.OpenIsland): aynı veri klasörü.
         let url = base.appendingPathComponent("io.github.openisland", isDirectory: true)
-        #endif
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
@@ -32,7 +28,7 @@ enum AppPaths {
 
 enum Notifier {
     static func requestAuthorization() {
-        #if OPENISLAND_DENEY
+        #if OPENISLAND_APPKIT
         // Isolated validation bundles must never request or deliver user notifications.
         if TestIsolationGuard.isValidationBundle { return }
         #endif
@@ -41,7 +37,7 @@ enum Notifier {
     }
 
     static func post(title: String, body: String) {
-        #if OPENISLAND_DENEY
+        #if OPENISLAND_APPKIT
         // Isolated validation bundles must never request or deliver user notifications.
         if TestIsolationGuard.isValidationBundle { return }
         #endif

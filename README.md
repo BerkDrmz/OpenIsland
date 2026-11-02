@@ -2,7 +2,7 @@
 
 OpenIsland, MacBook için geliştirilen ücretsiz ve açık kaynaklı bir Dynamic Island uygulamasıdır.
 Müzik kontrollerini, bildirimleri ve günlük araçları ekranın üst kısmında bir araya getirir.
-Swift ile geliştirilmiştir; günlük kullanılan sürümün arayüzü AppKit ve Core Animation'dır ([Deney/](Deney/README.md)).
+Swift ile geliştirilmiştir; günlük kullanılan sürümün arayüzü AppKit ve Core Animation'dır ([App/](App/README.md)).
 Boşta gereksiz işlem yapmamaya odaklanır.
 
 <p align="center">
@@ -67,7 +67,7 @@ Ayrıntılı teknik mimari: [Docs/ARCHITECTURE.md](Docs/ARCHITECTURE.md)
 <p align="center"><img src="Docs/images/settings.png" width="640" alt="Ayarlar penceresi"></p>
 
 Görüntüler örnek verilerle, yalıtılmış bir test ortamında alınır; gerçek takvim, pano, not veya rafa dokunulmaz
-(`Deney/Tests/ReadmeShots.swift`).
+(`App/Tests/ReadmeShots.swift`).
 
 ## Bağlantıdan indirme
 
