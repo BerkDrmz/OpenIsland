@@ -40,14 +40,14 @@ Dock önizlemeleri görünür kart başına küçük bir tek kare alır; statik 
 Ses mikseri varsayılan %100 seviyede ve varsayılan çıkışta ses işleme yolu kurmaz; ara seviyelerde
 ses örneklerini işlemek gereklidir. Aktif animasyon veya ses işlemi için sıfır tüketim garanti edilmez.
 
-10 Ekim 2026'da M4 MacBook Air / macOS 27.0.1 üzerinde, 20 gerçek aç/kapa çevrimi sonrasındaki
-45 saniyelik boşta ölçümde ortalama CPU %0,0061, en yüksek yaklaşık bir saniyelik örnek %0,0587
-ve fiziksel bellek ayak izi 35,88 MiB oldu; disk okuma/yazma sıfırdı. Aç/kapa testinde ortalama CPU
-%0,3555 çıktı. İlerleme ve müzik nabzındaki gereksiz render/yeniden başlatma işleri azaltıldı.
-Bu bir cihaz ölçümüdür; tüm Mac'ler, milisaniyelik tepeler veya aktif özellikler için garanti değildir.
-CPU/GPU incelemesi, aktif senaryoların ölçümleri ve yeniden ölçme komutları:
-[Performans raporu](Docs/PERFORMANCE.md). CPU tepe değerleri örnekleme aralığına bağlıdır;
-WindowServer'ın toplam GPU yükü uygulamaya özel tüketim değildir.
+**3 Kasım 2026 AppKit güncellemesi:** yumuşak aç/kapa hareketi korunurken, Core Animation'ın
+zaten çizdiği yüzey için gereksiz ikinci istemci kare döngüsü kaldırıldı. Medya, HUD ve diğer
+istemci güncellemelerini gerektiren durumlar mevcut tam hızlı yolu kullanmaya devam eder.
+Sınırlı Nook hover karşılaştırmasında açılış başına süreç CPU süresi 27,197 → 14,419 ms,
+kapanış başına 20,754 → 11,865 ms oldu. Bunlar anlık CPU yüzdesi veya pil ömrü kazanımı değildir.
+Arka plan yükü eşleştirmeli alternatif protokol, temiz-sistem kabul ölçümüyle eşdeğer değildir.
+Koşullar, doğrulamalar ve GPU/enerji sınırları: [Performans raporu](Docs/PERFORMANCE.md).
+Eski tarihli sonuçlar yeni sürümün ölçümü olarak kullanılmamalıdır.
 
 App Store indirmeleri, sistemin `NSProgress` yayını üzerinden olay tabanlı izlenir; sürekli
 klasör taraması veya ağ sorgusu yapılmaz. TestFlight indirmesinde başlangıç, ilerleme ve bitiş
@@ -107,39 +107,35 @@ kullanım içindir ve motor yalnız kullanıcı açıkça onaylarsa indirilir.
 ## Gereksinimler
 
 - macOS 14 Sonoma veya üzeri.
-- Varsayılan uygulama derlemesi Apple Silicon (M serisi, arm64) içindir.
+- Güncel AppKit derlemesi derlemenin yapıldığı Mac'in mimarisini kullanır; doğrulanan cihaz Apple Silicon'dur.
 - Çentiksiz MacBook ekranlarında yüzen kapsül görünümü desteklenir.
-- Intel için Universal 2 derleme seçeneği vardır; Intel cihazlarda ve tüm cihaz/macOS
-  kombinasyonlarında çalışma henüz doğrulanmamıştır.
+- Intel cihazlarda ve tüm cihaz/macOS kombinasyonlarında çalışma henüz doğrulanmamıştır.
 - Spaces sabitleme davranışı özel macOS API'lerinden yararlanır. Bu API'ler kullanılamazsa
   public pencere davranışına geçilir; geçiş animasyonundaki sabitlik macOS sürümüne göre değişebilir.
-- Xcode 26+ veya yalnızca Command Line Tools. macOS 27 SDK'sında SwiftUI'nin `@State`'i bir
-  makrodur ve eklentisi (`SwiftUIMacros`) yalnızca Xcode ile gelir; Xcode yoksa `build-app.sh`
-  kaynakların `.build/clt-compat` altındaki bir kopyasında `@State`'i aynı property wrapper'a
-  işaret eden bir typealias ile değiştirip onu derler. Xcode'da açmak için Xcode gerekir; `IslandCore`
-  testleri Command Line Tools ile de çalışır (aşağıda).
+- Swift 6 araç zinciri ve macOS SDK'sı gerekir. Güncel paket ve testler Xcode ile doğrulanmıştır.
+  Paylaşılan kaynaklarda SwiftUI de bulunduğu için yalnız Command Line Tools ile AppKit paketi
+  derlemek tüm SDK sürümlerinde doğrulanmış değildir.
 
 ## Derleme ve çalıştırma
 
 ```bash
-./Scripts/build-app.sh
-open build/OpenIsland.app
+./App/build.sh
+open App/build/OpenIsland.app
 ```
 
-Betik, anahtar zincirinde bir "Apple Development" kimliği varsa onunla imzalar (yeniden derlemede
-Erişilebilirlik/Kamera izinleri korunur); yoksa ad-hoc imzalar ve uyarır. Apple Developer hesabı
+Betik, anahtar zincirinde bir "Apple Development" veya "OpenIsland Local Signing" kimliği varsa
+onu kullanır; yoksa ad-hoc imzalar. Aynı paket kimliği ve imza gereksiniminin korunması,
+macOS izinlerinin yeniden derlemelerde korunması için önemlidir; ad-hoc derlemelerde yeniden izin gerekebilir. Apple Developer hesabı
 olmadan izinlerin her derlemede sıfırlanmaması için bir kez `./Scripts/create-dev-identity.sh`
 çalıştırın: yerel, kendinden imzalı bir kimlik oluşturur ve betik sonraki derlemelerde onu kullanır.
 
-Adanın Space/tam ekran geçişlerinde kayıp kaymadığını ölçmek için `./Scripts/space-probe.sh 120`
-çalıştırıp dört parmakla kaydırın; sonunda her ada penceresi için "SABİT ✅ / KAYDI ❌" yazılır
-(bkz. [Docs/ARCHITECTURE.md §4.1.1](Docs/ARCHITECTURE.md)). Universal 2 için
-`ARCHS="arm64 x86_64" ./Scripts/build-app.sh`. Xcode'da açmak için `Package.swift` dosyasını açın ve
-`OpenIsland` şemasını çalıştırın. Dağıtım (Developer ID, notarizasyon, Sparkle 2 planı) için
-[Docs/ARCHITECTURE.md §8](Docs/ARCHITECTURE.md). İmzalı bir sürüm için:
+Kurulu uygulama açıksa yeni paketi aynı anda başlatmayın. Bu komut kurulu uygulamayı
+otomatik değiştirmez. Güncel AppKit girişi `App/Sources` altındadır; `Package.swift` içindeki
+`OpenIsland` hedefi ve `Scripts/build-app.sh` eski SwiftUI arayüzünü derler, güncel AppKit paketini değil.
+İmza kimliğini açıkça seçmek için:
 
 ```bash
-CODESIGN_IDENTITY="Developer ID Application: Ad Soyad (TEAMID)" ./Scripts/build-app.sh
+CODESIGN_IDENTITY="Developer ID Application: Ad Soyad (TEAMID)" ./App/build.sh
 ```
 
 Durum makinesi, yerleşim motoru, güç/tam ekran kuralları, özel API hata politikası ve müzik nabzı deseni testleri:
@@ -201,7 +197,8 @@ Vendor/MediaRemoteAdapter/
 └── MediaRemoteAdapter.framework
 ```
 
-`build-app.sh` bu klasörü paketin içine kopyalayıp imzalar; uygulama onu otomatik olarak kullanır.
+Bu otomatik paketleme eski `Scripts/build-app.sh` yoluna aittir. Güncel `App/build.sh`,
+bu isteğe bağlı adaptörü kopyalayıp imzalamaz; adaptörün bu AppKit paketinde hazır geldiği varsayılmamalıdır.
 
 ## Proje yapısı
 
@@ -224,7 +221,10 @@ Sources/
     ├── Features/          Media, HUD, Shelf, Mirror, Clipboard, Focus, Notes, Gestures, Events
     └── System/            İzinler, ayarlar, yardımcılar
 Support/                   Info.plist, entitlements
-Scripts/build-app.sh       .app paketleme ve imzalama
+App/Sources/              Güncel AppKit + Core Animation arayüzü
+App/Tests/                Native UI ve animasyon kontrat kontrolleri
+App/build.sh              Güncel AppKit .app paketleme ve imzalama
+Scripts/build-app.sh      Eski SwiftUI .app paketleme ve imzalama
 ```
 
 ## Lisans

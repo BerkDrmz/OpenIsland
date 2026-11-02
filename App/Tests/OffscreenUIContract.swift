@@ -73,6 +73,28 @@ private final class CountingSymbolDescriptionImage: NSImage {
         symbol.image = nil
         symbol.exposeAsImage()
         check(symbol.accessibilityLabel() == displayLabel, "missing configured image lost the named-symbol AX fallback")
+        let stableSymbol = SymbolView("music.note", size: 12, weight: .semibold)
+        stableSymbol.setConfiguration(size: 12, weight: .semibold)
+        let originalGlyph = stableSymbol.image
+        for _ in 0..<120 { stableSymbol.setConfiguration(size: 12, weight: .semibold) }
+        check(stableSymbol.image === originalGlyph, "unchanged symbol configuration recreated the backing image")
+        stableSymbol.setConfiguration(size: 20, weight: .bold)
+        check(stableSymbol.image !== originalGlyph, "changed symbol configuration kept stale glyph")
+        let art = ArtworkLayerView(frame: CGRect(x: 0, y: 0, width: 24, height: 24))
+        let placeholderGlyph = art.subviews.compactMap { $0 as? SymbolView }.first!
+        art.image = NSImage(size: NSSize(width: 24, height: 24))
+        let hiddenGlyph = placeholderGlyph.image
+        for size in 25...120 {
+            art.frame.size = NSSize(width: size, height: size)
+            art.cornerRadius = CGFloat(size) / 5
+        }
+        check(placeholderGlyph.isHidden && placeholderGlyph.image === hiddenGlyph,
+              "artwork morph rebuilt the fully hidden placeholder")
+        art.image = nil
+        check(!placeholderGlyph.isHidden && placeholderGlyph.image !== hiddenGlyph,
+              "artwork removal did not immediately restore the current placeholder")
+        check(placeholderGlyph.frame == placeholderGlyph.drawingFrame(centeredIn: art.bounds),
+              "restored artwork placeholder retained stale geometry")
         for name in ["doc.on.clipboard", "tray.and.arrow.down", "hand.raised.fill", "speaker.wave.2.fill", "play.fill", "stopwatch", "plus", "cpu", "memorychip", "display", "airpods", "doc", "folder", "xmark", "arrow.counterclockwise"] {
             for size in [7.0, 10, 12, 20, 28] { for weight in [NSFont.Weight.regular, .semibold, .bold] {
                 let v = SymbolView(name, size: size, weight: weight)

@@ -1,4 +1,64 @@
-# Performans incelemesi — 9–10 Ekim 2026
+# Performans incelemeleri
+
+## 3 Kasım 2026 — yumuşak AppKit aç/kapa, yerel kaynak `5e17600`
+
+Bu bölüm önceki yerel doğrulamanın yayıma uygun özetidir; GitHub'a aktarım sırasında yeni bir
+CPU/GPU benchmark'ı yapılmış gibi sunulmaz. Sonraki başarısız deneyler bu kaynaklara dahil değildir.
+
+### Değişiklik
+
+- Yüzey, maske ve içerik opaklığı Core Animation üzerinde ilerler; aynı çizimi tekrar hazırlayan
+  kök istemci kare döngüsü yalnız güvenli koşullarda kaldırılmıştır. Medya, HUD, blur, drop, hareketli
+  inset ve pill gibi gerekli durumlarda mevcut tam hızlı istemci yolu korunur.
+- Aynı tam spring durumu için en fazla dört geometri yörüngesi tutulur; tuval/stil değişikliği
+  önbelleği geçersiz kılar. Süre, eğri, hız, hover hassasiyeti veya ekran FPS'si azaltılmamıştır.
+- İçerik opaklığının bitişindeki park etme ve yüzeyin bitişindeki askıya alma ayrı sonlandırma
+  olaylarıdır. Hızlı yeniden girişte eski completion yeni görünümü kapatamaz.
+- Simgelerin değişmeyen yapılandırması yeniden üretilmez; tam dengedeki spring için sonuçsuz
+  hesaplar atlanır. Sürekli yeni polling/timer eklenmemiştir.
+
+### Ölçümün kapsamı
+
+M4 MacBook Air / macOS 27.0.1, release; önceki yumuşak `f848fde` ile son `5e17600` için
+A/D/D/A, koşu başına 12 gerçek Nook hover aç/kapa döngüsü. İki varyantta aynı özel test verileri,
+60 ms hover tercihi ve 1,5 saniyelik fazlar; ölçüm sırasında kare tanı günlükleri ve profiler kapalı.
+İlk açılışlar dahil, her varyantta toplam 24 açılış ve 24 kapanış tamamlanmıştır.
+
+| Süreç CPU işi / işlem | Önceki | Son kaynak |
+|---|---:|---:|
+| Açılış | 27,197 ms | 14,419 ms |
+| Kapanış | 20,754 ms | 11,865 ms |
+
+Bu değerler anlık CPU yüzdesi değildir. Ortam eski katı temiz-sistem protokolünü sağlamadığı için
+ayrı, önceden tanımlanmış arka-plan-eşleştirmeli protokol kullanılmıştır; aynı güvenilirlik
+düzeyinde temiz-sistem kabul ölçümü değildir. Warm eşleştirme kapsamı açılışta 18/22,
+kapanışta 19/22; eşleştirilen CPU işi sırasıyla 26,204 → 12,441 ms ve 20,477 → 11,826 ms'dir.
+Bu Nook hover sonucu Spotify'a veya bütün sekmelere genellenmez.
+
+### Birlikte değerlendirilen sayaçlar ve sınırlar
+
+Bütün sınırlı koşu/startup için süreç enerji **tahmini** `ri_energy_nj` ortalaması
+743.029.080 → 705.617.319; son temiz-profil footprint 33,251 → 33,126 MiB olmuştur.
+Global WindowServer CPU zamanı 11,535 → 11,860 saniyedir; uygulamaya özel değildir ve
+diğer bloklarda farkın yönü değişmiştir. Bu yüzden CPU düşüşü, toplam GPU veya pil kazancı
+olarak sunulmaz. Ayrı kısa warmed Animation Hitches kayıtlarında iki sürümde de sıfır hitch
+görülmüştür; bu tüm yük koşulları için garanti değildir.
+
+**Uygulamaya özel GPU yüzdesi, uzun süreli pil ömrü ve toplam sistem enerjisi: NOT_MEASURED.**
+Gerçek profildeki tek 20 saniyelik compact-idle smoke sonucu yaklaşık %0,00149 CPU ve 41,25 MiB
+footprint'tir; uzun süreli veya bütün cihazlar için sıfır tüketim iddiası değildir.
+
+### İşlev doğrulamasının sınırları
+
+Yerel kaynak doğrulamasında 216 Swift testi / 33 suite, 17.311 spring/path/cache/retarget
+kontrolü, 5.103 offscreen UI/hit/AX kontratı ve 31 görünür canvas lifecycle kontrolü geçmiştir.
+Gerçek VoiceOver/FKA gezinmesi, fiziksel sürükle-bırak, Spotify/Apple Music seek, kamera ve
+Mixer donanım testleri bu hover turunda yeniden çalıştırılmamıştır; bu alanlara yeni PASS verilmez.
+Yukarıdaki sayılar önceki doğrulama kapsamını anlatır, GitHub aktarımındaki kontrollerle karıştırılmaz.
+
+---
+
+# Tarihsel performans incelemesi — 9–10 Ekim 2026
 
 > **11 Ekim 2026 ölçüm düzeltmesi:** Eski `resource-probe.py`, CPU sayaçlarını
 > nanosecond kabul ediyordu. Apple Silicon'da Mach timebase dönüşümü gerekiyor;

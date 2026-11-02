@@ -31,7 +31,12 @@ import IslandCore
         window.orderFrontRegardless()
         try? await Task.sleep(for: .milliseconds(1300))
         model.send(.tapped)
+        try? await Task.sleep(for: .milliseconds(90))
+        let offloadEnabled = ProcessInfo.processInfo.environment["OPENISLAND_APPKIT_CLIENT_TICKS"] != "1"
+        check(canvas.compositorOnlyMotion == offloadEnabled,
+              "empty-media notch opening did not select the expected frame owner")
         try? await Task.sleep(for: .milliseconds(1000))
+        check(!canvas.compositorOnlyMotion, "surface completion did not release frame ownership")
         func expanded(in view: NSView) -> ExpandedContentView? {
             if let v = view as? ExpandedContentView { return v }
             return view.subviews.lazy.compactMap { expanded(in: $0) }.first
@@ -40,6 +45,9 @@ import IslandCore
         check(original != nil && original?.isDormant == false, "expanded content missing or dormant after opening")
         for cycle in 0..<3 {
             model.send(.escapePressed)
+            try? await Task.sleep(for: .milliseconds(300))
+            check(original?.isHidden == true && original?.isDormant == false,
+                  "outgoing host remained focusable after its fade, or suspended before the outline settled")
             try? await Task.sleep(for: .milliseconds(1200))
             check(!model.presentation.isExpanded, "escape did not collapse cycle \(cycle)")
             check(canvas.spareExpanded === original, "expanded cache identity lost cycle \(cycle)")
@@ -49,6 +57,42 @@ import IslandCore
             try? await Task.sleep(for: .milliseconds(600))
             check(expanded(in: canvas) === original && original?.isHidden == false && original?.isDormant == false, "reopen lost original content or visibility cycle \(cycle)")
         }
+        // Real fast-hover path: closing content is still attached when peek
+        // starts the next surface spring. Its fade must reverse independently
+        // instead of waiting for another surface transition that never occurs.
+        var hoverConfiguration = model.machine.configuration
+        hoverConfiguration.expandsOnHover = true
+        hoverConfiguration.hoverExpandDelay = 0.06
+        model.configure(hoverConfiguration)
+        for delay in [20, 80, 120] {
+            model.send(.pointerExited)
+            model.send(.escapePressed)
+            try? await Task.sleep(for: .milliseconds(delay))
+            model.send(.pointerEntered)
+            try? await Task.sleep(for: .milliseconds(360))
+            check(model.presentation.isExpanded, "fast-hover reentry did not expand after \(delay) ms")
+            let shown = expanded(in: canvas)
+            let opacity = shown?.layer?.presentation()?.opacity ?? shown?.layer?.opacity ?? 0
+            check(shown?.isHidden == false && opacity > 0.7,
+                  "fast-hover reentry kept outgoing/blank content after \(delay) ms (opacity \(opacity))")
+        }
+        // Mid-animation overlay insertion must immediately restore the client
+        // path. No warm host is discarded and no stale completion may park it.
+        model.send(.pointerExited); model.send(.escapePressed)
+        try? await Task.sleep(for: .milliseconds(1200))
+        model.send(.tapped)
+        try? await Task.sleep(for: .milliseconds(90))
+        let overlay = FlippedView(frame: .zero)
+        canvas.presentOverlay(overlay, onCollapse: {})
+        check(!canvas.compositorOnlyMotion, "overlay insertion left a moving host without client frames")
+        canvas.dismissOverlay()
+        try? await Task.sleep(for: .milliseconds(1000))
+        check(original?.isHidden == false && original?.isDormant == false,
+              "retired compositor completion parked the reopened host")
+        model.send(.escapePressed)
+        try? await Task.sleep(for: .milliseconds(1200))
+        check(!canvas.compositorOnlyMotion && original?.isDormant == true,
+              "completion left outgoing host active")
         // Two genuinely different tabs with the same body geometry must still
         // animate selection feedback; equality of the surface is not a no-op.
         let wideMetrics = NotchMetrics(notchSize: CGSize(width: 320, height: 33.5), style: .notch)

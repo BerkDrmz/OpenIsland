@@ -1,4 +1,12 @@
-# OpenIsland — AppKit deneyi
+# OpenIsland — AppKit arayüzü
+
+**Güncel durum (3 Kasım 2026):** günlük kullanılan sürümün native arayüzü bu klasördedir.
+Bu güncelleme, yerel olarak doğrulanan `5e17600` kaynaklarıyla aynıdır; sonuçsuz kalan sonraki
+deneyler dahil değildir. `./App/build.sh` ile derlenir. Paket kimliği ve kullanıcı verileri günlük
+OpenIsland ile ortaktır; ayrı bir test profili varsayarak ikinci kopyayı çalıştırmayın.
+Güncel ölçümlerin kapsamı ve sınırları: [Performans](../Docs/PERFORMANCE.md).
+Aşağıdaki tarihli bölümler mimarinin gelişim kaydıdır; yeni sürümün yeniden ölçümü veya tüm
+koşullarda eşdeğerlik garantisi değildir.
 
 Amaç: OpenIsland'ın arayüzünü SwiftUI yerine AppKit + Core Animation ile, **aynı görünüm, animasyon ve
 davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım SwiftUI sürümüyle (K8c) gerçek A/B/B/A
@@ -44,13 +52,17 @@ davranışla** ve daha düşük CPU/GPU/enerjiyle yeniden yazmak. Her adım Swif
   `IslandRootView` yerine AppKit `IslandCanvasView` takılmasıdır (girdi yönlendirme, sensör, Space davranışı ortak).
 - **Olay tabanlı:** model `withObservationTracking` ile yalnız değişince bir kez bildirir; yoklama yok.
 - **Animasyon:** SwiftUI `spring(response:dampingFraction:)` ile aynı fizik (`Motion.swift`, analitik çözüm, hedef
-  değişiminde hız korunur). Ekran tazelemesine bağlı sürücü yalnız animasyon sürerken çalışır; durağan adada iş yok.
-  Ada yolu her karede `IslandShape` geometrisinden üretilir (sürekli eğrilikli köşeler birebir).
+  değişiminde hız korunur). Uygun fiziksel notch geçişlerinde yüzey, maske ve içerik opaklığı sınırlı
+  Core Animation yörüngeleriyle ilerler; aynı hareket için ikinci istemci kare döngüsü çalışmaz.
+  Medya/HUD/overlay gibi istemci güncellemesi gereken durumlarda mevcut ekran tazelemesine bağlı yol korunur.
+  `NativeSurfaceMotion` aynı `IslandShape` geometrisini kullanır; yalnız tam aynı spring durumlarını
+  küçük ve sınırlı bir önbellekte yeniden kullanır. Animasyon bitince sürekli kare sürücüsü çalışmaz.
 - **Yerleşim:** her durumun içeriği kendi sabit boyutunda, elle (frame) yerleşir; Auto Layout ve kare başı yerleşim
   geçişi yok. Paneller sekme başına bir kez kurulur ve açık oturum boyunca pencerede kalır; görünmeyen panel iş
   yapmaz, `onAppear/onDisappear` anlamı `didShow/didHide` ile korunur.
-- **Güvenlik:** ayrı paket kimliği (`io.github.openisland.OpenIsland`), ayrı veri klasörü
-  (`~/Library/Application Support/io.github.openisland.OpenIsland`), oturum açılış öğesi kaydı yok (`OPENISLAND_APPKIT`).
+- **Veri güvenliği:** varsayılan paket kimliği `io.github.openisland.OpenIsland`, veri konumu
+  `AppPaths.support` tarafından belirlenir ve günlük sürümle ortaktır. Yalıtılmış testler, doğrulama
+  kimliği ve açık test ortamı değişkenleri gerektirir; normal derleme kullanıcı verilerini yalıtmaz.
 
 ## Derleme
 

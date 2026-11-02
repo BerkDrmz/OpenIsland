@@ -16,6 +16,10 @@ final class MediaLayersView: FlippedView {
     private var presentation: IslandPresentation = .idle
     private var metrics: NotchMetrics?
     private var style: MotionStyle = .expressive
+    var onNeedsClientFrames: (@MainActor () -> Void)?
+    var requiresClientFrames: Bool {
+        mediaController.nowPlaying != nil || artworkItem.needsClientFrames || waveformItem.needsClientFrames
+    }
 
     init(media: MediaController, preferences: Preferences, model: IslandViewModel) {
         mediaController = media
@@ -55,6 +59,7 @@ final class MediaLayersView: FlippedView {
     private func mediaDidChange() {
         observeMedia()
         if let metrics { retarget(presentation: presentation, metrics: metrics, spec: nil) }
+        onNeedsClientFrames?()
     }
 
     private func refreshMedia() {
@@ -101,6 +106,10 @@ private struct SlotItem {
     var x = Spring(0), y = Spring(0), w = Spring(0), h = Spring(0), r = Spring(0)
     var progress = Spring(0)
     var hasSlot = false
+    var needsClientFrames: Bool {
+        hasSlot || progress.value > 0.001 || progress.isActive
+            || x.isActive || y.isActive || w.isActive || h.isActive || r.isActive
+    }
 
     mutating func retarget(rect: CGRect?, radius: CGFloat, spec: SpringSpec?, style: MotionStyle) {
         guard let rect else {
@@ -185,6 +194,7 @@ final class ArtworkLayerView: NSView {
             imageLayer.contents = image
             placeholder.isHidden = image != nil
             note.isHidden = image != nil
+            if image == nil { layoutPlaceholder() }
         }
     }
 
@@ -203,9 +213,16 @@ final class ArtworkLayerView: NSView {
             l.cornerRadius = cornerRadius
         }
         layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
-        note.setConfiguration(size: max(bounds.width * 0.38, 6), weight: .semibold)
-        note.frame = note.drawingFrame(centeredIn: bounds)
+        // A real album image covers this glyph. Do not recreate/rasterize the
+        // hidden placeholder at every step of the artwork's size/radius spring.
+        if image == nil { layoutPlaceholder() }
         CATransaction.commit()
+    }
+
+    private func layoutPlaceholder() {
+        note.setConfiguration(size: max(bounds.width * 0.38, 6), weight: .semibold)
+        let frame = note.drawingFrame(centeredIn: bounds)
+        if note.frame != frame { note.frame = frame }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }

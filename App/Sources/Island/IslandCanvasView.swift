@@ -29,6 +29,21 @@ final class IslandCanvasView: NSView {
     private var surfaceLayout: IslandLayout
     private var width: Spring, height: Spring, topRadius: Spring, bottomRadius: Spring, topInset: Spring
     private var relax = Spring(1)
+    /// A bounded CA trajectory owns only the surface/mask. All native views,
+    /// input, panel lifecycle and media ownership stay unchanged.
+    private lazy var nativeSurface: NativeSurfaceMotion? = {
+        // Explicit developer fallback for controlled A/B, not a benchmark-only
+        // path. The normal application uses the same compositor renderer.
+        guard ProcessInfo.processInfo.environment["OPENISLAND_APPKIT_SURFACE_CLIENT"] != "1" else { return nil }
+        let motion = NativeSurfaceMotion(surface: surfaceView.shapeLayer, mask: maskLayer,
+            pose: .init(width: width.value, height: height.value, topRadius: topRadius.value,
+                        bottomRadius: bottomRadius.value, topInset: topInset.value, scale: relax.value),
+            canvasWidth: bounds.width, style: model.metrics.style)
+        motion.onSettled = { [weak self] in self?.compositorDidSettle() }
+        return motion
+    }()
+    private(set) var compositorOnlyMotion = false
+    private var hasSurfaceMotion: Bool { driver.isRunning || compositorOnlyMotion }
     private var pendingOpening: DispatchWorkItem?
     /// Hızlı hover'da yüzey açılışa peek sırasında başladı; içerik açılış kesinleşince belirir.
     private var anticipatedOpening = false
@@ -72,6 +87,7 @@ final class IslandCanvasView: NSView {
         topInset = Spring(layout.topInset)
         media = MediaLayersView(media: environment.media, preferences: environment.preferences, model: model)
         super.init(frame: .zero)
+        media.onNeedsClientFrames = { [weak self] in self?.driveSurfaceMotion() }
         // SwiftUI kökü `.environment(\.colorScheme, .dark)`: barındırılan AppKit denetimleri koyu görünümle çizilir.
         appearance = NSAppearance(named: .darkAqua)
         registerForDraggedTypes(Self.draggedTypes)
@@ -153,10 +169,11 @@ final class IslandCanvasView: NSView {
 
     private func modelDidChange() {
         observeModel()
+        let revealsExpanded = model.presentation.isExpanded && !displayedPresentation.isExpanded
         let style = AppMotion.effectiveStyle(model.motionStyle)
         if lastMotionStyle != style {
             lastMotionStyle = style
-            if driver.isRunning {
+            if hasSurfaceMotion {
                 applySurface(layout: surfaceLayout, presentation: surfacePresentation,
                              spec: AppMotion.morph(from: surfaceTransitionFrom, to: surfacePresentation, style: style))
             }
@@ -209,9 +226,15 @@ final class IslandCanvasView: NSView {
         }
         let relaxTarget = model.isRelaxing ? Double(AppMotion.relaxScale) : 1
         if relax.target != relaxTarget {
-            relax.animate(to: relaxTarget, spec: style == .reduced ? AppMotion.reduced : AppMotion.relax)
-            driver.start()
+            let spec = style == .reduced ? AppMotion.reduced : AppMotion.relax
+            nativeSurface?.relax(to: relaxTarget, spec: spec)
+            relax.animate(to: relaxTarget, spec: spec)
+            driveSurfaceMotion()
         }
+        // A warmed host is unhidden in this event. Submit its reveal together
+        // with the outline before another main-queue task can block the next
+        // implicit run-loop commit. Once per opening, never once per frame.
+        if revealsExpanded, nativeSurface?.ownsPath == true { CATransaction.flush() }
     }
 
     // MARK: - Yüzey morph'u (IslandRootView.morph ile aynı mantık)
@@ -265,6 +288,10 @@ final class IslandCanvasView: NSView {
         if surfaceLayout != layout || surfacePresentation != presentation { surfaceTransitionFrom = surfacePresentation }
         surfaceLayout = layout
         surfacePresentation = presentation
+        nativeSurface?.update(canvasWidth: bounds.width, style: model.metrics.style)
+        nativeSurface?.morph(to: .init(width: layout.size.width, height: layout.size.height,
+                                     topRadius: layout.topCornerRadius, bottomRadius: layout.bottomCornerRadius,
+                                     topInset: layout.topInset, scale: relax.target), spec: spec)
         width.animate(to: layout.size.width, spec: spec)
         height.animate(to: layout.size.height, spec: spec)
         topRadius.animate(to: layout.topCornerRadius, spec: spec)
@@ -276,7 +303,7 @@ final class IslandCanvasView: NSView {
                 spec: presentation.isExpanded ? AppMotion.contentIn(AppMotion.effectiveStyle(model.motionStyle))
                                               : AppMotion.contentOut(AppMotion.effectiveStyle(model.motionStyle)))
         }
-        driver.start()
+        driveSurfaceMotion()
     }
 
     // MARK: - İçerik (IslandStateContent karşılığı)
@@ -297,17 +324,29 @@ final class IslandCanvasView: NSView {
         // Kapanış geçişi bitmeden yeniden açılırsa aynı içerik geri döner (SwiftUI'de görünüm geçiş bitince kalkar).
         if key == .expanded, let removing = slots.last(where: { $0.isExpanded && $0.isRemoving }) {
             for slot in slots where !slot.isRemoving { slot.remove(spec: animated ? AppMotion.contentOut(style) : nil) }
-            removing.revive()
+            // Fast hover may already have retargeted the surface during peek.
+            // In that case applySurface will not run again after revival: the
+            // outgoing content must reverse its own fade here, not stay at 0.
+            removing.revive(spec: surfacePresentation.isExpanded ? AppMotion.contentIn(style) : nil)
+            anticipatedOpening = false
             slots.removeAll { $0 === removing }
             slots.append(removing)
             removing.view.refresh() // saydamlık bulunduğu yerden açılış yayıyla geri gelir (applySurface → setVisible)
             applyFrame()
-            driver.start()
+            driveSurfaceMotion()
             return
         }
         let spare = key == .expanded ? takeSpareExpanded() : nil
         guard let view = spare ?? IslandContentFactory.make(key, model: model, environment: environment) else { return }
         let slot = ContentSlot(key: key, view: view, blurs: style != .reduced && !key.isExpanded)
+        slot.onRemovalFinished = { [weak self] in
+            guard let self, self.compositorOnlyMotion else { return }
+            // The host must leave hit-testing/focus at its fade's end, not at
+            // the longer outline spring's end. One event replaces frame polls;
+            // panel suspension still waits for the outline to settle.
+            self.synchronizeNativeGeometry()
+            _ = self.tick(0)
+        }
         slots.append(slot)
         (view as? DropZoneContentView)?.zone = dropZone
         if view.superview === contentView {
@@ -339,10 +378,47 @@ final class IslandCanvasView: NSView {
             slot.begin(visible: true, animated: animated, spec: AppMotion.contentIn(style))
         }
         applyFrame()
-        driver.start()
+        driveSurfaceMotion()
     }
 
     // MARK: - Kare
+
+    /// Do not run a second, client-side frame loop for a surface and reveal
+    /// already owned by CA. Media, blur/HUD, moving host insets and invisible
+    /// windows retain the original full-rate client renderer.
+    private func driveSurfaceMotion() {
+        let previous = compositorOnlyMotion
+        let native = nativeSurface
+        let canOffload = ProcessInfo.processInfo.environment["OPENISLAND_APPKIT_CLIENT_TICKS"] != "1"
+            && native?.ownsPath == true && window?.isVisible == true
+            && model.metrics.style == .notch && topInset.value == topInset.target
+            && overlay == nil && !media.requiresClientFrames
+            && slots.allSatisfy { $0.isExpanded && (!$0.isRemoving || $0.revealDeadline <= (native?.completionDeadline ?? 0)) }
+        if canOffload || previous { synchronizeNativeGeometry() }
+        compositorOnlyMotion = canOffload
+        if canOffload {
+            driver.stop()
+            // An event may arrive after the last CA completion has already
+            // fired (e.g. a media preference change while idle). Do not leave
+            // the warmup/cleanup ownership flag waiting for a past completion.
+            if (native?.completionDeadline ?? 0) <= CACurrentMediaTime() { compositorDidSettle() }
+        } else { driver.start() }
+    }
+
+    private func synchronizeNativeGeometry() {
+        guard let state = nativeSurface?.snapshot(at: CACurrentMediaTime()) else { return }
+        width = state.width; height = state.height; topRadius = state.topRadius
+        bottomRadius = state.bottomRadius; topInset = state.topInset; relax = state.scale
+    }
+
+    private func compositorDidSettle() {
+        guard compositorOnlyMotion else { return }
+        guard nativeSurface?.ownsPath == true else { driveSurfaceMotion(); return }
+        synchronizeNativeGeometry()
+        compositorOnlyMotion = false
+        _ = tick(0) // settle slot clocks and park the outgoing host once
+        if pendingSuspend != nil { _ = tick(0) } // original deferred cleanup, no extra display link
+    }
 
     private func tick(_ dt: Double) -> Bool {
         width.step(dt); height.step(dt); topRadius.step(dt); bottomRadius.step(dt); topInset.step(dt); relax.step(dt)
@@ -404,7 +480,8 @@ final class IslandCanvasView: NSView {
         // Yalnız değişince yazılır: aynı yolu yeniden atamak bile katmanı kirletir; maske yolu değişince maskelenen
         // bütün içerik pencere sunucusunda ekran dışında yeniden birleştirilir.
         let shapeKey: [CGFloat] = [rect.minX, rect.minY, rect.width, rect.height, CGFloat(topRadius.value) * s, CGFloat(bottomRadius.value) * s, metrics.style == .notch ? 1 : 0]
-        if shapeKey != lastShapeKey {
+        nativeSurface?.update(canvasWidth: canvas.width, style: metrics.style)
+        if nativeSurface?.ownsPath != true, shapeKey != lastShapeKey {
             lastShapeKey = shapeKey
             let path = shape.path(in: rect).cgPath
             surfaceView.shapeLayer.path = path
@@ -470,16 +547,24 @@ protocol IslandContentView: NSView {
 /// Bir içerik görünümünün giriş/çıkış geçişi (`islandReveal`): saydamlık + (Azaltılmış dışında) bulanıklık.
 @MainActor
 final class ContentSlot {
+    static let revealAnimationKey = "OpenIsland.content.reveal"
     let key: ContentKey
     let view: IslandContentView
     let blurs: Bool
     private var progress = Spring(0)
+    private var progressStamp = CACurrentMediaTime()
+    private let nativeOpacity: Bool
+    private(set) var revealDeadline: CFTimeInterval = 0
+    var onRemovalFinished: (@MainActor () -> Void)?
+    private var revealGeneration: UInt64 = 0
     private(set) var isRemoving = false
 
     init(key: ContentKey, view: IslandContentView, blurs: Bool) {
         self.key = key
         self.view = view
         self.blurs = blurs
+        nativeOpacity = key.isExpanded && !blurs
+            && ProcessInfo.processInfo.environment["OPENISLAND_APPKIT_SURFACE_CLIENT"] != "1"
         view.wantsLayer = true
     }
 
@@ -487,35 +572,91 @@ final class ContentSlot {
     var isFinished: Bool { !progress.isActive && progress.value <= 0.001 }
 
     func begin(visible: Bool, animated: Bool, spec: SpringSpec?) {
+        progressStamp = CACurrentMediaTime()
         if animated, let spec {
             progress.set(0)
             progress.animate(to: visible ? 1 : 0, spec: spec)
         } else {
             progress.set(visible ? 1 : 0)
         }
+        if nativeOpacity { publishOpacity() }
     }
 
     func setVisible(_ visible: Bool, spec: SpringSpec) {
+        if nativeOpacity { synchronizeProgress() }
         progress.animate(to: visible ? 1 : 0, spec: spec)
+        if nativeOpacity { publishOpacity() }
     }
 
     /// Kaldırma geçişini iptal eder (yeniden açılış).
-    func revive() {
+    func revive(spec: SpringSpec? = nil) {
         isRemoving = false
         view.isHidden = false
+        if let spec { setVisible(true, spec: spec) }
     }
 
     func remove(spec: SpringSpec?) {
+        if nativeOpacity { synchronizeProgress() }
         isRemoving = true
         // Kaldırılan içerik saydamlıkla söner (bulanıklık yalnız girişte; SwiftUI `.opacity` kaldırma geçişi).
         RevealBlur.apply(radius: 0, to: view.layer)
         if let spec { progress.animate(to: 0, spec: spec) } else { progress.set(0) }
+        if nativeOpacity { publishOpacity() }
         view.setAccessibilityElement(false)
     }
 
     func step(_ dt: Double) -> Bool {
-        progress.step(dt)
+        if nativeOpacity { synchronizeProgress() } else { progress.step(dt) }
         return progress.isActive
+    }
+
+    private func synchronizeProgress() {
+        let now = CACurrentMediaTime()
+        progress.step(max(0, now - progressStamp)); progressStamp = now
+    }
+
+    /// Expanded content has no reveal blur. Its exact delayed spring can be
+    /// submitted once, so a busy main thread cannot freeze the fade while the
+    /// compositor continues opening the shell. Logical lifetime stays local.
+    private func publishOpacity() {
+        guard let layer = view.layer else { return }
+        let floor: Double = isRemoving ? 0 : 0.004
+        func opacity(_ value: Double) -> NSNumber { NSNumber(value: max(floor, min(1, value))) }
+        var future = progress
+        var values = [opacity(future.value)]
+        var times = [0.0]
+        let dt = 1.0 / 240
+        var elapsed = 0.0
+        while future.isActive && elapsed < 4 {
+            future.step(dt); elapsed += dt
+            values.append(opacity(future.value)); times.append(elapsed)
+        }
+        revealDeadline = progressStamp + elapsed
+        revealGeneration &+= 1
+        let submittedGeneration = revealGeneration
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.revealGeneration == submittedGeneration, self.isRemoving else { return }
+                self.onRemovalFinished?()
+            }
+        }
+        defer { CATransaction.commit() }
+        layer.opacity = values.last!.floatValue
+        guard values.count > 1 else {
+            layer.removeAnimation(forKey: Self.revealAnimationKey)
+            return
+        }
+        let animation = CAKeyframeAnimation(keyPath: "opacity")
+        animation.values = values
+        animation.keyTimes = times.map { NSNumber(value: $0 / elapsed) }
+        animation.duration = elapsed
+        animation.beginTime = layer.convertTime(progressStamp, from: nil)
+        animation.calculationMode = .linear
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+        animation.isRemovedOnCompletion = true
+        layer.add(animation, forKey: Self.revealAnimationKey)
     }
 
     func apply() {
@@ -523,7 +664,7 @@ final class ContentSlot {
         // Açılacak genişletilmiş içerik görünmeden önce de çok düşük opaklıkla birleştirilir (%0,4, göz ayırt etmez):
         // ilk doku yüklemesi yüzey hareketinden önce olur, hareketin ortasında kare kaçmaz.
         let opacity = Float(isExpanded && !isRemoving ? max(p, 0.004) : p)
-        if let layer = view.layer, layer.opacity != opacity { layer.opacity = opacity }
+        if !nativeOpacity, let layer = view.layer, layer.opacity != opacity { layer.opacity = opacity }
         if blurs, !isRemoving { RevealBlur.apply(radius: (1 - p) * 6, to: view.layer) }
         let hidden = p <= 0.001 && isRemoving
         if view.isHidden != hidden { view.isHidden = hidden }
@@ -690,12 +831,14 @@ extension IslandCanvasView {
         onOverlayCollapse = onCollapse
         contentView.addSubview(view)
         applyFrame()
+        driveSurfaceMotion()
     }
 
     func dismissOverlay() {
         overlay?.removeFromSuperview()
         overlay = nil
         onOverlayCollapse = nil
+        if compositorOnlyMotion { driveSurfaceMotion() }
     }
 }
 
@@ -712,7 +855,7 @@ extension IslandCanvasView {
     }
 
     private func prepareSpareExpanded() {
-        guard spareExpanded == nil, window != nil, !model.presentation.isExpanded, !driver.isRunning else {
+        guard spareExpanded == nil, window != nil, !model.presentation.isExpanded, !hasSurfaceMotion else {
             if spareExpanded == nil, window != nil, !model.presentation.isExpanded { scheduleSpareExpanded(after: 0.25) }
             return
         }
@@ -761,7 +904,7 @@ extension IslandCanvasView {
 
     private func warmNextSparePanel() {
         guard let spare = spareExpanded, spare.isDormant, spare.hasBeenShown, spare.hasUnbuiltPanels, window != nil else { return }
-        guard !model.machine.isEngaged, !model.presentation.isExpanded, !driver.isRunning else {
+        guard !model.machine.isEngaged, !model.presentation.isExpanded, !hasSurfaceMotion else {
             scheduleSparePanelWarmup(after: 0.5)
             return
         }

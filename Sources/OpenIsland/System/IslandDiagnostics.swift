@@ -383,6 +383,18 @@ final class IslandDiagnostics {
                     model.send(.selectTab(tab))
                     // Hover yolu: kabarma → gecikmeyle genişleme (kullanıcının adayı fareyle açması).
                     model.send(hover ? .pointerEntered : .tapped)
+                    // Explicit, isolated fault injection. Never reachable from
+                    // a normal launch; TestIsolationGuard has already required
+                    // a validation bundle and private stores before startup.
+                    if Bundle.main.bundleIdentifier?.hasPrefix("io.github.openisland.validation.") == true,
+                       let raw = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_STALL_MS"],
+                       let milliseconds = UInt32(raw), milliseconds > 0, milliseconds <= 250 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.07) {
+                            self.log("injected main stall start; milliseconds=\(milliseconds)")
+                            usleep(milliseconds * 1000)
+                            self.log("injected main stall end")
+                        }
+                    }
                     try? await Task.sleep(for: .seconds(1.5))
                     endBenchmarkPhase("open")
                     guard model.machine.isExpanded else { log("FAIL: open-close did not expand"); return }

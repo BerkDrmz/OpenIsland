@@ -349,7 +349,11 @@ final class SymbolView: NSImageView {
     }
 
     func setConfiguration(size: CGFloat, weight: NSFont.Weight) {
-        configuration = NSImage.SymbolConfiguration(pointSize: size, weight: weight)
+        let next = NSImage.SymbolConfiguration(pointSize: size, weight: weight)
+        // Radius/layout changes may leave the glyph unchanged. Reassigning it
+        // would invalidate NSImageView's cached backing representation.
+        guard !configuration.isEqual(next) else { return }
+        configuration = next
         let name = symbol
         symbol = ""
         set(name, animated: false)

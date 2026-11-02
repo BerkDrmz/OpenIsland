@@ -67,7 +67,7 @@ enum AppMotion {
 
 /// Tek boyutlu yay: sönümlü harmonik salınımın analitik çözümü. Hedef değişince hız korunur (SwiftUI'de olduğu gibi
 /// yörünge kırılmaz). Sayısal integrasyon yok; kare süresinden bağımsız olarak aynı eğri.
-struct Spring {
+struct Spring: Equatable {
     private(set) var value: Double
     private(set) var velocity: Double = 0
     private(set) var target: Double
@@ -126,6 +126,10 @@ struct Spring {
 
     private mutating func advance(_ t: Double) {
         guard t > 0 else { return }
+        // Exact equilibrium only (not the visual settling tolerance). Pending
+        // delays are still consumed in step(_:), and a retargeted/moving spring
+        // always takes the unchanged analytic path below.
+        guard value != target || velocity != 0 else { return }
         let omega = 2 * Double.pi / max(spec.response, 0.001)
         let zeta = spec.damping
         let x0 = value - target
