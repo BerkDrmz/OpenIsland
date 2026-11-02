@@ -14,6 +14,9 @@ final class Preferences {
     private(set) var launchAtLoginStatus: SMAppService.Status
     private(set) var launchAtLoginError: String?
     @ObservationIgnored var onChange: (() -> Void)?
+    /// İlk kurulum karşılaması bekliyor: bu tercih deposuyla ilk çalıştırma (önceki her sürüm `hoverLatencyOptimized`
+    /// yazar) ya da karşılama yarıda kaldı (`welcomeShown = false`). Karşılama kapanınca `welcomeShown = true`.
+    @ObservationIgnored let welcomePending: Bool
 
     var expandsOnHover: Bool { didSet { persist(expandsOnHover, "expandsOnHover") } }
     var quitOnLastWindowClose: Bool { didSet { persist(quitOnLastWindowClose, "quitOnLastWindowClose") } }
@@ -85,7 +88,15 @@ final class Preferences {
         }
     }
 
-    init(defaults: UserDefaults = .standard,
+    private static var runtimeDefaults: UserDefaults {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["OPENISLAND_DIAGNOSTICS"] != nil,
+           let suite = environment["OPENISLAND_TEST_DEFAULTS"], !suite.isEmpty,
+           let defaults = UserDefaults(suiteName: suite) { return defaults }
+        return .standard
+    }
+
+    init(defaults: UserDefaults = Preferences.runtimeDefaults,
          loginStatus: @escaping () -> SMAppService.Status = { SMAppService.mainApp.status },
          setLoginRegistration: @escaping (Bool) throws -> Void = { enabled in
              if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
@@ -105,6 +116,9 @@ final class Preferences {
         gesturesEnabled = bool("gesturesEnabled", true)
         reversesMediaSwipe = bool("reversesMediaSwipe", false)
         clipboardHistoryEnabled = bool("clipboardHistoryEnabled", true)
+        let welcomeShown = defaults.object(forKey: "welcomeShown") as? Bool
+        welcomePending = welcomeShown == false || (welcomeShown == nil && defaults.object(forKey: "hoverLatencyOptimized") == nil)
+        if welcomePending { defaults.set(false, forKey: "welcomeShown") }
         let savedHover = defaults.object(forKey: "hoverDelay") as? Double ?? 0.18
         // Known presets become faster; custom durations and disabled hover remain intact.
         let migrateHover = defaults.object(forKey: "hoverLatencyOptimized") == nil
@@ -163,13 +177,17 @@ final class Preferences {
     /// Bayrak yalnızca kayıt gerçekten oluştuysa (etkin ya da kullanıcı onayı bekliyor) kalıcı olur; kayıt
     /// başarısız olursa (ör. durum `.notFound`) sonraki açılışta yeniden denenir.
     func enableLaunchAtLoginOnFirstRun() {
+        #if !OPENISLAND_DENEY // AppKit deneyi kendini oturum açılış öğesi olarak kaydetmez.
         guard AppPaths.isRunningAsBundle, defaults.object(forKey: "launchAtLoginDefaultApplied") == nil else { return }
         refreshLaunchAtLogin()
         if !launchAtLogin { launchAtLogin = true }
         let status = launchAtLoginStatus
         LifecycleLog.note("login item kaydı: durum=\(status.rawValue) (0 kayıtsız, 1 etkin, 2 onay bekliyor, 3 bulunamadı)")
         if status == .enabled || status == .requiresApproval { defaults.set(true, forKey: "launchAtLoginDefaultApplied") }
+        #endif
     }
+
+    func markWelcomeShown() { defaults.set(true, forKey: "welcomeShown") }
 
     private func persist(_ value: Any, _ key: String) {
         if let previous = defaults.object(forKey: key) as? NSObject,

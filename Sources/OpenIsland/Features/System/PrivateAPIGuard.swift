@@ -7,6 +7,8 @@ import IslandCore
 /// döndükten sonra silinir. Süreç o çağrıda çökerse bir sonraki açılışta `pending` hâlâ durur: o yapı için özellik
 /// kapatılır (uygulama her açılışta çökmez) ve yeni bir macOS güncellemesi gelince yeniden denenir. Her özellik
 /// (sıcaklık, parlaklık, klavye ışığı) ayrı korunur; yani bir özelliğin kırılması diğerlerini kapatmaz.
+/// Yalnız çökme kalıcı engeldir: çökmeden dönen geçersiz sonuç (`failed`) özelliği bu süreç için kapatır, geçici
+/// olarak okunamayan değer (`unavailable`, ör. uyanırken dahili ekran etkin değil) hiçbir şeyi kapatmaz.
 @MainActor
 enum PrivateAPIGuard {
     private static let defaults = UserDefaults.standard
@@ -25,6 +27,7 @@ enum PrivateAPIGuard {
     /// `succeeded(_:)` çağırmalıdır.
     static func begin(_ feature: String) -> Bool {
         if validated.contains(feature) { return true }
+        migrateIfNeeded()
         if let allowed = resolved[feature], !allowed { return false }
         var state = PrivateAPIGuardRules.State(pendingBuild: defaults.string(forKey: key(feature, "pending")),
                                                blockedBuild: defaults.string(forKey: key(feature, "blocked")))
@@ -50,11 +53,27 @@ enum PrivateAPIGuard {
         defaults.removeObject(forKey: key(feature, "pending"))
     }
 
-    /// Çağrı çökmedi ama sonuç geçersiz/başarısız: yeni bir yapıda yeniden denenir; bu yapıda tekrar denenmez.
+    /// Çağrı çökmedi ama sonuç geçersiz (sembol yok, aralık dışı değer): bu süreçte tekrar denenmez. Kalıcı engel
+    /// yazılmaz; yazılınca tek bir geçici hata, özelliği o macOS yapısı boyunca kapatıyordu.
     static func failed(_ feature: String) {
         resolved[feature] = false
         defaults.removeObject(forKey: key(feature, "pending"))
-        defaults.set(build, forKey: key(feature, "blocked"))
+    }
+
+    /// Çağrı çökmedi ama değer şu an yok (aygıt etkin değil, okuma reddedildi): sonra yeniden denenebilir.
+    static func unavailable(_ feature: String) {
+        defaults.removeObject(forKey: key(feature, "pending"))
+    }
+
+    /// Sürüm 1, geçersiz sonucu da çökme gibi kalıcı engel olarak saklıyordu (`failed`); ikisi ayırt edilemediği için
+    /// eski engeller bir kez silinir. Gerçekten çöken bir çağrı en çok bir kez daha çöker ve yeniden engellenir.
+    private static var didMigrate = false
+    private static func migrateIfNeeded() {
+        guard !didMigrate else { return }
+        didMigrate = true
+        guard defaults.integer(forKey: "privateAPI.guardVersion") < 2 else { return }
+        for feature in ["temperature", "brightness", "keyboard"] { defaults.removeObject(forKey: key(feature, "blocked")) }
+        defaults.set(2, forKey: "privateAPI.guardVersion")
     }
 
     private static func key(_ feature: String, _ name: String) -> String { "privateAPI.\(feature).\(name)" }

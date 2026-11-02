@@ -2,7 +2,8 @@ import Foundation
 
 /// Dock previews have no polling clock: these limits apply only to incoming pointer events.
 public enum DockPreviewRules {
-    public static let hoverDelay = 0.28
+    // Open on hover; only incoming pointer probes are rate-limited below.
+    public static let hoverDelay = 0.0
     public static let exitGrace = 0.16
     public static let probeInterval = 0.08
     public static let cardWidth: CGFloat = 164

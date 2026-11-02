@@ -3,8 +3,9 @@ import Foundation
 import IslandCore
 
 /// Sistem sekmesinin verisi. **Yalnızca sekme görünürken ölçer**: `start`/`stop` panelin `onAppear`/`onDisappear`'ında
-/// çağrılır; sekme kapalıyken (ada kapalı, başka sekme) zamanlayıcı, görev ve sensör işi yoktur. Ölçümler mikro-
-/// milisaniyelik çekirdek çağrılarıdır; ölçüm aralığı 2 sn (Düşük Güç Modu'nda 4 sn).
+/// çağrılır; sekme kapalıyken (ada kapalı, başka sekme) zamanlayıcı, görev ve sensör işi yoktur.
+/// CPU/GPU/bellek ve sıcaklık okumaları seri arka plan aktörlerinde yapılır; ölçüm aralığı
+/// 2 sn (Düşük Güç Modu'nda 4 sn). Değişmeyen değerler yeniden yayımlanmaz.
 @MainActor
 @Observable
 final class SystemMonitor {
@@ -22,7 +23,11 @@ final class SystemMonitor {
 
     /// Ayarlar › "Sıcaklık, parlaklık ve klavye ışığı". Kapalıyken hiçbir private çağrı yapılmaz.
     @ObservationIgnored var privateEnabled = true {
-        didSet { if !privateEnabled { releasePrivate() } }
+        didSet {
+            guard privateEnabled != oldValue else { return }
+            privateRevision &+= 1
+            if !privateEnabled { releasePrivate() }
+        }
     }
     /// Düşük Güç Modu / ısınma: ölçüm aralığı uzar.
     @ObservationIgnored var slowPolling = false
@@ -30,37 +35,86 @@ final class SystemMonitor {
     @ObservationIgnored private var storageTask: Task<Void, Never>?
     @ObservationIgnored private var storageObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var previousTicks: CPUTicks?
-    @ObservationIgnored private var thermal: ThermalSensors?
+    @ObservationIgnored private let thermalWorker: ThermalSamplingWorker
+    @ObservationIgnored private var generation: UInt64 = 0
+    @ObservationIgnored private var privateRevision: UInt64 = 0
+    @ObservationIgnored private let readPublic: @Sendable () async -> SystemSensors.Snapshot
+    @ObservationIgnored private let readStorage: @Sendable () -> [StorageVolume]
+    @ObservationIgnored private(set) var sampleCount = 0
+    @ObservationIgnored private(set) var privateSampleCount = 0
     @ObservationIgnored private var displayControl: ManagedLevelControl?
     @ObservationIgnored private var keyboardControl: ManagedLevelControl?
     @ObservationIgnored private var didTryPrivate = false
+    /// Parlaklık/klavye ışığı o an okunamadıysa panel yeniden açılınca ya da uyanınca bir kez daha denenir.
+    @ObservationIgnored private var retryLevelControls = false
     /// Kaydırıcı sürüklenirken değeri kullanıcı belirler; ölçüm onu ezmez.
     @ObservationIgnored private var adjusting = false
+    @ObservationIgnored private var lastSampleInstant: ContinuousClock.Instant = .now - .seconds(10)
 
     var isRunning: Bool { task != nil }
     var storageObserverCount: Int { storageObservers.count }
     var canAdjustBrightness: Bool { displayControl?.canHandle ?? false }
     var canAdjustKeyboard: Bool { keyboardControl?.canHandle ?? false }
 
+    init(thermalWorker: ThermalSamplingWorker = ThermalSamplingWorker(),
+         readPublic: @escaping @Sendable () async -> SystemSensors.Snapshot = {
+             await SystemSamplingWorker.shared.read()
+         },
+         readStorage: @escaping @Sendable () -> [StorageVolume] = { StorageVolume.read() }) {
+        self.thermalWorker = thermalWorker
+        self.readPublic = readPublic
+        self.readStorage = readStorage
+    }
+
+    @ObservationIgnored private var panelViewers = 0
+
+    func panelDidAppear() {
+        panelViewers += 1
+        if panelViewers == 1 { start() }
+    }
+
+    func panelDidDisappear() {
+        guard panelViewers > 0 else { return }
+        panelViewers -= 1
+        if panelViewers == 0 { stop() }
+    }
+
     func start() {
         guard task == nil else { return }
-        previousTicks = nil
-        task = Task { [weak self] in
+        if didTryPrivate, displayControl == nil || keyboardControl == nil { retryLevelControls = true }
+        generation &+= 1
+        let token = generation
+        let elapsed = ContinuousClock.now - lastSampleInstant
+        if elapsed >= .milliseconds(1500) {
+            previousTicks = nil
+        }
+        task = Task(priority: .utility) { [weak self] in
             // İlk okuma CPU için temel olur; ikinci okuma kısa sürede gelir ki panel boş kalmasın.
             guard !Task.isCancelled else { return }
-            self?.sample()
-            try? await Task.sleep(for: .milliseconds(500))
+            if let self {
+                let elapsed = ContinuousClock.now - self.lastSampleInstant
+                if elapsed >= .milliseconds(1500) {
+                    await self.sample(generation: token)
+                }
+            }
+            if let self, self.cpu == nil {
+                try? await Task.sleep(for: .milliseconds(1000))
+            } else {
+                try? await Task.sleep(for: .seconds(self?.slowPolling == true ? 4 : 2))
+            }
             while !Task.isCancelled {
                 guard let self else { return }
-                self.sample()
+                await self.sample(generation: token)
                 try? await Task.sleep(for: .seconds(self.slowPolling ? 4 : 2))
             }
         }
         observeVolumes()
-        refreshStorage()
+        // One cancellable read on entry also catches disk changes while the panel was closed.
+        refreshStorage(after: .milliseconds(250))
     }
 
     func stop() {
+        generation &+= 1
         task?.cancel()
         task = nil
         adjusting = false
@@ -68,13 +122,14 @@ final class SystemMonitor {
         storageTask = nil
         storageObservers.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
         storageObservers.removeAll()
-        thermal = nil // sensör istemcisi yalnızca sekme açıkken tutulur
     }
 
     /// Uyanma / ekran değişimi: devre dışı kalmış kontrole tek bir yeni hak.
     func recover() {
+        privateRevision &+= 1 // re-enumerate cached sensor services after wake/display changes
         displayControl?.reset()
         keyboardControl?.reset()
+        if didTryPrivate, displayControl == nil || keyboardControl == nil { retryLevelControls = true }
     }
 
     func setBrightness(_ value: Float) {
@@ -90,13 +145,21 @@ final class SystemMonitor {
     func setAdjusting(_ value: Bool) { adjusting = value }
 
     /// CPU/GPU örnekleme döngüsüne bağlı değildir. Yalnızca görünür UI için tek metadata okuması.
-    func refreshStorage() {
+    func refreshStorage(after delay: Duration = .milliseconds(50)) {
         guard isRunning else { return }
         storageTask?.cancel()
+        let readStorage = self.readStorage
         storageTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+            do { try await Task.sleep(for: delay) } catch { return }
             guard !Task.isCancelled else { return }
-            let volumes = await Task.detached(priority: .utility) { StorageVolume.read() }.value
+            let read = Task.detached(priority: .utility) { readStorage() }
+            let volumes = await withTaskCancellationHandler {
+                await read.value
+            } onCancel: {
+                // Cancelling an unstructured parent task does not automatically
+                // cancel a detached read. Let it stop between volume queries.
+                read.cancel()
+            }
             guard !Task.isCancelled, let self, self.isRunning else { return }
             self.storageReadCount += 1
             if self.storage != volumes { self.storage = volumes }
@@ -116,50 +179,74 @@ final class SystemMonitor {
 
     // MARK: - Ölçüm
 
-    private func sample() {
-        // The visible uptime label has minute precision. CPU/GPU still sample at
-        // their normal cadence; do not invalidate the temperature column every 2 s
-        // merely to republish seconds which it never displays.
+    private func sample(generation token: UInt64) async {
+        guard generation == token, !Task.isCancelled else { return }
+        let revision = privateRevision
+        let snapshot = await readPublic()
+        guard generation == token, isRunning, !Task.isCancelled else { return }
+        // Gather both snapshots first: publishing public values and temperatures on two
+        // separate actor resumptions caused two layout passes for one measurement.
+        let privateValues = privateEnabled && privateRevision == revision
+            ? await samplePrivate(generation: token, revision: revision) : nil
+        guard generation == token, isRunning, !Task.isCancelled else { return }
+        lastSampleInstant = .now
+        sampleCount += 1
         let nextUptime = ProcessInfo.processInfo.systemUptime
         if Int(nextUptime / 60) != Int(uptime / 60) { uptime = nextUptime }
-        if let ticks = SystemSensors.cpuTicks() {
+        if let ticks = snapshot.ticks {
             if let previousTicks, let usage = CPUTicks.usage(from: previousTicks, to: ticks), cpu != usage { cpu = usage }
             previousTicks = ticks
         }
-        let nextGPU = SystemSensors.gpuUtilization()
-        if gpu != nextGPU { gpu = nextGPU }
-        let nextMemory = SystemSensors.memory()
-        if memory != nextMemory { memory = nextMemory }
-        let nextPressure = SystemSensors.memoryPressure()
-        if pressure != nextPressure { pressure = nextPressure }
-        if privateEnabled { samplePrivate() }
+        if gpu != snapshot.gpu { gpu = snapshot.gpu }
+        if memory != snapshot.memory { memory = snapshot.memory }
+        if pressure != snapshot.pressure { pressure = snapshot.pressure }
+        if let privateValues, privateEnabled, privateRevision == revision {
+            if temperatures != privateValues.temperature { temperatures = privateValues.temperature }
+            if !adjusting {
+                if brightness != privateValues.brightness { brightness = privateValues.brightness }
+                if keyboardBacklight != privateValues.keyboard { keyboardBacklight = privateValues.keyboard }
+            }
+        }
     }
 
-    private func samplePrivate() {
+    private struct PrivateValues {
+        let temperature: TemperatureRules.Summary?
+        let brightness: Float?
+        let keyboard: Float?
+    }
+
+    private func samplePrivate(generation token: UInt64, revision: UInt64) async -> PrivateValues? {
+        privateSampleCount += 1
         if !didTryPrivate {
             didTryPrivate = true
             displayControl = PrivateLevelBackends.displayBrightness().map(ManagedLevelControl.init)
             keyboardControl = PrivateLevelBackends.keyboardBacklight().map(ManagedLevelControl.init)
+        } else if retryLevelControls {
+            retryLevelControls = false
+            if displayControl == nil { displayControl = PrivateLevelBackends.displayBrightness().map(ManagedLevelControl.init) }
+            if keyboardControl == nil { keyboardControl = PrivateLevelBackends.keyboardBacklight().map(ManagedLevelControl.init) }
         }
-        if thermal == nil { thermal = ThermalSensors() }
-        if let thermal {
-            let summary = thermal.read()
-            let next = (summary.cpu == nil && summary.gpu == nil) ? nil : summary
-            if temperatures != next { temperatures = next }
+        var nextTemperature = temperatures
+        if PrivateAPIGuard.begin("temperature") {
+            let summary = await thermalWorker.read(revision: revision)
+            // Reader creation failure retains the existing private-API safety behavior.
+            // A successful read with temporarily missing values is not an API failure.
+            if summary != nil { PrivateAPIGuard.succeeded("temperature") }
+            else { PrivateAPIGuard.failed("temperature") }
+            guard generation == token, privateRevision == revision, isRunning,
+                  privateEnabled, !Task.isCancelled else { return nil }
+            nextTemperature = summary.flatMap { $0.cpu == nil && $0.gpu == nil ? nil : $0 }
         }
-        if !adjusting {
-            let nextBrightness = displayControl?.level
-            if brightness != nextBrightness { brightness = nextBrightness }
-            let nextKeyboard = keyboardControl?.level
-            if keyboardBacklight != nextKeyboard { keyboardBacklight = nextKeyboard }
-        }
+        return PrivateValues(temperature: nextTemperature,
+                             brightness: adjusting ? brightness : displayControl?.level,
+                             keyboard: adjusting ? keyboardBacklight : keyboardControl?.level)
     }
 
     private func releasePrivate() {
-        thermal = nil
         displayControl = nil
         keyboardControl = nil
         didTryPrivate = false
+        retryLevelControls = false
         temperatures = nil
         brightness = nil
         keyboardBacklight = nil

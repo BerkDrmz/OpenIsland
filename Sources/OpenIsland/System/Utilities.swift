@@ -4,8 +4,21 @@ import UserNotifications
 enum AppPaths {
     /// ~/Library/Application Support/io.github.openisland
     static let support: URL = {
+        // Only an explicitly enabled developer run may redirect storage to a disposable fixture.
+        let environment = ProcessInfo.processInfo.environment
+        if environment["OPENISLAND_DIAGNOSTICS"] != nil,
+           let path = environment["OPENISLAND_TEST_SUPPORT"], path.hasPrefix("/") {
+            let url = URL(fileURLWithPath: path, isDirectory: true)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        #if OPENISLAND_DENEY
+        // AppKit deneyi: kullanıcının gerçek verisine (raf, notlar, pano) dokunmaz.
+        let url = base.appendingPathComponent("io.github.openisland.deney", isDirectory: true)
+        #else
         let url = base.appendingPathComponent("io.github.openisland", isDirectory: true)
+        #endif
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
@@ -19,11 +32,19 @@ enum AppPaths {
 
 enum Notifier {
     static func requestAuthorization() {
+        #if OPENISLAND_DENEY
+        // Isolated validation bundles must never request or deliver user notifications.
+        if TestIsolationGuard.isValidationBundle { return }
+        #endif
         guard AppPaths.isRunningAsBundle else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     static func post(title: String, body: String) {
+        #if OPENISLAND_DENEY
+        // Isolated validation bundles must never request or deliver user notifications.
+        if TestIsolationGuard.isValidationBundle { return }
+        #endif
         guard AppPaths.isRunningAsBundle else { return }
         let content = UNMutableNotificationContent()
         content.title = title

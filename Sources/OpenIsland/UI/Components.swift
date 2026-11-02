@@ -57,22 +57,51 @@ struct IslandIconButton: View {
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Dairesel düğmenin çapı (sembol boyutunun 2,1 katı). Başlık satırı genişliği de bundan türetilir.
+    static func diameter(for size: CGFloat) -> CGFloat { size * 2.1 }
+
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: size, weight: .semibold))
                 .foregroundStyle(isProminent ? IslandPalette.primary : IslandPalette.primary.opacity(0.85))
-                .frame(width: size * 2.1, height: size * 2.1)
+                .frame(width: Self.diameter(for: size), height: Self.diameter(for: size))
                 .background(Circle().fill(isHovering ? IslandPalette.fillHover : (isProminent ? IslandPalette.fill : .clear)))
                 .scaleEffect(isHovering && !reduceMotion ? 1.06 : 1)
                 .contentTransition(.symbolEffect(.replace))
                 .contentShape(Circle())
+                .restoringLayoutAnimation()
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .help(label)
         .onHover { hovering in
             withAnimation(IslandMotion.control) { isHovering = hovering }
+        }
+    }
+}
+
+/// `layoutWithoutAnimation()` ile ertelenen animasyon (yalnız o transaction'da dolu).
+private struct DeferredLayoutAnimation: TransactionKey {
+    static let defaultValue: Animation? = nil
+}
+
+extension View {
+    /// Bu görünümün (ve içindekilerin) yerleşim değişimini animasyonsuz uygular; transaction'ın animasyonu
+    /// `restoringLayoutAnimation()` ile işaretli alt görünümlerde sürer. Böylece görünen hareket aynı eğriyle canlanırken
+    /// odak, erişilebilirlik ve isabet geometrisi son konuma tek adımda geçer (SwiftUI odak köprüsü her karede yeniden
+    /// kurulmaz).
+    func layoutWithoutAnimation() -> some View {
+        transaction { transaction in
+            transaction[DeferredLayoutAnimation.self] = transaction.animation
+            transaction.animation = nil
+        }
+    }
+
+    /// `layoutWithoutAnimation()` altında ertelenen animasyonu geri yükler; başka transaction'larda etkisizdir.
+    func restoringLayoutAnimation() -> some View {
+        transaction { transaction in
+            if let animation = transaction[DeferredLayoutAnimation.self] { transaction.animation = animation }
         }
     }
 }

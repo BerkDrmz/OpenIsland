@@ -11,8 +11,7 @@ import ObjectiveC
 // MARK: - Sıcaklık sensörleri (IOHIDEventSystemClient)
 
 /// Apple Silicon sıcaklık sensörleri. Okuma yalnızca sistem monitörü açıkken yapılır.
-@MainActor
-final class ThermalSensors {
+private final class ThermalSensorReader {
     private typealias CreateFn = @convention(c) (CFAllocator?) -> UnsafeMutableRawPointer?
     private typealias SetMatchingFn = @convention(c) (UnsafeMutableRawPointer, CFDictionary) -> Void
     private typealias CopyServicesFn = @convention(c) (UnsafeMutableRawPointer) -> Unmanaged<CFArray>?
@@ -31,9 +30,8 @@ final class ThermalSensors {
 
     /// `nil`: semboller yok, korumaya takıldı ya da sensör bulunamadı.
     init?() {
-        guard PrivateAPIGuard.begin("temperature") else { return nil }
         guard let handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY) else {
-            PrivateAPIGuard.failed("temperature"); return nil
+            return nil
         }
         // IOKit is also linked directly by this target; balance this lookup's extra open.
         defer { dlclose(handle) }
@@ -44,21 +42,29 @@ final class ThermalSensors {
               let floatValue = dlsym(handle, "IOHIDEventGetFloatValue").map({ unsafeBitCast($0, to: FloatFn.self) }),
               let copyProperty = dlsym(handle, "IOHIDServiceClientCopyProperty").map({ unsafeBitCast($0, to: CopyPropertyFn.self) }),
               let client = create(kCFAllocatorDefault)
-        else { PrivateAPIGuard.failed("temperature"); return nil }
+        else { return nil }
         let ownedClient = Unmanaged<AnyObject>.fromOpaque(client).takeRetainedValue()
         // Sıcaklık sensörleri: kullanım sayfası 0xff00, kullanım 5.
         setMatching(client, ["PrimaryUsagePage": 0xff00, "PrimaryUsage": 5] as CFDictionary)
         let found = copyServices(client)?.takeRetainedValue() as? [AnyObject] ?? []
-        guard !found.isEmpty else { PrivateAPIGuard.failed("temperature"); return nil }
+        guard !found.isEmpty else { return nil }
+        var matchedServices: [AnyObject] = []
+        var matchedNames: [String] = []
+        for service in found {
+            let pointer = Unmanaged.passUnretained(service).toOpaque()
+            let name = (copyProperty(pointer, "Product" as CFString)?.takeRetainedValue() as? String) ?? ""
+            if name.hasPrefix("PMU tdie") || name.hasPrefix("PMU2 tdie") {
+                matchedServices.append(service)
+                matchedNames.append(name)
+            }
+        }
+        guard !matchedServices.isEmpty else { return nil }
         self.copyEvent = copyEvent
         self.floatValue = floatValue
         self.copyProperty = copyProperty
         self.client = ownedClient
-        services = found
-        names = found.map { service in
-            let pointer = Unmanaged.passUnretained(service).toOpaque()
-            return (copyProperty(pointer, "Product" as CFString)?.takeRetainedValue() as? String) ?? ""
-        }
+        services = matchedServices
+        names = matchedNames
     }
 
     func read() -> TemperatureRules.Summary {
@@ -72,8 +78,42 @@ final class ThermalSensors {
             Unmanaged<AnyObject>.fromOpaque(event).release()
         }
         let summary = TemperatureRules.summarize(readings)
-        if summary.cpu != nil || summary.gpu != nil { PrivateAPIGuard.succeeded("temperature") }
         return summary
+    }
+}
+
+/// Synchronous facade used by the hardware lifecycle check, not the UI sampling path.
+@MainActor
+final class ThermalSensors {
+    private let reader: ThermalSensorReader
+    init?() {
+        guard PrivateAPIGuard.begin("temperature") else { return nil }
+        guard let reader = ThermalSensorReader() else { PrivateAPIGuard.failed("temperature"); return nil }
+        self.reader = reader
+    }
+    func read() -> TemperatureRules.Summary {
+        let result = reader.read()
+        PrivateAPIGuard.succeeded("temperature")
+        return result
+    }
+}
+
+/// Serial, demand-driven sensor work. No timer, detached polling, or main-actor CF objects.
+actor ThermalSamplingWorker {
+    private var reader: ThermalSensorReader?
+    private var revision: UInt64?
+    private let overrideRead: (@Sendable () async -> TemperatureRules.Summary?)?
+    init(read: (@Sendable () async -> TemperatureRules.Summary?)? = nil) { overrideRead = read }
+
+    func read(revision nextRevision: UInt64) async -> TemperatureRules.Summary? {
+        // An issued private call finishes its crash guard even if its UI request was cancelled.
+        // Publication is generation-checked by the monitor; this worker never starts a loop.
+        if let overrideRead { return await overrideRead() }
+        if revision != nextRevision {
+            reader = ThermalSensorReader()
+            revision = nextRevision
+        }
+        return reader?.read()
     }
 }
 
@@ -89,13 +129,28 @@ enum PrivateLevelBackends {
     /// Okuma-yazma sonrası doğrulama toleransı: yazılan değer geri okununca bu kadar sapabilir.
     private static let tolerance: Float = 0.1
 
+    // One process-lifetime load: function pointers/ObjC instances require the image to stay loaded.
+    // Recreating a level control must not add another dlopen reference.
+    private static var didLoadDisplayServices = false
+    private static var getBrightnessFn: GetBrightnessFn?
+    private static var setBrightnessFn: SetBrightnessFn?
+
+    private static var didLoadKeyboard = false
+    private static var keyboardClientClass: NSObject.Type?
+
     /// Dahili ekran parlaklığı. `nil`: sembol yok, korumaya takıldı ya da ilk okuma geçersiz.
     static func displayBrightness() -> LevelControlBackend? {
         guard PrivateAPIGuard.begin("brightness") else { return nil }
-        guard let handle = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY),
-              let get = dlsym(handle, "DisplayServicesGetBrightness").map({ unsafeBitCast($0, to: GetBrightnessFn.self) }),
-              let set = dlsym(handle, "DisplayServicesSetBrightness").map({ unsafeBitCast($0, to: SetBrightnessFn.self) })
-        else { PrivateAPIGuard.failed("brightness"); return nil }
+        if !didLoadDisplayServices {
+            didLoadDisplayServices = true
+            if let handle = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY) {
+                getBrightnessFn = dlsym(handle, "DisplayServicesGetBrightness").map({ unsafeBitCast($0, to: GetBrightnessFn.self) })
+                setBrightnessFn = dlsym(handle, "DisplayServicesSetBrightness").map({ unsafeBitCast($0, to: SetBrightnessFn.self) })
+            }
+        }
+        guard let get = getBrightnessFn, let set = setBrightnessFn else {
+            PrivateAPIGuard.failed("brightness"); return nil
+        }
         func builtInDisplay() -> UInt32? {
             var ids = [CGDirectDisplayID](repeating: 0, count: 8)
             var count: UInt32 = 0
@@ -107,7 +162,9 @@ enum PrivateLevelBackends {
             var value: Float = -1
             return get(display, &value) == 0 ? value : nil
         }
-        guard let first = read(), first.isFinite, (0...1).contains(first) else { PrivateAPIGuard.failed("brightness"); return nil }
+        // Dahili ekran etkin değilse (uyanma, ekran yeniden yapılandırması) okuma geçici olarak yoktur; API bozuk değildir.
+        guard let first = read() else { PrivateAPIGuard.unavailable("brightness"); return nil }
+        guard first.isFinite, (0...1).contains(first) else { PrivateAPIGuard.failed("brightness"); return nil }
         PrivateAPIGuard.succeeded("brightness")
         return LevelControlBackend(read: read) { value in
             guard let display = builtInDisplay(), set(display, value) == 0, let back = read() else { return false }
@@ -119,8 +176,12 @@ enum PrivateLevelBackends {
     /// hiçbir çağrı yapılmaz.
     static func keyboardBacklight() -> LevelControlBackend? {
         guard PrivateAPIGuard.begin("keyboard") else { return nil }
-        guard dlopen("/System/Library/PrivateFrameworks/CoreBrightness.framework/CoreBrightness", RTLD_LAZY) != nil,
-              let cls = NSClassFromString("KeyboardBrightnessClient") as? NSObject.Type else {
+        if !didLoadKeyboard {
+            didLoadKeyboard = true
+            _ = dlopen("/System/Library/PrivateFrameworks/CoreBrightness.framework/CoreBrightness", RTLD_LAZY)
+            keyboardClientClass = NSClassFromString("KeyboardBrightnessClient") as? NSObject.Type
+        }
+        guard let cls = keyboardClientClass else {
             PrivateAPIGuard.failed("keyboard"); return nil
         }
         let client = cls.init()

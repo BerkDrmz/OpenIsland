@@ -22,6 +22,9 @@ final class IslandViewModel {
     private(set) var isRelaxing = false
     /// Pil tasarrufu etkin (Düşük Güç Modu / ısınma): müzik nabzı sakin formda sabit kalır.
     var energySaving = false
+    /// Native managed drop receiver and the existing SwiftUI drop target share
+    /// the same highlight without changing the visible window's Space.
+    var nativeDropZone: IslandDropZone?
 
     var metrics: NotchMetrics {
         didSet {
@@ -37,6 +40,8 @@ final class IslandViewModel {
     @ObservationIgnored var onPhaseChange: ((_ old: IslandPhase, _ new: IslandPhase) -> Void)?
     /// Hedef yerleşim değiştiğinde (girdi sensörü ve hover bölgesi güncellenir).
     @ObservationIgnored var onLayoutChange: ((_ new: IslandLayout) -> Void)?
+    /// Genişletilmiş adada sekme değişti (yeni panel içeriği bu güncellemede kurulur).
+    @ObservationIgnored var onTabChange: (() -> Void)?
     /// Yalnızca tanılama modunda: SwiftUI'nin adayı çizdiği dikdörtgen (hosting view koordinatları).
     @ObservationIgnored var onRenderedFrame: ((CGRect) -> Void)?
 
@@ -113,15 +118,25 @@ final class IslandViewModel {
         let style: MotionStyle = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .reduced : motionStyle
         let layoutChanged = newLayout != layout
         if layoutChanged || newPresentation != presentation || next.hud != hud || next.notice != notice || next.context.isPinned != isPinned {
-            let animation = IslandMotion.morph(from: presentation, to: newPresentation, style: style)
-            withAnimation(animation) {
-                if newPresentation != presentation { presentation = newPresentation }
-                if layoutChanged { layout = newLayout }
-                if next.hud != hud { hud = next.hud }
-                if next.notice != notice { notice = next.notice }
-                if next.context.isPinned != isPinned { isPinned = next.context.isPinned }
+            let isTabSwitch = presentation.isExpanded && newPresentation.isExpanded
+            let tabChanged = isTabSwitch && newPresentation.expandedTab != presentation.expandedTab
+            let animation: Animation? = isTabSwitch
+                ? (layoutChanged ? IslandMotion.resize(style: style) : nil)
+                : IslandMotion.morph(from: presentation, to: newPresentation, style: style)
+            let apply = {
+                if newPresentation != self.presentation { self.presentation = newPresentation }
+                if layoutChanged { self.layout = newLayout }
+                if next.hud != self.hud { self.hud = next.hud }
+                if next.notice != self.notice { self.notice = next.notice }
+                if next.context.isPinned != self.isPinned { self.isPinned = next.context.isPinned }
+            }
+            if let animation {
+                withAnimation(animation, apply)
+            } else {
+                apply()
             }
             if layoutChanged { onLayoutChange?(newLayout) }
+            if tabChanged { onTabChange?() }
         }
 
         if next.isRelaxing != isRelaxing {

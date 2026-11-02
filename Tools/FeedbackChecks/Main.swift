@@ -29,6 +29,53 @@ extension CGRect { func containsInclusive(_ point: CGPoint) -> Bool { contains(p
             try bytes.write(to: url)
             return url
         }
+        // Deterministic QuickLook completion ordering, real store/removal and private fixtures.
+        var completions: [@Sendable (CGImage?) -> Void] = []
+        let delayed = ShelfStore(storage: root.appendingPathComponent("thumbnail-cache"),
+                                 persistenceURL: root.appendingPathComponent("thumbnail-shelf.json"),
+                                 generateThumbnail: { _, _, completion in completions.append(completion) })
+        let thumbBoard = NSPasteboard(name: .init("OpenIsland-thumbnail-" + UUID().uuidString))
+        defer { thumbBoard.releaseGlobally() }
+        thumbBoard.writeObjects([sources[0] as NSURL])
+        precondition(delayed.ingest(pasteboard: thumbBoard))
+        delayed.panelDidAppear()
+        let removed = delayed.items[0]
+        let context = CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8,
+                                bytesPerRow: 8, space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let imageA = context.makeImage()!
+        delayed.remove(removed)
+        completions[0](imageA)
+        try await Task.sleep(for: .milliseconds(30))
+        precondition(delayed.thumbnails[removed.url] == nil, "Removed thumbnail resurrected")
+        precondition(delayed.ingest(pasteboard: thumbBoard))
+        let replacement = delayed.items[0]
+        precondition(replacement.id != removed.id && completions.count == 2)
+        completions[1](imageA)
+        try await Task.sleep(for: .milliseconds(30))
+        let acceptedImage = delayed.thumbnails[replacement.url]!
+        completions[0](imageA)
+        try await Task.sleep(for: .milliseconds(30))
+        precondition(delayed.thumbnails[replacement.url] === acceptedImage, "Old identity overwrote replacement")
+        // Move a private fixture after requesting a new preview; opening marks it missing.
+        delayed.remove(replacement)
+        precondition(delayed.ingest(pasteboard: thumbBoard))
+        let moved = root.appendingPathComponent("moved-thumbnail-fixture.pdf")
+        try FileManager.default.moveItem(at: sources[0], to: moved)
+        delayed.panelDidAppear()
+        completions[2](imageA)
+        try await Task.sleep(for: .milliseconds(30))
+        precondition(delayed.items[0].isMissing && delayed.thumbnails[sources[0]] == nil)
+        try FileManager.default.moveItem(at: moved, to: sources[0])
+        delayed.panelDidAppear()
+        precondition(!delayed.items[0].isMissing && completions.count == 4)
+        completions[3](imageA)
+        try await Task.sleep(for: .milliseconds(30))
+        precondition(delayed.thumbnails[sources[0]] != nil)
+        delayed.removeAll()
+        let sourceBytesAfterPreview = try Data(contentsOf: sources[0])
+        precondition(sourceBytesAfterPreview == bytes && sources[0].lastPathComponent == names[0])
+        print("PASS Shelf thumbnail: delayed removal, same-URL replacement, moved/missing fixture reject stale callbacks; source bytes/names unchanged")
         let pasteboard = NSPasteboard(name: .init("OpenIsland-check-" + UUID().uuidString))
         defer { pasteboard.releaseGlobally() }
         pasteboard.writeObjects(sources.map { $0 as NSURL })
@@ -49,6 +96,36 @@ extension CGRect { func containsInclusive(_ point: CGPoint) -> Bool { contains(p
         precondition(Set(shelf.items.map(\.url)) == Set(sources))
         shelf.removeAll()
         print("PASS: multi-file NSItemProvider URL import preserves source paths")
+
+        // Real native drags can offer both a file URL and its text contents.
+        // The URL must win; otherwise .pdf/.txt/etc becomes a new text export.
+        pasteboard.clearContents()
+        pasteboard.writeObjects([sources[0] as NSURL])
+        pasteboard.setString("This representation must not replace a file", forType: .string)
+        precondition(shelf.ingest(pasteboard: pasteboard))
+        precondition(shelf.items.count == 1 && shelf.items[0].url == sources[0])
+        precondition(!shelf.items[0].isTemporaryCopy)
+        shelf.removeAll()
+        pasteboard.clearContents()
+        pasteboard.setString("https://example.invalid/not-a-file", forType: .fileURL)
+        pasteboard.setString("Do not silently export this as text", forType: .string)
+        precondition(!shelf.ingest(pasteboard: pasteboard) && shelf.items.isEmpty)
+        pasteboard.clearContents()
+        pasteboard.setString("Intentional text drop", forType: .string)
+        precondition(shelf.ingest(pasteboard: pasteboard))
+        precondition(!shelf.items.isEmpty, "Intentional text drop produced no item")
+        let textBytes = try String(contentsOf: shelf.items[0].url, encoding: .utf8)
+        precondition(textBytes == "Intentional text drop" && shelf.items[0].isTemporaryCopy)
+        shelf.removeAll()
+        precondition(FileManager.default.fileExists(atPath: root.appendingPathComponent("cache").path), "Removing the final temporary item deleted the cache root")
+        pasteboard.clearContents()
+        let webURL = URL(string: "https://example.invalid/openisland-fixture")!
+        pasteboard.writeObjects([webURL as NSURL])
+        precondition(shelf.ingest(pasteboard: pasteboard))
+        precondition(!shelf.items.isEmpty, "Web URL drop produced no item")
+        precondition(shelf.items[0].url.pathExtension == "webloc")
+        shelf.removeAll()
+        print("PASS Native pasteboard: file URL wins over text; invalid file URLs cannot change type; intentional text/web drops preserved")
 
         let representations = sources.map { source in
             let provider = NSItemProvider()

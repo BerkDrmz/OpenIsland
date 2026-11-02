@@ -25,6 +25,25 @@ class RUsage(ctypes.Structure):
     ]
 
 
+class Timebase(ctypes.Structure):
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+def mach_timebase():
+    lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+    lib.mach_timebase_info.argtypes = [ctypes.POINTER(Timebase)]
+    lib.mach_timebase_info.restype = ctypes.c_int
+    scale = Timebase()
+    if lib.mach_timebase_info(ctypes.byref(scale)) or not scale.denom:
+        raise RuntimeError("Mach timebase unavailable; refusing to guess CPU units")
+    return scale.numer, scale.denom
+
+
+def ticks_to_ns(ticks, numer, denom):
+    # proc_pid_rusage CPU counters are Mach absolute ticks, not nanoseconds on ARM.
+    return ticks * numer // denom
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pid", type=int)
@@ -43,6 +62,7 @@ def main():
     lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
     lib.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     lib.proc_pid_rusage.restype = ctypes.c_int
+    numer, denom = mach_timebase()
     samples = []
     deadline = time.monotonic() + args.seconds
     identity = None
@@ -56,7 +76,8 @@ def main():
         identity = current_identity
         now = time.monotonic()
         samples.append(dict(epoch=time.time(), monotonic=now,
-                            cpu_ns=usage.user + usage.system, footprint=usage.footprint,
+                            cpu_ticks=usage.user + usage.system,
+                            cpu_ns=ticks_to_ns(usage.user + usage.system, numer, denom), footprint=usage.footprint,
                             read=usage.read, write=usage.write, wakeups=usage.wakeups))
         if now >= deadline and len(samples) >= 2:
             break
@@ -66,6 +87,7 @@ def main():
     peaks = [100 * (b["cpu_ns"] - a["cpu_ns"]) / 1e9 / (b["monotonic"] - a["monotonic"])
              for a, b in zip(samples, samples[1:])]
     summary = dict(pid=pid, seconds=round(duration, 2), sample_interval_seconds=args.interval,
+                   cpu_counter_unit="mach_absolute_ticks", mach_timebase_numer=numer, mach_timebase_denom=denom,
                    average_cpu_percent_one_core=round(100 * (last["cpu_ns"] - first["cpu_ns"]) / 1e9 / duration, 4),
                    peak_interval_cpu_percent_one_core=round(max(peaks), 4),
                    physical_footprint_mib=round(last["footprint"] / 1024**2, 2),

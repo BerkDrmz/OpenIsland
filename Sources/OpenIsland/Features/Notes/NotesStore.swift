@@ -68,11 +68,23 @@ final class LauncherStore {
     /// Dosya seçici / bağlantı penceresi açıkken adanın kapanmaması için.
     @ObservationIgnored var hold: IslandHold?
     @ObservationIgnored private var shortcutsLoadedAt: Date?
+    @ObservationIgnored private var inFlightFetch: Task<ShortcutsListResult, Never>?
+    @ObservationIgnored private var activeRequest: ShortcutsListRequest?
+    @ObservationIgnored private var fetchGeneration: UInt64 = 0
+    @ObservationIgnored private var failedAt: Date?
+    @ObservationIgnored private let fetchOverride: (@Sendable () async -> ShortcutsListResult)?
+    @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var iconCache: [UUID: NSImage] = [:]
+    /// Uygulama öğesinin başlığı dosya sistemi/LaunchServices sorgusudur (`displayName`); her Notlar açılışında kutucuk
+    /// başına iki kez (ipucu + erişilebilirlik) yeniden hesaplanıyordu. Simge önbelleğiyle aynı ömür: öğe kaldırılınca silinir.
+    @ObservationIgnored private var titleCache: [UUID: String] = [:]
 
     @ObservationIgnored private let storeURL = AppPaths.support.appendingPathComponent("launcher.json")
 
-    init() {
+    init(fetchShortcuts: (@Sendable () async -> ShortcutsListResult)? = nil,
+         now: @escaping () -> Date = Date.init) {
+        self.fetchOverride = fetchShortcuts
+        self.now = now
         load()
         if items.isEmpty {
             items = ["/System/Applications/Calendar.app", "/System/Applications/Notes.app", "/Applications/Safari.app", "/System/Applications/Utilities/Terminal.app"]
@@ -97,6 +109,13 @@ final class LauncherStore {
         }
         iconCache[item.id] = image
         return image
+    }
+
+    func title(for item: LauncherItem) -> String {
+        if let cached = titleCache[item.id] { return cached }
+        let title = item.title
+        titleCache[item.id] = title
+        return title
     }
 
     func launch(_ item: LauncherItem) {
@@ -127,7 +146,8 @@ final class LauncherStore {
     func addLink() {
         let field = NSTextField(frame: CGRect(x: 0, y: 0, width: 280, height: 24))
         field.placeholderString = "https://"
-        if let clip = NSPasteboard.general.string(forType: .string), Self.normalizedURL(clip) != nil {
+        // macOS 27.2+: ön doldurma için pano uyarısı açılmaz; yalnız okuma sessizse doldurulur.
+        if PasteAccess.canReadSilently(), let clip = NSPasteboard.general.string(forType: .string), Self.normalizedURL(clip) != nil {
             field.stringValue = clip
         }
         let alert = NSAlert()
@@ -164,26 +184,54 @@ final class LauncherStore {
     func remove(_ item: LauncherItem) {
         items.removeAll { $0.id == item.id }
         iconCache[item.id] = nil
+        titleCache[item.id] = nil
         save()
     }
 
-    /// `shortcuts list` bir alt süreç başlatır; sekme her açıldığında değil, en fazla 5 dakikada bir.
+    /// Cache successful results only. A real failure gets bounded, event-triggered backoff;
+    /// closing/reopening the panel keeps the same store-owned request alive.
     func refreshShortcutsIfNeeded() async {
-        if let loaded = shortcutsLoadedAt, Date().timeIntervalSince(loaded) < 300 { return }
-        shortcutsLoadedAt = Date()
+        if let loaded = shortcutsLoadedAt, now().timeIntervalSince(loaded) < 300 { return }
+        if inFlightFetch == nil, let failedAt, now().timeIntervalSince(failedAt) < 10 { return }
         await refreshShortcuts()
     }
 
     func refreshShortcuts() async {
-        let request = ShortcutsListRequest()
-        let names = await withTaskCancellationHandler {
-            await Task.detached(priority: .utility) { request.run() }.value
-        } onCancel: { request.cancel() }
-        guard !Task.isCancelled else {
-            shortcutsLoadedAt = nil
-            return
+        if let inFlight = inFlightFetch {
+            _ = await inFlight.value
+            return // The owner publishes once; joining callers never overwrite newer results.
         }
-        if names != availableShortcuts { availableShortcuts = names }
+        fetchGeneration &+= 1
+        let generation = fetchGeneration
+        let fetchTask: Task<ShortcutsListResult, Never>
+        if let fetchOverride {
+            fetchTask = Task { await fetchOverride() }
+        } else {
+            let request = ShortcutsListRequest()
+            activeRequest = request
+            fetchTask = Task.detached(priority: .utility) { request.run() }
+        }
+        inFlightFetch = fetchTask
+        let result = await fetchTask.value
+        guard generation == fetchGeneration else { return }
+        inFlightFetch = nil
+        activeRequest = nil
+        switch result {
+        case .success(let names):
+            shortcutsLoadedAt = now()
+            failedAt = nil
+            if names != availableShortcuts { availableShortcuts = names }
+        case .failure:
+            failedAt = now() // Retain last good list; failure is not a successful empty listing.
+        }
+    }
+
+    func shutdown() {
+        fetchGeneration &+= 1
+        activeRequest?.cancel(immediately: true)
+        activeRequest = nil
+        inFlightFetch?.cancel()
+        inFlightFetch = nil
     }
 
     @discardableResult
@@ -213,36 +261,122 @@ final class LauncherStore {
     }
 }
 
-/// Only a user-opened panel requests a listing; closing it terminates its list process.
-private final class ShortcutsListRequest: @unchecked Sendable {
-    private let lock = NSLock()
+enum ShortcutsListFailure: Error, Sendable, Equatable {
+    case launch, exit(Int32), cancelled, timedOut, decoding, reading
+}
+typealias ShortcutsListResult = Result<[String], ShortcutsListFailure>
+
+/// Store-owned single flight survives tab changes. A one-shot deadline bounds a stalled CLI;
+/// shutdown invalidates its result and terminates only this listing subprocess.
+final class ShortcutsListRequest: @unchecked Sendable {
+    private let lock = NSCondition()
     private var process: Process?
     private var cancelled = false
-    func run() -> [String] {
+    private var timedOut = false
+    private var output = Data()
+    private var outputFinished = false
+    private var outputFailed = false
+    private var outputReader: DispatchSourceRead?
+    private let executable: URL
+    private let arguments: [String]
+    private let timeout: TimeInterval
+    init(executable: URL = URL(fileURLWithPath: "/usr/bin/shortcuts"),
+         arguments: [String] = ["list"], timeout: TimeInterval = 10) {
+        self.executable = executable
+        self.arguments = arguments
+        self.timeout = timeout
+    }
+    func run() -> ShortcutsListResult {
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
-        task.arguments = ["list"]
+        task.executableURL = executable
+        task.arguments = arguments
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
         lock.lock()
-        guard !cancelled else { lock.unlock(); return [] }
+        guard !cancelled else { lock.unlock(); return .failure(.cancelled) }
         process = task
-        do { try task.run() } catch { process = nil; lock.unlock(); return [] }
+        do { try task.run() } catch { process = nil; lock.unlock(); return .failure(.launch) }
         lock.unlock()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        try? pipe.fileHandleForWriting.close()
+        let handle = pipe.fileHandleForReading
+        let fd = handle.fileDescriptor
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        let queue = DispatchQueue(label: "OpenIsland.shortcuts.output", qos: .utility)
+        let reader = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        lock.lock(); outputReader = reader; lock.unlock()
+        reader.setEventHandler { [weak self] in self?.drain(fd) }
+        reader.setCancelHandler { try? handle.close() }
+        reader.resume()
+        let deadline = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        deadline.schedule(deadline: .now() + timeout)
+        deadline.setEventHandler { [weak self] in self?.expire() }
+        deadline.resume()
+        defer {
+            deadline.cancel(); reader.cancel()
+            lock.lock(); outputReader = nil; lock.unlock()
+        }
+        lock.lock()
+        while !outputFinished && !cancelled && !timedOut { lock.wait() }
+        lock.unlock()
         task.waitUntilExit()
         lock.lock()
         process = nil
-        let wasCancelled = cancelled
+        let result: ShortcutsListResult
+        if cancelled { result = .failure(.cancelled) }
+        else if timedOut { result = .failure(.timedOut) }
+        else if outputFailed { result = .failure(.reading) }
+        else if task.terminationStatus != 0 { result = .failure(.exit(task.terminationStatus)) }
+        else if let text = String(data: output, encoding: .utf8) {
+            result = .success(text.split(separator: "\n").map(String.init).filter { !$0.isEmpty })
+        } else { result = .failure(.decoding) }
         lock.unlock()
-        guard !wasCancelled, task.terminationStatus == 0 else { return [] }
-        return String(data: data, encoding: .utf8)?.split(separator: "\n").map(String.init).filter { !$0.isEmpty } ?? []
+        return result
     }
-    func cancel() {
+    private func drain(_ fd: Int32) {
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            lock.lock()
+            let shouldStop = cancelled || timedOut
+            let readerToCancel = shouldStop ? outputReader : nil
+            lock.unlock()
+            if shouldStop { readerToCancel?.cancel(); return }
+            let count = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+            let error = errno
+            lock.lock()
+            if count > 0 { output.append(contentsOf: buffer.prefix(count)) }
+            else if count == 0 { outputFinished = true; lock.broadcast() }
+            else if error != EAGAIN && error != EINTR { outputFailed = true; outputFinished = true; lock.broadcast() }
+            let finishedReader = outputFinished ? outputReader : nil
+            lock.unlock()
+            finishedReader?.cancel() // EOF must not keep a ready source waking while the CLI exits.
+            if count <= 0 { return }
+        }
+    }
+    private static func terminateOwned(_ task: Process?) {
+        guard let task, task.isRunning else { return }
+        task.terminate()
+        // Bounded escalation applies to cancellation as well as timeout, only for this subprocess.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.25) {
+            if task.isRunning { kill(task.processIdentifier, SIGKILL) }
+        }
+    }
+    private func expire() {
+        lock.lock()
+        timedOut = true // A descendant may keep stdout open even after the parent has exited.
+        let task = process
+        lock.broadcast()
+        lock.unlock()
+        Self.terminateOwned(task)
+    }
+    func cancel(immediately: Bool = false) {
         lock.lock()
         cancelled = true
-        if let process, process.isRunning { process.terminate() }
+        let task = process
+        lock.broadcast()
         lock.unlock()
+        // At app shutdown no future dispatch closure is guaranteed to execute.
+        if immediately, let task, task.isRunning { kill(task.processIdentifier, SIGKILL) }
+        else { Self.terminateOwned(task) }
     }
 }

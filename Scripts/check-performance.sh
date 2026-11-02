@@ -21,7 +21,7 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lI
   -Xlinker -rpath -Xlinker "$CHECK_DIR" \
   Sources/OpenIsland/UI/IslandDesign.swift Sources/OpenIsland/Island/IslandViewModel.swift \
   Sources/OpenIsland/System/Preferences.swift \
-  Sources/OpenIsland/Window/NotchPanel.swift Tools/PerformanceChecks/HoverExitCheck.swift \
+  Sources/OpenIsland/Window/NotchPanel.swift Sources/OpenIsland/UI/PanelStage.swift Tools/PerformanceChecks/HoverExitCheck.swift \
   -o "$CHECK_DIR/hover-exit-check"
 "$CHECK_DIR/hover-exit-check"
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
@@ -41,6 +41,10 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lI
   -o "$CHECK_DIR/waveform-check"
 "$CHECK_DIR/waveform-check"
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
+  Sources/OpenIsland/UI/MarqueeView.swift Tools/PerformanceChecks/MarqueeCheck.swift \
+  -o "$CHECK_DIR/marquee-check"
+"$CHECK_DIR/marquee-check"
+swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
   Sources/OpenIsland/UI/TimeProgressView.swift Tools/PerformanceChecks/TimeProgressCheck.swift \
   -o "$CHECK_DIR/time-progress-check"
 "$CHECK_DIR/time-progress-check"
@@ -54,11 +58,19 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
   Tools/PerformanceChecks/RemindersCheck.swift -o "$CHECK_DIR/reminders-check"
 "$CHECK_DIR/reminders-check"
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
+  Sources/OpenIsland/Features/Focus/RemindersService.swift \
+  Tools/PerformanceChecks/RemindersFetchCheck.swift -o "$CHECK_DIR/reminders-fetch-check"
+"$CHECK_DIR/reminders-fetch-check"
+swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
+  Sources/OpenIsland/Features/Focus/RemindersService.swift \
+  Tools/PerformanceChecks/RemindersSnapshotCheck.swift -o "$CHECK_DIR/reminders-snapshot-check"
+"$CHECK_DIR/reminders-snapshot-check"
+swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
   Sources/OpenIsland/System/PermissionsCenter.swift Tools/PerformanceChecks/PermissionsCheck.swift \
   -o "$CHECK_DIR/permissions-check"
 "$CHECK_DIR/permissions-check"
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
-  Sources/OpenIsland/Features/Clipboard/ClipboardHistory.swift Tools/PerformanceChecks/ClipboardCheck.swift \
+  Sources/OpenIsland/Features/Clipboard/{ClipboardHistory,PasteAccess}.swift Tools/PerformanceChecks/ClipboardCheck.swift \
   -o "$CHECK_DIR/clipboard-check"
 "$CHECK_DIR/clipboard-check"
 swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lIslandCore \
@@ -84,3 +96,17 @@ swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lI
   Sources/OpenIsland/Features/Media/{NowPlaying,ScriptedPlayerSource}.swift \
   Tools/PerformanceChecks/ScriptedPlayerCheck.swift -o "$CHECK_DIR/scripted-player-check"
 "$CHECK_DIR/scripted-player-check"
+swiftc "${SWIFT_FLAGS[@]}" -parse-as-library -I "$CHECK_DIR" -L "$CHECK_DIR" -lIslandCore \
+  -Xlinker -rpath -Xlinker "$CHECK_DIR" \
+  Sources/OpenIsland/System/Preferences.swift Sources/OpenIsland/UI/{IslandDesign,PanelStage}.swift \
+  Tools/PerformanceChecks/PanelStageCheck.swift -o "$CHECK_DIR/panel-stage-check"
+"$CHECK_DIR/panel-stage-check"
+python3 Tools/PerformanceChecks/ResourceProbeCheck.py
+
+python3 Tools/PerformanceChecks/TabBenchmarkReportCheck.py
+
+python3 Tools/PerformanceChecks/ProcessMatrixProbeCheck.py
+swiftc "${SWIFT_FLAGS[@]}" -parse-as-library \
+  Sources/OpenIsland/Features/Notes/NotesStore.swift Sources/OpenIsland/Features/Clipboard/PasteAccess.swift Tools/PerformanceChecks/ShortcutsCheck.swift \
+  -o "$CHECK_DIR/shortcuts-check"
+"$CHECK_DIR/shortcuts-check"

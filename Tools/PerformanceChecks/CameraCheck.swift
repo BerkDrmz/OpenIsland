@@ -76,6 +76,37 @@ private final class FakeSession: CameraSessionBackend, @unchecked Sendable {
         pending.stop()
         precondition(factories == 0 && pending.state == .idle, "Permissionless selection created a session")
 
+        var viewerAuthorization: AVAuthorizationStatus = .denied
+        let retryBackend = FakeSession()
+        let retryVisible = CameraMirror(makeSession: { retryBackend }, readAuthorization: { viewerAuthorization })
+        retryVisible.panelDidAppear()
+        precondition(retryVisible.state == .denied)
+        viewerAuthorization = .authorized
+        retryVisible.panelDidAppear()
+        try await waitUntil { retryVisible.state == .running }
+        precondition(retryBackend.snapshot.1 == 1)
+        retryVisible.panelDidDisappear()
+        precondition(retryVisible.state == .running)
+        retryVisible.panelDidDisappear()
+        try await waitUntil { !retryBackend.snapshot.3 }
+
+        let sharedBackend = FakeSession()
+        let shared = CameraMirror(makeSession: { sharedBackend }, readAuthorization: { .authorized })
+        shared.panelDidAppear()
+        shared.panelDidAppear()
+        try await waitUntil { shared.state == .running }
+        precondition(sharedBackend.snapshot.1 == 1, "Two panels duplicated the camera session")
+        shared.panelDidDisappear()
+        precondition(shared.state == .running, "Closing one panel stopped another visible camera")
+        shared.panelDidDisappear()
+        try await waitUntil { !sharedBackend.snapshot.3 }
+        precondition(shared.state == .idle)
+        shared.panelDidDisappear() // Unbalanced teardown must not underflow the next session.
+        shared.panelDidAppear()
+        try await waitUntil { shared.state == .running }
+        shared.panelDidDisappear()
+        try await waitUntil { !sharedBackend.snapshot.3 }
+
         let fake = FakeSession()
         fake.blockFirstConfiguration = true
         let mirror = CameraMirror(makeSession: { fake }, readAuthorization: { .authorized })
@@ -90,7 +121,7 @@ private final class FakeSession: CameraSessionBackend, @unchecked Sendable {
         try await waitUntil { mirror.state == .running }
         for _ in 0..<200 { mirror.stop(); mirror.start() }
         mirror.stop()
-        try await waitUntil { fake.snapshot.2 >= 202 }
+        try await waitUntil { fake.snapshot.2 >= 202 && !fake.snapshot.3 && mirror.state == .idle }
         precondition(!fake.snapshot.3 && mirror.state == .idle, "Rapid reopen left capture running")
 
         let switching = FakeSession()

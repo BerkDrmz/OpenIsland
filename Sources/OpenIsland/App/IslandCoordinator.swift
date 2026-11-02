@@ -23,6 +23,8 @@ final class IslandCoordinator {
     /// Çift tetiklemeleri ve hızlı kilit/açılma durumlarını önlemek için son kilit açılma zamanı.
     private var lastUnlockTime: Date = .distantPast
     private var unlockTraceTask: Task<Void, Never>?
+    /// Kilit ekranı kalkıp ada penceresi görünür olunca kilit açılma animasyonunu başlatan bekleyiciler.
+    private var unlockGates: [UnlockVisibilityGate] = []
     private var isStarted = false
 
     init(environment: AppEnvironment) {
@@ -33,6 +35,8 @@ final class IslandCoordinator {
         isStarted = false
         unlockTraceTask?.cancel()
         unlockTraceTask = nil
+        unlockGates.forEach { $0.cancel() }
+        unlockGates.removeAll()
         accessibilityCheck?.cancel()
         accessibilityCheck = nil
         if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
@@ -102,6 +106,11 @@ final class IslandCoordinator {
 
     // MARK: - Ekranlar
 
+    /// Tek ekranlık sunumlar (ilk kurulum karşılaması): donanım çentikli ekranın adası, yoksa ilk ada.
+    var primaryController: NotchWindowController? {
+        controllers.values.first { $0.screen.hasNotch } ?? controllers.values.first
+    }
+
     private func reconcileScreens(updatePresentation: Bool = true) {
         let targets = environment.screens.targets(for: environment.preferences.displayTarget)
         let targetIDs = Set(targets.map(\.id))
@@ -154,10 +163,14 @@ final class IslandCoordinator {
         traceUnlock("tetik")
 
         let notchControllers = controllers.values.filter { $0.screen.hasNotch }
-        if !notchControllers.isEmpty {
-            notchControllers.forEach { $0.model.send(.noticeRequested(.unlocked)) }
-        } else {
-            controllers.values.first?.model.send(.noticeRequested(.unlocked))
+        let targets = notchControllers.isEmpty ? Array(controllers.values.prefix(1)) : notchControllers
+        unlockGates.forEach { $0.cancel() }
+        unlockGates = targets.map { controller in
+            // `screenIsUnlocked` kilit ekranı kalkmadan gelir (ölçüldü: ada penceresi ~0,25 sn örtülü kaldı); hareket
+            // örtülüyken başlarsa ilk kısmı görünmez ve gecikmiş görünür. Pencere görünür olduğu an başlar.
+            UnlockVisibilityGate(window: controller.panel) { [weak controller] in
+                controller?.model.send(.noticeRequested(.unlocked))
+            }
         }
     }
 
@@ -184,6 +197,8 @@ final class IslandCoordinator {
     private func handleLock() {
         unlockTraceTask?.cancel()
         unlockTraceTask = nil
+        unlockGates.forEach { $0.cancel() }
+        unlockGates.removeAll()
         lastUnlockTime = .distantPast
         broadcast(.systemLocked)
     }
@@ -412,7 +427,49 @@ final class IslandCoordinator {
         let prefs = environment.preferences
         let saving = EnergyRules.savesEnergy(isEnabled: prefs.energySaving, lowPowerMode: environment.energy.isLowPowerMode,
                                              thermal: environment.energy.thermal)
-        model.motionStyle = saving ? .reduced : prefs.motionStyle
+        let style: MotionStyle = saving ? .reduced : prefs.motionStyle
+        if model.motionStyle != style { model.motionStyle = style }
         if model.energySaving != saving { model.energySaving = saving }
+    }
+}
+
+/// Pencere görünür olduğunda bir kez çalışır: zaten görünürse hemen; değilse örtülme olayını bekler (yoklama yok).
+/// Olay gelmezse en çok 0,6 sn sonra yine çalışır, böylece geri bildirim hiç kaybolmaz.
+@MainActor
+private final class UnlockVisibilityGate {
+    private var action: (() -> Void)?
+    private var observer: NSObjectProtocol?
+    private var fallback: Task<Void, Never>?
+    private let started = CACurrentMediaTime()
+
+    init(window: NSWindow, action: @escaping () -> Void) {
+        self.action = action
+        guard !window.occlusionState.contains(.visible) else { fire("zaten görünür"); return }
+        observer = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window,
+                                                          queue: .main) { [weak self, weak window] _ in
+            MainActor.assumeIsolated {
+                if window?.occlusionState.contains(.visible) == true { self?.fire("görünür oldu") }
+            }
+        }
+        fallback = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            self?.fire("süre doldu")
+        }
+    }
+
+    private func fire(_ reason: String) {
+        guard let action else { return }
+        LifecycleLog.note(String(format: "unlock: animasyon başladı (%@, +%.0f ms)", reason, (CACurrentMediaTime() - started) * 1000))
+        cancel()
+        action()
+    }
+
+    func cancel() {
+        action = nil
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+        fallback?.cancel()
+        fallback = nil
     }
 }

@@ -53,6 +53,23 @@ import IslandCore
         precondition(monitor.state[1] == true, "returning to fullscreen cancels a pending delayed exit")
         print("PASS: reversed delayed exit preserves fullscreen instead of revealing content")
 
+        // An app activation must not discard the second snapshot of a pending exit.
+        testWindows = []
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        try? await Task.sleep(for: .milliseconds(500))
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        try? await Task.sleep(for: .milliseconds(1100))
+        precondition(monitor.state[1] == false, "activation stranded a pending fullscreen exit")
+        testWindows = [window]
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        try? await Task.sleep(for: .milliseconds(250))
+        precondition(monitor.state[1] == true)
+        testWindows = []
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+        await settle()
+        precondition(monitor.state[1] == false, "termination must finish exit confirmation")
+        print("PASS: activation/termination preserve pending fullscreen exit confirmation")
+
         testWindows = []
         NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
         await settle()

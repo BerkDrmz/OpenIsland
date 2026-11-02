@@ -52,9 +52,15 @@ protocol MediaSource: AnyObject {
     func seek(to time: TimeInterval) async -> Bool
     /// Uyanma sonrası: sağlık durumunu sıfırlayıp gerekiyorsa yeniden başla (varsayılan: bir şey yapma).
     func recover()
+    /// Medya arayüzü göründüğünde konumu doğrula (bildirim taşımayan sarmalar için; varsayılan: bir şey yapma).
+    func synchronizePosition()
+    /// Süre çubuğu görünürlüğü: kaynak, bildirim taşımayan sarmayı yalnızca bu sürede olayla izleyebilir.
+    func setPositionWatch(_ active: Bool)
 }
 
 extension MediaSource {
     var supportsSeeking: Bool { true }
     func recover() {}
+    func synchronizePosition() {}
+    func setPositionWatch(_ active: Bool) {}
 }

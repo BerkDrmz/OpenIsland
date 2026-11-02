@@ -54,11 +54,15 @@ func CGDisplayIsBuiltin(_ id: UInt32) -> Int32 { id == 1 ? 1 : 0 }
 
         external.frame.origin = CGPoint(x: -1920, y: -300)
         external.visibleFrame = external.frame
+        let beforeActivation = updates
         workspace.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        await settle()
+        precondition(updates == beforeActivation, "app activation caused unnecessary screen geometry refresh")
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
         await settle()
         precondition(manager.screens.first { $0.id == 2 }?.frame == external.frame)
         precondition(manager.screens.first { $0.id == 2 }?.metrics.floatOffset == 29)
-        print("PASS: application switch rereads display arrangement and hidden menu-bar geometry")
+        print("PASS: app activation does not rescan; real display event refreshes arrangement and menu geometry")
 
         let unchanged = updates
         workspace.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)

@@ -41,6 +41,7 @@ final class NotchWindowController {
     private var outsideClickMonitors: [Any] = []
     /// "Her zaman gizle" + tam ekran: ada hover/tıklama ile açılmaz (sensör kapalı).
     private var interactionBlocked = false
+    private var managedDropReceiver: ManagedDropReceiver?
 
     init(screen: NotchScreen, environment: AppEnvironment) {
         self.screen = screen
@@ -66,11 +67,14 @@ final class NotchWindowController {
         contextMenu.onClose = { [weak self] in self?.reconcilePointerExit() }
         model.onPhaseChange = { [weak self] old, new in self?.phaseDidChange(from: old, to: new) }
         model.onLayoutChange = { [weak self] layout in self?.layoutDidChange(to: layout) }
+        model.onTabChange = { [weak self] in self?.scheduleKeyViewLoopRefresh() }
 
         placeWindows()
         panel.orderFrontRegardless()
+        sensor.accessibilityTarget = panel // erişilebilirlik isabetleri görsel adaya
         sensor.orderFrontRegardless()
         SpacePresentationController.shared.attach([panel, sensor])
+        wireManagedDropReceiver()
         updateInputRouting()
 
         if let diagnostics = IslandDiagnostics.shared {
@@ -123,6 +127,8 @@ final class NotchWindowController {
     }
 
     func close() {
+        managedDropReceiver?.stop()
+        managedDropReceiver = nil
         model.cancelPendingEffects()
         stopOutsideClickMonitor()
         SpacePresentationController.shared.detach([panel, sensor])
@@ -205,6 +211,15 @@ final class NotchWindowController {
 
     // MARK: - Yerleşim değişimleri (pencere boyutu değişmez)
 
+    /// Sekme değişiminde yeni panelin platform görünümleri (metin alanları, metin düzenleyici) aynı güncellemede
+    /// pencereye takılır; SwiftUI key-view döngüsünü ise seçim karesinde, onlar takılmadan önce kurar. Döngü yalnız
+    /// bayat olarak işaretlenir ve gerektiği anda bir kez yeniden hesaplanır (`NotchPanel.invalidateKeyViewLoop`).
+    /// Ölçüldü: seçimden sonraki run-loop turundaki yeniden hesaplama yeni panelin ilk karesinden önce koşuyor ve
+    /// 80 ms'lik hızlı geçişte ilk kareyi geciktiriyordu (Raf'ta seçim başına ~1,3 ms, çoğu E-çekirdekte).
+    private func scheduleKeyViewLoopRefresh() {
+        panel.invalidateKeyViewLoop()
+    }
+
     private func layoutDidChange(to layout: IslandLayout) {
         targetLayout = layout
         if !model.machine.isEngaged {
@@ -217,22 +232,26 @@ final class NotchWindowController {
 
     private func refreshTrackingArea() {
         let rect = hitRect(for: targetLayout)
+        let mouseLocation = NSEvent.mouseLocation
+        let inside = rect.containsInclusive(mouseLocation)
         container.setTrackingRect(container.convert(panel.convertFromScreen(rect), from: nil),
-                                  pointerInside: isPointerInside && rect.containsInclusive(NSEvent.mouseLocation))
-        reconcilePointerExit()
+                                  pointerInside: isPointerInside && inside)
+        reconcilePointerExit(mouseLocation: mouseLocation)
     }
 
     /// Yüzey veya girdi yönlendirmesi değişirken AppKit çıkış üretmeyebilir; yalnızca bu olaylarda
     /// (olay güdümlü) bir kez doğrulanır. Girişler asla buradan üretilmez: HUD veya bildirim duran bir
     /// imlecin altında genişlediğinde ada kendiliğinden açılmamalı.
-    func reconcilePointerExit() {
-        guard isPointerInside, !hitRect(for: targetLayout).containsInclusive(NSEvent.mouseLocation) else { return }
+    func reconcilePointerExit(mouseLocation: NSPoint? = nil) {
+        let location = mouseLocation ?? NSEvent.mouseLocation
+        guard isPointerInside, !hitRect(for: targetLayout).containsInclusive(location) else { return }
         pointerDidExit()
     }
 
     // MARK: - Girdi yönlendirmesi
 
     private func updateInputRouting() {
+        managedDropReceiver?.update(frame: hitRect(for: targetLayout), enabled: !interactionBlocked)
         let machine = model.machine
         let dragActive = machine.context.isFileDragActive
         let engaged = machine.isEngaged || dragActive
@@ -252,6 +271,7 @@ final class NotchWindowController {
     }
 
     private func pointerDidEnter() {
+        PointerProbe.note("enter mouse=\(NSEvent.mouseLocation) hit=\(hitRect(for: targetLayout)) phase=\(model.machine.phase)")
         guard !isPointerInside else { return }
         isPointerInside = true
         updateInputRouting()
@@ -259,6 +279,7 @@ final class NotchWindowController {
     }
 
     private func pointerDidExit() {
+        PointerProbe.note("exit mouse=\(NSEvent.mouseLocation) hit=\(hitRect(for: targetLayout)) phase=\(model.machine.phase)")
         guard isPointerInside else { return }
         isPointerInside = false
         updateInputRouting()
@@ -266,7 +287,14 @@ final class NotchWindowController {
     }
 
     private func phaseDidChange(from old: IslandPhase, to new: IslandPhase) {
+        PointerProbe.note("phase \(old) -> \(new) mouse=\(NSEvent.mouseLocation) layout=\(Int(targetLayout.size.width))x\(Int(targetLayout.size.height))")
+        if PointerProbe.isEnabled, case .expanded(let tab) = new {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                PointerProbe.note("census \(tab): \(PointerProbe.layerCensus(self?.panel))")
+            }
+        }
         let wasExpanded = if case .expanded = old { true } else { false }
+        panel.acceptsKeyFocus = model.machine.isExpanded
         if wasExpanded, !model.machine.isExpanded { panel.relinquishKeyFocus() }
         if !wasExpanded, model.machine.isExpanded { onExpanded?() }
         if !model.machine.isEngaged, sensor.frame != restHitRect { sensor.setFrame(restHitRect, display: false) }
@@ -275,6 +303,48 @@ final class NotchWindowController {
     }
 
     // MARK: - Sensör
+
+    private func wireManagedDropReceiver() {
+        let receiver = ManagedDropReceiver(frame: hitRect(for: targetLayout))
+        receiver.onEnter = { [weak self] point in
+            guard let self else { return }
+            IslandDiagnostics.shared?.log("native drop: entered")
+            self.model.send(.fileDragEntered)
+            self.updateNativeDropZone(at: point)
+        }
+        receiver.onMove = { [weak self] point in self?.updateNativeDropZone(at: point) }
+        receiver.onExit = { [weak self] in
+            self?.model.nativeDropZone = nil
+            self?.model.send(.fileDragExited)
+        }
+        receiver.onCancel = { [weak self] in
+            self?.model.nativeDropZone = nil
+            self?.model.send(.fileDragEnded(dropped: false))
+        }
+        receiver.onDrop = { [weak self] pasteboard, point in
+            guard let self else { return false }
+            let airDrop = self.model.presentation == .dropTarget && point.x >= self.screen.anchor.x
+            self.model.nativeDropZone = nil
+            if airDrop {
+                let urls = ShelfStore.fileURLs(from: pasteboard)
+                self.model.send(.fileDragEnded(dropped: false))
+                guard !urls.isEmpty else { return false }
+                self.shelf.airDrop(urls)
+                return true
+            }
+            let accepted = self.shelf.ingest(pasteboard: pasteboard)
+            IslandDiagnostics.shared?.log("native drop: accepted=\(accepted)")
+            self.model.send(.fileDragEnded(dropped: accepted))
+            return accepted
+        }
+        managedDropReceiver = receiver
+    }
+
+    private func updateNativeDropZone(at point: CGPoint) {
+        let next: IslandDropZone = model.presentation == .dropTarget && point.x >= screen.anchor.x ? .airDrop : .shelf
+        guard model.nativeDropZone != next else { return }
+        withAnimation(IslandMotion.control) { model.nativeDropZone = next }
+    }
 
     private func wireSensor() {
         let view = sensor.sensorView

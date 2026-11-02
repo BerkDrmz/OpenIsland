@@ -172,6 +172,14 @@ public enum IslandPresentation: Sendable, Equatable, Hashable {
     case notice(IslandNotice)
     case expanded(ExpandedTab)
     case dropTarget
+
+    public var expandedTab: ExpandedTab? {
+        if case .expanded(let tab) = self { tab } else { nil }
+    }
+
+    public var isExpanded: Bool {
+        if case .expanded = self { true } else { false }
+    }
 }
 
 // MARK: - Olaylar ve yan etkiler

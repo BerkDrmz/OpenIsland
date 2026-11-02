@@ -2,6 +2,8 @@ import AppKit
 import EventKit
 import IslandCore
 import SwiftUI
+import os
+import CryptoKit
 
 /// Geometri tanılaması (yalnızca `OPENISLAND_DIAGNOSTICS=<dosya>` ortam değişkeniyle açılır; normal
 /// çalışmada hiçbir kod yolu etkin değildir).
@@ -30,6 +32,16 @@ final class IslandDiagnostics {
     private let output: URL
     private var lines: [String] = []
     private var lastRendered: CGRect?
+    private let signpostLog = OSLog(subsystem: "io.github.openisland.performance", category: .pointsOfInterest)
+    private var benchmarkCPUStart: [String: Double] = [:]
+    private func processCPUSeconds() -> Double? {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return nil }
+        return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+            + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+    }
+    private var signpostIDs: [String: OSSignpostID] = [:]
+    private var emitsSignposts: Bool { ProcessInfo.processInfo.environment["OPENISLAND_SIGNPOSTS"] == "1" }
 
     private init(output: URL) {
         self.output = output
@@ -207,7 +219,13 @@ final class IslandDiagnostics {
 
     /// Explicit developer run only; no task is created in normal operation.
     func runPerformanceScript(on controller: NotchWindowController, environment: AppEnvironment) {
+        if let mode = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] {
+            runControlledBenchmark(mode: mode, controller: controller, environment: environment)
+            return
+        }
         let model = controller.model
+        let quick = ProcessInfo.processInfo.environment["OPENISLAND_PERFORMANCE_QUICK"] == "1"
+        let cycles = quick ? 20 : 40
         Task { @MainActor in
             let originalConfiguration = model.machine.configuration
             let originalDemoMode = model.machine.context.isDemoMode
@@ -235,7 +253,7 @@ final class IslandDiagnostics {
             model.send(.demoModeChanged(isOn: true))
             model.send(.selectTab(.nook))
             log("animated open-close start; epoch=\(Date().timeIntervalSince1970)")
-            for index in 0..<40 {
+            for index in 0..<cycles {
                 model.send(.tapped)
                 try? await Task.sleep(for: .seconds(0.4))
                 guard model.machine.isExpanded else {
@@ -252,16 +270,34 @@ final class IslandDiagnostics {
             }
             model.send(.escapePressed)
             model.cancelPendingEffects()
-            log("animated open-close finished; epoch=\(Date().timeIntervalSince1970); verified cycles=40; pending tasks=\(model.pendingEffectCount)")
+            log("animated open-close finished; epoch=\(Date().timeIntervalSince1970); verified cycles=\(cycles); pending tasks=\(model.pendingEffectCount)")
             model.send(.tapped)
             guard model.machine.isExpanded else { log("FAIL: static panel never expanded"); return }
             log("static expanded start; epoch=\(Date().timeIntervalSince1970)")
-            try? await Task.sleep(for: .seconds(30))
+            try? await Task.sleep(for: .seconds(quick ? 10 : 30))
             log("static expanded end; epoch=\(Date().timeIntervalSince1970)")
             model.send(.selectTab(.system))
             log("system panel start; epoch=\(Date().timeIntervalSince1970)")
-            try? await Task.sleep(for: .seconds(20))
+            try? await Task.sleep(for: .seconds(quick ? 12 : 20))
             log("system panel end; epoch=\(Date().timeIntervalSince1970); running=\(environment.system.isRunning)")
+            if ProcessInfo.processInfo.environment["OPENISLAND_PERFORMANCE_EXTENDED"] == "1" {
+                let tabs: [ExpandedTab] = [.media, .shelf, .clipboard, .notes, .nook, .system]
+                for (phase, delay, passes) in [("normal tabs", 0.65, 3), ("rapid tabs", 0.08, 5)] {
+                    log("\(phase) start; epoch=\(Date().timeIntervalSince1970)")
+                    for _ in 0..<passes {
+                        for tab in tabs {
+                            model.send(.selectTab(tab))
+                            try? await Task.sleep(for: .seconds(delay))
+                            guard model.presentation.expandedTab == tab else { log("FAIL: tab \(tab) did not activate"); return }
+                        }
+                    }
+                    log("\(phase) end; epoch=\(Date().timeIntervalSince1970)")
+                }
+                model.send(.selectTab(.media))
+                log("media start; epoch=\(Date().timeIntervalSince1970); playing=\(environment.media.isPlaying); title=\(environment.media.nowPlaying?.title ?? "none")")
+                try? await Task.sleep(for: .seconds(quick ? 12 : 20))
+                log("media end; epoch=\(Date().timeIntervalSince1970); playing=\(environment.media.isPlaying)")
+            }
             model.send(.escapePressed)
             model.cancelPendingEffects()
             if let value = ProcessInfo.processInfo.environment["OPENISLAND_PERFORMANCE_AUDIO_PID"], let pid = pid_t(value) {
@@ -273,15 +309,316 @@ final class IslandDiagnostics {
                     environment.audioMixer.setApplicationVolume(0.5, pid: pid)
                     try? await Task.sleep(for: .seconds(5))
                     log("audio route start; epoch=\(Date().timeIntervalSince1970); routes=\(environment.audioMixer.activeRouteCount); error=\(environment.audioMixer.error ?? "none")")
-                    try? await Task.sleep(for: .seconds(20))
+                    try? await Task.sleep(for: .seconds(quick ? 12 : 20))
                     log("audio route end; epoch=\(Date().timeIntervalSince1970); routes=\(environment.audioMixer.activeRouteCount); error=\(environment.audioMixer.error ?? "none")")
                 } else { log("SKIP: requested audio fixture is not playing") }
             }
             try? await Task.sleep(for: .seconds(2))
             log("idle start; epoch=\(Date().timeIntervalSince1970); system running=\(environment.system.isRunning); routes=\(environment.audioMixer.activeRouteCount); pending tasks=\(model.pendingEffectCount)")
-            try? await Task.sleep(for: .seconds(60))
+            try? await Task.sleep(for: .seconds(quick ? 40 : 60))
             log("performance finished; pending tasks=\(model.pendingEffectCount)")
         }
+    }
+
+    /// Developer-only: OPENISLAND_BENCHMARK_RAPID_MS sets the profile-rapid interval (20…1000 ms); otherwise the original 80 ms.
+    private static func benchmarkRapidDelay() -> Int {
+        guard let value = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_RAPID_MS"], let ms = Int(value),
+              (20...1000).contains(ms) else { return 80 }
+        return ms
+    }
+
+    /// Yalnızca geliştirici: `profile-rapid` tur sayısı (uzun süreli bellek ölçümü için). Geçersizse özgün 80.
+    private static func benchmarkRapidPasses() -> Int {
+        guard let value = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_PASSES"], let passes = Int(value),
+              (1...5000).contains(passes) else { return 80 }
+        return passes
+    }
+
+    /// Benchmark sekme sırası. Ortam değişkeni yoksa veya geçersiz bir ad içeriyorsa varsayılan sıra kullanılır.
+    private static func benchmarkTabs(default tabs: [ExpandedTab]) -> [ExpandedTab] {
+        guard let value = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_TABS"], !value.isEmpty else { return tabs }
+        let parsed = value.split(separator: ",").map { name in
+            ExpandedTab.allCases.first { String(describing: $0) == name.trimmingCharacters(in: .whitespaces) }
+        }
+        guard !parsed.isEmpty, parsed.allSatisfy({ $0 != nil }) else { return tabs }
+        return parsed.compactMap { $0 }
+    }
+
+    /// Repeatable developer-only workloads. No preferences, media controls or saved files are changed.
+    private func runControlledBenchmark(mode: String, controller: NotchWindowController, environment: AppEnvironment) {
+        if mode == "media-validation" || mode == "media-seek-validation" || mode == "media-quiet-validation" || mode == "media-pause-validation" {
+            runMediaValidation(controller: controller, environment: environment)
+            return
+        }
+        let model = controller.model
+        let seconds = max(305, min(1800, Double(ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_SECONDS"] ?? "305") ?? 305))
+        Task { @MainActor in
+            let originalDemo = model.machine.context.isDemoMode
+            let originalTab = model.machine.context.lastTab
+            defer {
+                model.send(.escapePressed)
+                model.cancelPendingEffects()
+                model.send(.demoModeChanged(isOn: originalDemo))
+                model.send(.selectTab(originalTab))
+            }
+            model.send(.escapePressed)
+            model.cancelPendingEffects()
+            model.send(.demoModeChanged(isOn: true))
+            try? await Task.sleep(for: .seconds(2))
+            // Developer-only: OPENISLAND_BENCHMARK_TABS=media,shelf,... overrides the original six-tab order.
+            let tabs = Self.benchmarkTabs(default: [.media, .shelf, .clipboard, .notes, .nook, .system])
+            log("controlled start; mode=\(mode); tabs=\(tabs.map { String(describing: $0) }.joined(separator: ",")); playing=\(environment.media.isPlaying); title=\(environment.media.nowPlaying?.title ?? "none")")
+            if mode == "open-close" {
+                // Developer-only: N aç/kapat döngüsü (demo modu kapalı, gerçek kapanma yolu). Animasyon akıcılığı
+                // karşılaştırması için; her açılış/kapanış bir Points of Interest aralığıdır.
+                model.send(.demoModeChanged(isOn: false))
+                let cycles = max(1, min(60, Int(ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_CYCLES"] ?? "12") ?? 12))
+                try? await Task.sleep(for: .seconds(1))
+                beginBenchmarkPhase("open-close")
+                let hover = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_HOVER"] == "1"
+                // OPENISLAND_BENCHMARK_TAB: açılacak sekme (varsayılan medya); ör. `nook`, uygulamanın önceden kurduğu sekme.
+                let tab = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_TAB"].flatMap(ExpandedTab.init(rawValue:)) ?? .media
+                for _ in 0..<cycles {
+                    beginBenchmarkPhase("open")
+                    model.send(.selectTab(tab))
+                    // Hover yolu: kabarma → gecikmeyle genişleme (kullanıcının adayı fareyle açması).
+                    model.send(hover ? .pointerEntered : .tapped)
+                    try? await Task.sleep(for: .seconds(1.5))
+                    endBenchmarkPhase("open")
+                    guard model.machine.isExpanded else { log("FAIL: open-close did not expand"); return }
+                    beginBenchmarkPhase("close")
+                    model.send(.escapePressed)
+                    model.send(.pointerExited)
+                    try? await Task.sleep(for: .seconds(1.5))
+                    endBenchmarkPhase("close")
+                    guard !model.machine.isExpanded else { log("FAIL: open-close did not collapse"); return }
+                }
+                endBenchmarkPhase("open-close")
+            } else if mode == "idle-compact" {
+                beginBenchmarkPhase("idle compact")
+                try? await Task.sleep(for: .seconds(seconds))
+                endBenchmarkPhase("idle compact")
+                guard !model.machine.isEngaged else { log("FAIL: compact idle became engaged"); return }
+            } else {
+                model.send(.selectTab(.nook))
+                model.send(.tapped)
+                try? await Task.sleep(for: .seconds(2))
+                guard model.machine.isExpanded else { log("FAIL: benchmark did not expand"); return }
+                if mode == "idle-expanded" {
+                    beginBenchmarkPhase("idle expanded")
+                    try? await Task.sleep(for: .seconds(seconds))
+                    endBenchmarkPhase("idle expanded")
+                    guard model.machine.isExpanded else { log("FAIL: expanded idle closed"); return }
+                } else if mode == "tab-speeds" || mode == "profile-rapid" {
+                    for tab in tabs {
+                        model.send(.selectTab(tab))
+                        try? await Task.sleep(for: .milliseconds(350))
+                    }
+                    let delays = mode == "profile-rapid" ? [Self.benchmarkRapidDelay()] : [650, 300, 150, 80, 50]
+                    let passes = mode == "profile-rapid" ? Self.benchmarkRapidPasses() : 9
+                    for delay in delays {
+                        let phase = "speed \(delay)ms"
+                        beginBenchmarkPhase(phase)
+                        var selected = 0
+                        var synchronousCPU: Double = 0
+                        for _ in 0..<passes {
+                            for tab in tabs {
+                                if emitsSignposts {
+                                    os_signpost(.event, log: signpostLog, name: "Tab selected", "%{public}@", String(describing: tab) as NSString)
+                                }
+                                let cpu = processCPUSeconds() ?? 0
+                                model.send(.selectTab(tab))
+                                synchronousCPU += (processCPUSeconds() ?? cpu) - cpu
+                                selected += 1
+                                try? await Task.sleep(for: .milliseconds(delay))
+                                guard model.presentation.expandedTab == tab, model.machine.isExpanded else {
+                                    log("FAIL: speed selection did not activate \(tab)"); return
+                                }
+                            }
+                        }
+                        endBenchmarkPhase(phase)
+                        log("speed selections=\(selected); delay_ms=\(delay); synchronous_cpu=\(synchronousCPU); pending=\(model.pendingEffectCount); system_running=\(environment.system.isRunning); camera=\(environment.mirror.state); routes=\(environment.audioMixer.activeRouteCount)")
+                    }
+                } else if mode == "suite" || mode == "tabs" {
+                    // Equal warm-up for both binaries; first-open cost remains in the separate cycle test.
+                    for tab in tabs {
+                        model.send(.selectTab(tab))
+                        try? await Task.sleep(for: .milliseconds(350))
+                    }
+                    for round in 1...3 {
+                        for (name, delay, passes) in [("normal tabs", 0.65, 3), ("rapid tabs", 0.08, 5)] {
+                            let phase = "\(name) \(round)"
+                            beginBenchmarkPhase(phase)
+                            for _ in 0..<passes {
+                                for tab in tabs {
+                                    if emitsSignposts {
+                                        os_signpost(.event, log: signpostLog, name: "Tab selected", "%{public}@", String(describing: tab) as NSString)
+                                    }
+                                    model.send(.selectTab(tab))
+                                    try? await Task.sleep(for: .seconds(delay))
+                                    guard model.presentation.expandedTab == tab else { log("FAIL: \(tab) did not activate"); return }
+                                }
+                            }
+                            endBenchmarkPhase(phase)
+                        }
+                    }
+                    if mode == "suite" {
+                        for tab in [ExpandedTab.system, .media] {
+                            model.send(.selectTab(tab))
+                            let phase = "static \(tab)"
+                            beginBenchmarkPhase(phase)
+                            try? await Task.sleep(for: .seconds(30))
+                            endBenchmarkPhase(phase)
+                        }
+                        model.send(.escapePressed)
+                        model.send(.selectTab(.nook))
+                        beginBenchmarkPhase("open close")
+                        for _ in 0..<20 {
+                            model.send(.tapped)
+                            try? await Task.sleep(for: .milliseconds(400))
+                            guard model.machine.isExpanded else { log("FAIL: cycle did not expand"); return }
+                            model.send(.escapePressed)
+                            try? await Task.sleep(for: .milliseconds(400))
+                            guard !model.machine.isEngaged else { log("FAIL: cycle did not close"); return }
+                        }
+                        endBenchmarkPhase("open close")
+                    }
+                } else { log("FAIL: unknown benchmark mode \(mode)"); return }
+            }
+            log("controlled finished; mode=\(mode); playing=\(environment.media.isPlaying); system samples=\(environment.system.sampleCount); storage reads=\(environment.system.storageReadCount); pending tasks=\(model.pendingEffectCount)")
+        }
+    }
+
+    /// Bounded, opt-in evidence only. Spotify commands belong to the external test driver.
+    /// No demo mode: the product's actual compact/session behaviour remains enabled.
+    private func runMediaValidation(controller: NotchWindowController, environment: AppEnvironment) {
+        Task { @MainActor in
+            let model = controller.model
+            let originalTab = model.machine.context.lastTab
+            let originalPin = model.isPinned
+            var events = 0
+            let observer = DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name("com.spotify.client.PlaybackStateChanged"), object: nil, queue: .main
+            ) { _ in MainActor.assumeIsolated {
+                events += 1
+                self.log("media event; epoch=\(Date().timeIntervalSince1970); index=\(events)")
+                if self.emitsSignposts {
+                    os_signpost(.event, log: self.signpostLog, name: "Media notification")
+                }
+            } }
+            defer {
+                DistributedNotificationCenter.default().removeObserver(observer)
+                if model.isPinned != originalPin { model.send(.togglePin) }
+                model.send(.escapePressed)
+                model.send(.selectTab(originalTab))
+            }
+            @MainActor func snapshot(_ phase: String) {
+                @MainActor func descendants(_ view: NSView) -> [NSView] {
+                    [view] + view.subviews.flatMap(descendants)
+                }
+                let waves = controller.panel.contentView.map(descendants)?.compactMap { $0 as? WaveformLayerView } ?? []
+                let pulses = waves.flatMap { $0.layer?.sublayers ?? [] }.filter { $0.animation(forKey: "pulse") != nil }.count
+                let info = environment.media.nowPlaying
+                let row: [String: Any] = [
+                    "epoch": Date().timeIntervalSince1970, "phase": phase,
+                    "pid": ProcessInfo.processInfo.processIdentifier,
+                    "binary": Bundle.main.executablePath ?? "", "expanded": model.machine.isExpanded,
+                    "presentation": String(describing: model.presentation), "tab": String(describing: model.presentation.expandedTab),
+                    "title": info?.title ?? "", "artist": info?.artist ?? "", "album": info?.album ?? "",
+                    "source": environment.media.activeSourceID ?? "", "playing": environment.media.isPlaying,
+                    "duration": info?.duration ?? 0, "elapsed": info?.elapsed(at: Date()) ?? 0,
+                    "artworkBytes": info?.artworkData?.count ?? 0,
+                    "artworkSHA256": info?.artworkData.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "",
+                    "decodedArtwork": environment.media.artwork != nil,
+                    "waveformViews": waves.count, "pulseLayers": pulses, "spotifyEvents": events,
+                    "pendingEffects": model.pendingEffectCount,
+                    "cameraState": String(describing: environment.mirror.state),
+                    "mixerRoutes": environment.audioMixer.activeRouteCount
+                ]
+                if let data = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]),
+                   let text = String(data: data, encoding: .utf8) { log("media witness " + text) }
+            }
+            try? await Task.sleep(for: .seconds(3))
+            let seekOnly = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] == "media-seek-validation"
+            let pauseValidation = ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] == "media-pause-validation"
+            let quiet = pauseValidation || ProcessInfo.processInfo.environment["OPENISLAND_BENCHMARK_V2"] == "media-quiet-validation"
+            let phases = pauseValidation ? [("playing compact", false, 20), ("playing expanded", true, 20),
+                                             ("paused compact", false, 75), ("paused expanded", true, 60)]
+                : quiet ? [("playing compact", false, 30), ("playing expanded", true, 30),
+                                  ("paused compact", false, 30), ("paused expanded", true, 30)]
+                : seekOnly ? [("track seek", true, 45)] : [
+                ("playing compact", false, 60), ("playing expanded", true, 45),
+                ("paused compact", false, 30), ("paused expanded", true, 30),
+                ("track seek", true, 45), ("sustained compact", false, 180)
+            ]
+            for (phase, expanded, seconds) in phases {
+                if model.isPinned { model.send(.togglePin) }
+                model.send(.escapePressed)
+                model.send(.selectTab(.media))
+                if expanded { model.send(.tapped); model.send(.togglePin) }
+                // Let the spring settle; no hover delay or product timing changes.
+                try? await Task.sleep(for: .seconds(1))
+                beginBenchmarkPhase("media " + phase)
+                if quiet {
+                    snapshot(phase)
+                    try? await Task.sleep(for: .seconds(seconds))
+                } else {
+                for tick in 0..<seconds {
+                    if phase == "track seek", tick == 32 || tick == 39 {
+                        let position: Double = tick == 32 ? 45 : 10
+                        environment.media.seek(to: position)
+                        log("media control seek=\(position); epoch=\(Date().timeIntervalSince1970)")
+                    }
+                    snapshot(phase)
+                    try? await Task.sleep(for: .seconds(1))
+                }
+                }
+                snapshot(phase)
+                endBenchmarkPhase("media " + phase)
+            }
+            if seekOnly || quiet { log("media validation finished; events=\(events)"); return }
+            model.send(.escapePressed)
+            model.send(.selectTab(.media))
+            model.send(.tapped)
+            try? await Task.sleep(for: .seconds(1))
+            // Focus UI is safe without starting its timer. Camera and mixer are intentionally excluded.
+            let tabs: [ExpandedTab] = [.nook, .media, .shelf, .clipboard, .focus, .notes, .system]
+            for (phase, delay) in [("media normal seven tabs", 0.65), ("media rapid seven tabs", 0.08)] {
+                beginBenchmarkPhase(phase)
+                for _ in 0..<3 {
+                    for tab in tabs {
+                        model.send(.selectTab(tab))
+                        try? await Task.sleep(for: .seconds(delay))
+                        guard model.presentation.expandedTab == tab else { log("FAIL: media tab did not activate"); return }
+                    }
+                }
+                endBenchmarkPhase(phase)
+            }
+            log("media validation finished; events=\(events)")
+        }
+    }
+
+    private func beginBenchmarkPhase(_ name: String) {
+        log("\(name) start; epoch=\(Date().timeIntervalSince1970)")
+        benchmarkCPUStart[name] = processCPUSeconds()
+        guard emitsSignposts else { return }
+        let id = OSSignpostID(log: signpostLog)
+        signpostIDs[name] = id
+        os_signpost(.begin, log: signpostLog, name: "Benchmark phase", signpostID: id, "%{public}@", name as NSString)
+    }
+
+    private func endBenchmarkPhase(_ name: String) {
+        let cpu = processCPUSeconds()
+        let start = benchmarkCPUStart.removeValue(forKey: name)
+        let suffix: String
+        if let cpu, let start, cpu >= start {
+            suffix = "; cpu_seconds=\(cpu - start)"
+        } else {
+            suffix = "; cpu_seconds=unavailable"
+        }
+        log("\(name) end; epoch=\(Date().timeIntervalSince1970)\(suffix)")
+        guard let id = signpostIDs.removeValue(forKey: name) else { return }
+        os_signpost(.end, log: signpostLog, name: "Benchmark phase", signpostID: id, "%{public}@", name as NSString)
     }
 
     func runMixerScript(environment: AppEnvironment, pid: pid_t) {

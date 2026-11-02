@@ -27,6 +27,7 @@ final class DockPreviewController {
     private var captureWindows: [UUID: SCWindow] = [:]
     private var captureQueue: [UUID] = []
     private var requestedImages: Set<UUID> = []
+    private var resolvingCaptureWindows = false
     private var generation: UInt64 = 0
     private var lastProbeTime: TimeInterval = 0
     private var panel: NSPanel?
@@ -37,6 +38,7 @@ final class DockPreviewController {
     private var previewEdge: DockPreviewRules.Edge?
     private let accessibilityTrusted: () -> Bool
     private let screenCaptureAllowed: () -> Bool
+    private let captureCatalog: @MainActor (pid_t) async throws -> [SCWindow]
     var onRequestScreenAccess: (() -> Void)?
 
     // Lifecycle diagnostics used by the native regression check, never periodically sampled.
@@ -54,10 +56,14 @@ final class DockPreviewController {
     private(set) var dismissalCount = 0
 
     init(accessibilityTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
-         screenCaptureAllowed: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() }) {
+         screenCaptureAllowed: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
+         captureCatalog: @escaping @MainActor (pid_t) async throws -> [SCWindow] = DockPreviewController.loadCaptureCatalog) {
         self.accessibilityTrusted = accessibilityTrusted
         self.screenCaptureAllowed = screenCaptureAllowed
+        self.captureCatalog = captureCatalog
     }
+
+    private var dismissMonitor: Any?
 
     func configure(enabled: Bool) {
         self.enabled = enabled
@@ -68,9 +74,16 @@ final class DockPreviewController {
         guard enabled && accessibilityTrusted() else { stop(); return }
         guard globalMonitor == nil else { return }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]
+            matching: .mouseMoved
         ) { [weak self] event in
-            MainActor.assumeIsolated { self?.handle(event) }
+            MainActor.assumeIsolated {
+                guard let self, self.enabled else { return }
+                let point = event.locationInWindow
+                if !self.isVisible && self.target == nil && self.showTask == nil && self.probeTask == nil {
+                    guard DockPreviewRules.nearDockEdge(point, screens: self.screenFrames) else { return }
+                }
+                self.pointerMoved(to: point)
+            }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]
@@ -79,7 +92,15 @@ final class DockPreviewController {
                 if event.type == .keyDown {
                     if event.keyCode == 53, self?.isVisible == true { self?.dismiss(); return true }
                     if self?.target != nil { self?.dismiss() }
-                } else { self?.handle(event) }
+                } else if event.type == .mouseMoved {
+                    let point = NSEvent.mouseLocation
+                    if self?.isVisible != true && self?.target == nil && self?.showTask == nil && self?.probeTask == nil {
+                        guard let screens = self?.screenFrames, DockPreviewRules.nearDockEdge(point, screens: screens) else { return false }
+                    }
+                    self?.pointerMoved(to: point)
+                } else if self?.target != nil || self?.isVisible == true {
+                    self?.handleDismissEvent(event)
+                }
                 return false
             }
             return consumed ? nil : event
@@ -92,8 +113,10 @@ final class DockPreviewController {
         dismiss()
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        if let dismissMonitor { NSEvent.removeMonitor(dismissMonitor) }
         globalMonitor = nil
         localMonitor = nil
+        dismissMonitor = nil
         workspaceObservers.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
         workspaceObservers.removeAll()
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
@@ -106,6 +129,8 @@ final class DockPreviewController {
     func dismiss() {
         // Global clicks, drags and Space notifications also arrive with no preview.
         // An already empty service needs neither cancellation nor observable writes.
+        if let dismissMonitor { NSEvent.removeMonitor(dismissMonitor) }
+        dismissMonitor = nil
         guard target != nil || showTask != nil || dismissTask != nil || probeTask != nil
             || panel?.contentView != nil || !captureTasks.isEmpty || !captureQueue.isEmpty else { return }
         dismissalCount += 1
@@ -118,6 +143,7 @@ final class DockPreviewController {
         captureQueue.removeAll()
         captureWindows.removeAll()
         requestedImages.removeAll()
+        resolvingCaptureWindows = false
         target = nil
         previewEdge = nil
         panel?.orderOut(nil)
@@ -152,13 +178,22 @@ final class DockPreviewController {
             }
     }
 
-    private func handle(_ event: NSEvent) {
+    private func attachDismissMonitor() {
+        guard dismissMonitor == nil else { return }
+        dismissMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .leftMouseDragged, .rightMouseDragged, .keyDown, .scrollWheel]
+        ) { [weak self] event in
+            MainActor.assumeIsolated { self?.handleDismissEvent(event) }
+        }
+    }
+
+    private func handleDismissEvent(_ event: NSEvent) {
         guard enabled else { return }
         if event.type == .keyDown {
             if target != nil { dismiss() }
             return
         }
-        let point = event.cgEvent.map { appKitPoint($0.location) } ?? NSEvent.mouseLocation
+        let point = event.window == nil ? event.locationInWindow : NSEvent.mouseLocation
         if event.type == .scrollWheel {
             if isVisible && panel?.frame.contains(point) != true { dismiss() }
             return
@@ -168,7 +203,15 @@ final class DockPreviewController {
             if !isVisible || panel?.frame.contains(point) != true { dismiss() }
             return
         }
-        pointerMoved(to: point)
+    }
+
+    private func handle(_ event: NSEvent) {
+        guard enabled else { return }
+        if event.type == .mouseMoved {
+            pointerMoved(to: NSEvent.mouseLocation)
+        } else {
+            handleDismissEvent(event)
+        }
     }
 
     /// Separate entry point lets native checks exercise the edge gate without moving the user's cursor.
@@ -180,9 +223,17 @@ final class DockPreviewController {
             cancelProbe(); cancelDismiss(); return
         }
         guard DockPreviewRules.nearDockEdge(point, screens: screenFrames) else {
-            cancelProbe()
-            showTask?.cancel(); showTask = nil
-            if isVisible { scheduleDismiss() } else { target = nil }
+            if isVisible {
+                cancelProbe()
+                showTask?.cancel()
+                showTask = nil
+                scheduleDismiss()
+            } else if target != nil || showTask != nil || probeTask != nil {
+                cancelProbe()
+                showTask?.cancel()
+                showTask = nil
+                target = nil
+            }
             return
         }
         let now = ProcessInfo.processInfo.systemUptime
@@ -217,15 +268,19 @@ final class DockPreviewController {
         }
         dismiss()
         target = next
+        attachDismissMonitor()
         let token = generation
         showTask = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(DockPreviewRules.hoverDelay)) } catch { return }
+            if DockPreviewRules.hoverDelay > 0 {
+                do { try await Task.sleep(for: .seconds(DockPreviewRules.hoverDelay)) } catch { return }
+            }
             guard let self else { return }
             defer { if self.generation == token { self.showTask = nil } }
             guard !Task.isCancelled, self.enabled, self.generation == token,
                   let live = self.dockTarget(at: NSEvent.mouseLocation),
                   live.app.processIdentifier == next.app.processIdentifier else { return }
             self.target = live
+            self.attachDismissMonitor()
             await self.present(live, token: token)
         }
     }
@@ -256,22 +311,33 @@ final class DockPreviewController {
         let cgPoint = coreGraphicsPoint(point)
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(dock, Float(cgPoint.x), Float(cgPoint.y), &hit) == .success,
-              let hit, attribute(hit, kAXSubroleAttribute) as? String == "AXApplicationDockItem",
-              let url = attribute(hit, kAXURLAttribute) as? URL else { return nil }
+              let hit else { return nil }
+        let names = [kAXSubroleAttribute, kAXURLAttribute, kAXPositionAttribute, kAXSizeAttribute]
+        var rawValues: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(hit, names as CFArray, [], &rawValues) == .success,
+              let values = rawValues as? [AnyObject], values.count == names.count,
+              values[0] as? String == "AXApplicationDockItem", let url = values[1] as? URL,
+              CFGetTypeID(values[2]) == AXValueGetTypeID(), CFGetTypeID(values[3]) == AXValueGetTypeID() else { return nil }
+        var origin = CGPoint.zero, dimensions = CGSize.zero
+        guard AXValueGetValue(unsafeDowncast(values[2], to: AXValue.self), .cgPoint, &origin),
+              AXValueGetValue(unsafeDowncast(values[3], to: AXValue.self), .cgSize, &dimensions) else { return nil }
+        let rect = CGRect(origin: origin, size: dimensions)
+        // Normalize the hit URL once, rather than once per running application.
+        let standardizedTargetURL = url.standardizedFileURL
         let app: NSRunningApplication?
         if let current = target?.app, !current.isTerminated,
-           current.bundleURL?.standardizedFileURL == url.standardizedFileURL {
+           current.bundleURL?.standardizedFileURL == standardizedTargetURL {
             // Pointer motion over the same Dock item needs fresh hit geometry, but
             // not another LaunchServices enumeration of every running application.
             app = current
         } else {
             applicationReadCount += 1
             let apps = NSWorkspace.shared.runningApplications
-            app = apps.first { $0.bundleURL?.standardizedFileURL == url.standardizedFileURL }
+            app = apps.first { $0.bundleURL?.standardizedFileURL == standardizedTargetURL }
                 ?? Bundle(url: url)?.bundleIdentifier.flatMap { id in apps.first { $0.bundleIdentifier == id } }
         }
         guard let app, !app.isTerminated, app.activationPolicy == .regular,
-              let rect = frame(of: hit), rect.width > 0, rect.height > 0 else { return nil }
+              rect.width > 0, rect.height > 0 else { return nil }
         let anchor = CGRect(x: rect.minX, y: primaryTop - rect.maxY, width: rect.width, height: rect.height)
         guard anchor.insetBy(dx: -2, dy: -2).contains(point) else { return nil }
         return Target(app: app, anchor: anchor)
@@ -279,23 +345,11 @@ final class DockPreviewController {
 
     private func present(_ target: Target, token: UInt64) async {
         let windows = readWindows(target.app)
-        guard !windows.isEmpty else { return }
-        var available: [SCWindow] = []
-        if screenAccess {
-            do {
-                let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
-                available = content.windows.filter { $0.owningApplication?.processID == target.app.processIdentifier && $0.windowLayer == 0 }
-                    .sorted { $0.isOnScreen && !$1.isOnScreen }
-            } catch { /* Keep actionable window cards when macOS refuses a snapshot. */ }
-        }
-        guard !Task.isCancelled, enabled, generation == token, !target.app.isTerminated,
+        guard !windows.isEmpty, !Task.isCancelled, enabled, generation == token, !target.app.isTerminated,
               let screen = screen(containing: target.anchor) else { return }
-        for window in windows {
-            if let index = DockPreviewRules.captureIndex(for: .init(title: window.title, frame: window.frame),
-                candidates: available.map { .init(title: $0.title ?? "", frame: $0.frame) }) {
-                captureWindows[window.id] = available.remove(at: index)
-            }
-        }
+        // Window cards are actionable immediately. A slow ScreenCaptureKit catalogue
+        // must not delay the panel; visible-card requests wait for this one lookup.
+        resolvingCaptureWindows = screenAccess
         model.applicationName = target.app.localizedName ?? "Uygulama"
         model.applicationIcon = target.app.icon
         model.windows = windows
@@ -326,19 +380,48 @@ final class DockPreviewController {
             panel.acceptsMouseMovedEvents = true
             self.panel = panel
         }
+        #if OPENISLAND_DENEY
+        // AppKit deneyi: aynı model ve yerleşimle AppKit paneli (Deney/Sources/Panels/DockPreviewPanelView.swift).
+        panel?.contentView = DockPreviewPanelView(model: model, size: frame.size)
+        #else
         let hosting = NSHostingView(rootView: DockPreviewPanel(model: model).frame(width: frame.width, height: frame.height))
         // A wrapping permission message must not replace our screen-clamped panel geometry
         // with SwiftUI's unconstrained intrinsic height.
         hosting.sizingOptions = []
         hosting.frame = CGRect(origin: .zero, size: frame.size)
         panel?.contentView = hosting
+        #endif
         panel?.setFrame(frame, display: false)
         panel?.orderFrontRegardless()
+
+        guard screenAccess else { return }
+        let availableWindows = (try? await captureCatalog(target.app.processIdentifier)) ?? []
+        guard !Task.isCancelled, enabled, generation == token, !target.app.isTerminated else { return }
+        var available = availableWindows
+        for window in windows {
+            if let index = DockPreviewRules.captureIndex(for: .init(title: window.title, frame: window.frame),
+                candidates: available.map { .init(title: $0.title ?? "", frame: $0.frame) }) {
+                captureWindows[window.id] = available.remove(at: index)
+            }
+        }
+        resolvingCaptureWindows = false
+        for id in requestedImages { enqueueImage(id) }
+    }
+
+    private static func loadCaptureCatalog(for pid: pid_t) async throws -> [SCWindow] {
+        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
+        return content.windows.filter { $0.owningApplication?.processID == pid && $0.windowLayer == 0 }
+            .sorted { $0.isOnScreen && !$1.isOnScreen }
     }
 
     private func requestImage(_ id: UUID) {
         guard !requestedImages.contains(id), enabled else { return }
         requestedImages.insert(id)
+        guard !resolvingCaptureWindows else { return }
+        enqueueImage(id)
+    }
+
+    private func enqueueImage(_ id: UUID) {
         guard captureWindows[id] != nil else { model.unavailable.insert(id); return }
         captureQueue.append(id)
         startCaptures()

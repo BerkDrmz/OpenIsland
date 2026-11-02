@@ -46,18 +46,28 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
     static let acceptedTypes: [UTType] = [.fileURL, .image, .data, .url, .plainText]
     @ObservationIgnored private let storeURL: URL
     @ObservationIgnored private var thumbnailsRequested = false
+    @ObservationIgnored private var thumbnailRequests: [URL: (id: UUID, token: UUID)] = [:]
     @ObservationIgnored private let promiseQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.qualityOfService = .userInitiated
         return queue
     }()
 
+    @ObservationIgnored private let generateThumbnail: @MainActor (URL, CGFloat, @escaping @Sendable (CGImage?) -> Void) -> Void
     private let storage: URL
 
     /// Explicit paths allow integration checks without touching the user's shelf or bookmarks.
-    init(storage: URL? = nil, persistenceURL: URL? = nil) {
+    init(storage: URL? = nil, persistenceURL: URL? = nil,
+         generateThumbnail: @escaping @MainActor (URL, CGFloat, @escaping @Sendable (CGImage?) -> Void) -> Void = ShelfStore.generateThumbnail) {
+        self.generateThumbnail = generateThumbnail
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        self.storage = storage ?? base.appendingPathComponent("io.github.openisland/Shelf", isDirectory: true)
+        let values = ProcessInfo.processInfo.environment
+        let redirected = values["OPENISLAND_DIAGNOSTICS"] != nil && values["OPENISLAND_TEST_SUPPORT"]?.hasPrefix("/") == true
+        // A redirected persistence file alone is not isolation: temporary drops
+        // must not write into the daily application's shared Shelf cache either.
+        self.storage = storage ?? (redirected
+            ? AppPaths.support.appendingPathComponent("Caches/Shelf", isDirectory: true)
+            : base.appendingPathComponent("io.github.openisland/Shelf", isDirectory: true))
         self.storeURL = persistenceURL ?? AppPaths.support.appendingPathComponent("shelf.json")
         super.init()
         try? FileManager.default.createDirectory(at: self.storage, withIntermediateDirectories: true)
@@ -152,11 +162,15 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
     /// Sensör penceresine (AppKit drag destination) doğrudan bırakılan içerik.
     @discardableResult
     func ingest(pasteboard: NSPasteboard) -> Bool {
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+        let urls = Self.fileURLs(from: pasteboard)
+        if !urls.isEmpty {
             urls.forEach { add($0, temporary: false) }
             selectDropped(urls)
             return true
         }
+        // A named file whose URL cannot be decoded must not silently become a
+        // text/image export. Keep the source filename, extension and bytes intact.
+        if pasteboard.availableType(from: [.fileURL]) != nil { return false }
         // File promise (Fotoğraflar, Mail): dosya henüz yok; kaynak uygulama hedef klasöre yazar.
         if let receivers = pasteboard.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver], !receivers.isEmpty {
             for receiver in receivers {
@@ -174,11 +188,33 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
         let representations = [NSPasteboard.PasteboardType.png, .tiff].compactMap { type in
             pasteboard.data(forType: type).map { (type.rawValue, $0) }
         }
-        guard let image = ShelfImportRules.imageRepresentation(from: Dictionary(uniqueKeysWithValues: representations)) else { return false }
-        let target = Self.uniqueURL(in: storage, name: "Görsel-\(UUID().uuidString.prefix(6))", extension: image.fileExtension)
-        guard (try? image.data.write(to: target)) != nil else { return false }
-        add(target, temporary: true)
-        return true
+        if let image = ShelfImportRules.imageRepresentation(from: Dictionary(uniqueKeysWithValues: representations)) {
+            let target = Self.uniqueURL(in: storage, name: "Görsel-\(UUID().uuidString.prefix(6))", extension: image.fileExtension)
+            guard (try? image.data.write(to: target)) != nil else { return false }
+            add(target, temporary: true)
+            return true
+        }
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           let url = urls.first, !url.isFileURL {
+            addLink(url)
+            return true
+        }
+        if let text = pasteboard.string(forType: .string), !text.isEmpty {
+            addText(text)
+            return true
+        }
+        return false
+    }
+
+    /// Validate the advertised representation before NSURL's pasteboard reader
+    /// can coerce malformed/non-file strings into relative file paths. Still use
+    /// the native reader afterward to retain its sandbox-extension handling.
+    static func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        for item in pasteboard.pasteboardItems ?? [] where item.types.contains(.fileURL) {
+            guard let raw = item.string(forType: .fileURL), URL(string: raw)?.isFileURL == true else { return [] }
+        }
+        return (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? [])
+            .filter(\.isFileURL)
     }
 
     func add(_ url: URL, temporary: Bool) {
@@ -240,7 +276,13 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
     func panelDidAppear() {
         for index in items.indices {
             let exists = FileManager.default.isReadableFile(atPath: items[index].url.path)
+            let recovered = items[index].isMissing && exists
             if items[index].isMissing == exists { items[index].isMissing = !exists }
+            if recovered && thumbnailsRequested { loadThumbnail(for: items[index].url) }
+            if !exists {
+                thumbnails[items[index].url] = nil
+                thumbnailRequests[items[index].url] = nil
+            }
         }
         if !thumbnailsRequested {
             thumbnailsRequested = true
@@ -258,13 +300,18 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
         let ids = Set(removed.map(\.id))
         for item in removed {
             thumbnails[item.url] = nil
+            thumbnailRequests[item.url] = nil
             if item.isTemporaryCopy {
                 // Only OpenIsland-owned cache files may be deleted by removing a shelf item.
-                let root = storage.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+                let storagePath = storage.resolvingSymlinksInPath().standardizedFileURL.path
+                let root = storagePath + "/"
                 guard item.url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root) else { continue }
                 try? FileManager.default.removeItem(at: item.url)
                 let folder = item.url.deletingLastPathComponent()
-                if folder != storage, (try? FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty) == true {
+                // URL equality also compares directory/trailing-slash spelling.
+                // Never remove the cache root just because its URL spelling differs.
+                if folder.resolvingSymlinksInPath().standardizedFileURL.path != storagePath,
+                   (try? FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty) == true {
                     try? FileManager.default.removeItem(at: folder)
                 }
             }
@@ -464,17 +511,32 @@ final class ShelfStore: NSObject, NSSharingServiceDelegate {
 
     // MARK: - Önizleme
 
-    private func loadThumbnail(for url: URL) {
-        thumbnails[url] = NSWorkspace.shared.icon(forFile: url.path) // anında yer tutucu
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
+    private static func generateThumbnail(_ url: URL, _ scale: CGFloat, completion: @escaping @Sendable (CGImage?) -> Void) {
         let request = QLThumbnailGenerator.Request(
             fileAt: url, size: CGSize(width: 64, height: 64), scale: scale, representationTypes: .thumbnail
         )
-        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { [weak self] representation, _ in
-            guard let cgImage = representation?.cgImage else { return }
-            let size = NSSize(width: CGFloat(cgImage.width) / scale, height: CGFloat(cgImage.height) / scale)
+        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { representation, _ in
+            completion(representation?.cgImage)
+        }
+    }
+
+    private func loadThumbnail(for url: URL) {
+        guard let item = items.first(where: { $0.url == url && !$0.isMissing }) else { return }
+        let id = item.id
+        let token = UUID()
+        thumbnailRequests[url] = (id, token)
+        thumbnails[url] = NSWorkspace.shared.icon(forFile: url.path) // anında yer tutucu
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        generateThumbnail(url, scale) { [weak self] cgImage in
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self?.thumbnails[url] = NSImage(cgImage: cgImage, size: size) }
+                MainActor.assumeIsolated {
+                    guard let self, self.thumbnailRequests[url]?.token == token,
+                          self.items.contains(where: { $0.id == id && $0.url == url && !$0.isMissing }) else { return }
+                    self.thumbnailRequests[url] = nil
+                    guard let cgImage else { return }
+                    let size = NSSize(width: CGFloat(cgImage.width) / scale, height: CGFloat(cgImage.height) / scale)
+                    self.thumbnails[url] = NSImage(cgImage: cgImage, size: size)
+                }
             }
         }
     }

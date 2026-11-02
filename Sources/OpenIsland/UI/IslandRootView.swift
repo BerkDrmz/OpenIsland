@@ -36,7 +36,7 @@ struct IslandRootView: View {
             style: metrics.style, topRadius: surface.layout.topCornerRadius, bottomRadius: surface.layout.bottomCornerRadius))
 
         IslandStateContent(presentation: presentation, expandedIsVisible: surface.presentation.isExpanded,
-                           model: model, environment: environment, dropZone: dropZone)
+                           model: model, environment: environment, dropZone: model.nativeDropZone ?? dropZone)
             // Content keeps its own settled proposal while only the outer surface morphs.
             .fixedSize()
             .frame(width: canvas.width, height: canvas.height, alignment: .top)
@@ -77,8 +77,21 @@ struct IslandRootView: View {
     }
 
     private func morph(to target: IslandSurfaceState) {
+        guard target != surface else { return }
         pendingOpening?.cancel()
         pendingOpening = nil
+        if target.presentation.isExpanded && surface.presentation.isExpanded {
+            if target.layout == surface.layout {
+                surface = target
+                return
+            } else {
+                let style = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? MotionStyle.reduced : model.motionStyle
+                withAnimation(IslandMotion.resize(style: style)) {
+                    surface = target
+                }
+                return
+            }
+        }
         let update = {
             let style = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? MotionStyle.reduced : model.motionStyle
             withAnimation(IslandMotion.morph(from: surface.presentation, to: target.presentation, style: style)) {
@@ -147,16 +160,18 @@ private struct IslandStateContent: View {
                 DropZoneView(zone: dropZone, metrics: metrics)
                     .transition(.islandReveal(motionStyle))
 
-            case .expanded(let tab):
-                ExpandedIslandView(tab: tab, model: model, environment: environment)
-                    // Reveal only when the prepared surface starts moving. The content uses
-                    // the preview's opacity timing without an additional blur pass.
-                    .opacity(expandedIsVisible ? 1 : 0)
-                    .animation(motionStyle == .expressive ? IslandMotion.livelyContentIn : IslandMotion.contentIn,
-                               value: expandedIsVisible)
-                    .allowsHitTesting(expandedIsVisible)
-                    .transition(.asymmetric(insertion: .identity,
-                        removal: .opacity.animation(motionStyle == .expressive ? IslandMotion.livelyContentOut : IslandMotion.contentOut)))
+            case .expanded:
+                if let tab = presentation.expandedTab {
+                    ExpandedIslandView(tab: tab, model: model, environment: environment)
+                        // Reveal only when the prepared surface starts moving. The content uses
+                        // the preview's opacity timing without an additional blur pass.
+                        .opacity(expandedIsVisible ? 1 : 0)
+                        .animation(motionStyle == .expressive ? IslandMotion.livelyContentIn : IslandMotion.contentIn,
+                                   value: expandedIsVisible)
+                        .allowsHitTesting(expandedIsVisible)
+                        .transition(.asymmetric(insertion: .identity,
+                            removal: .opacity.animation(motionStyle == .expressive ? IslandMotion.livelyContentOut : IslandMotion.contentOut)))
+                }
             }
         }
     }
@@ -204,12 +219,10 @@ private struct MediaLayers: View {
 
 // MARK: - Sürükle-bırak
 
-enum DropZone: Equatable {
-    case shelf, airDrop
-}
+typealias DropZone = IslandDropZone
 
-/// Adanın tek drop hedefi (native `NSDraggingDestination` üzerinden). Global fare izleyicisi yok:
-/// sürükleme ada penceresine girdiğinde sistem bu delegeyi çağırır.
+/// SwiftUI drop fallback. The managed native receiver handles isolated overlay
+/// Spaces; both paths retain the original file URL rather than a text export.
 private struct IslandDropDelegate: DropDelegate {
     let model: IslandViewModel
     let shelf: ShelfStore
@@ -241,11 +254,17 @@ private struct IslandDropDelegate: DropDelegate {
         zone = nil
         if target == .airDrop {
             let shelf = shelf
-            ShelfStore.loadFileURLs(from: providers) { urls in shelf.airDrop(urls) }
+            let nativeURLs = ShelfStore.fileURLs(from: NSPasteboard(name: .drag))
+            if !nativeURLs.isEmpty { shelf.airDrop(nativeURLs) }
+            else { ShelfStore.loadFileURLs(from: providers) { urls in shelf.airDrop(urls) } }
             model.send(.fileDragEnded(dropped: false))
             return true
         }
-        let accepted = shelf.ingest(providers)
+        // AppKit may expose a dragged .txt file as a plain-text provider.
+        // Prefer the original native file URL over an exported representation.
+        let pasteboard = NSPasteboard(name: .drag)
+        let accepted = pasteboard.availableType(from: [.fileURL]) != nil
+            ? shelf.ingest(pasteboard: pasteboard) : shelf.ingest(providers)
         model.send(.fileDragEnded(dropped: accepted))
         return accepted
     }

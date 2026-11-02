@@ -4,6 +4,17 @@ import IslandCore
 
 /// CPU, bellek ve GPU okumaları: mach/sysctl ve IORegistry; yalnızca ölçüm sırasında çağrılır, arka plan işi yok.
 enum SystemSensors {
+    struct Snapshot: Sendable {
+        var ticks: CPUTicks?
+        var gpu: Double?
+        var memory: MemoryBreakdown?
+        var pressure: MemoryRules.Pressure
+    }
+
+    static func snapshot() -> Snapshot {
+        Snapshot(ticks: cpuTicks(), gpu: gpuUtilization(), memory: memory(), pressure: memoryPressure())
+    }
+
     static func cpuTicks() -> CPUTicks? {
         // mach_host_self returns an owned send right on every call, including failed reads.
         let host = mach_host_self()
@@ -56,16 +67,49 @@ enum SystemSensors {
         guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &iterator) == KERN_SUCCESS else { return nil }
         defer { IOObjectRelease(iterator) }
         var best: Double?
+        let propKey = "PerformanceStatistics" as CFString
+        let utilKey = "Device Utilization %" as CFString
+        let keyPtr = Unmanaged.passUnretained(utilKey).toOpaque()
         var service = IOIteratorNext(iterator)
         while service != 0 {
-            if let stats = IORegistryEntryCreateCFProperty(service, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0)?
-                .takeRetainedValue() as? [String: Any],
-               let percent = (stats["Device Utilization %"] as? NSNumber)?.doubleValue, percent.isFinite {
-                best = max(best ?? 0, min(max(percent / 100, 0), 1))
+            if let rawProp = IORegistryEntryCreateCFProperty(service, propKey, kCFAllocatorDefault, 0) {
+                let stats = rawProp.takeRetainedValue()
+                if CFGetTypeID(stats) == CFDictionaryGetTypeID() {
+                    let dict = stats as! CFDictionary
+                    if let valPtr = CFDictionaryGetValue(dict, keyPtr) {
+                        let obj = Unmanaged<AnyObject>.fromOpaque(valPtr).takeUnretainedValue()
+                        if let num = obj as? NSNumber {
+                            let percent = num.doubleValue
+                            if percent.isFinite {
+                                best = max(best ?? 0, min(max(percent / 100, 0), 1))
+                            }
+                        }
+                    }
+                }
             }
             IOObjectRelease(service)
             service = IOIteratorNext(iterator)
         }
         return best
+    }
+}
+
+/// Serial on-demand reads: reopening a panel cannot fan out blocked IORegistry calls.
+/// Retaining this actor starts no task or timer.
+actor SystemSamplingWorker {
+    static let shared = SystemSamplingWorker()
+    private(set) var readCount = 0
+    private(set) var lastReadWasMainThread = false
+    func read() async -> SystemSensors.Snapshot {
+        guard !Task.isCancelled else {
+            return .init(ticks: nil, gpu: nil, memory: nil, pressure: .normal)
+        }
+        return readSnapshot()
+    }
+
+    private func readSnapshot() -> SystemSensors.Snapshot {
+        readCount &+= 1
+        lastReadWasMainThread = Thread.isMainThread
+        return SystemSensors.snapshot()
     }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import IslandCore
 import SwiftUI
 
@@ -10,6 +11,7 @@ struct ClipboardPanel: View {
     var body: some View {
         HStack(alignment: .top, spacing: IslandLayoutEngine.columnGap) {
             historyColumn.frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilitySortPriority(PanelAXOrder.first)
             Rectangle().fill(IslandPalette.separator).frame(width: 0.5)
             ColorColumn(colors: colors).frame(width: IslandLayoutEngine.Clipboard.colorColumnWidth)
         }
@@ -28,7 +30,9 @@ struct ClipboardPanel: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 4) {
                         ForEach(history.items) { item in
-                            ClipRow(item: item) { history.copy(item) } onDelete: { history.remove(item) }
+                            ClipRow(item: item) { history.copy(item) } onDelete: { history.remove(item) } onCopyCleanLink: { link in
+                                history.copy(ClipItem(content: .text(link), date: Date(), sourceApp: item.sourceApp))
+                            }
                         }
                     }
                 }
@@ -104,6 +108,7 @@ private struct ClipRow: View {
     let item: ClipItem
     let onCopy: () -> Void
     let onDelete: () -> Void
+    let onCopyCleanLink: (String) -> Void
     @State private var isHovering = false
     @State private var didCopy = false
 
@@ -134,8 +139,16 @@ private struct ClipRow: View {
         // Silme düğmesi yalnızca hover'da görünür; klavye, VoiceOver ve sağ tık için aynı eylemler her zaman açık.
         .accessibilityAction(.default, copy)
         .accessibilityAction(named: "Geçmişten sil", onDelete)
+        .accessibilityActions {
+            if let link = cleanedLink {
+                Button("Takipsiz bağlantıyı kopyala") { copyCleanLink(link) }
+            }
+        }
         .contextMenu {
             Button("Kopyala", action: copy)
+            if let link = cleanedLink {
+                Button("Takipsiz bağlantıyı kopyala") { copyCleanLink(link) }
+            }
             Button("Geçmişten sil", role: .destructive, action: onDelete)
         }
         .onTapGesture(perform: copy)
@@ -154,6 +167,16 @@ private struct ClipRow: View {
 
     }
 
+    private var cleanedLink: String? {
+        guard case .text(let text) = item.content else { return nil }
+        return TrackingURLCleaner.clean(text)
+    }
+
+    private func copyCleanLink(_ link: String) {
+        onCopyCleanLink(link)
+        withAnimation(IslandMotion.control) { didCopy = true }
+    }
+
     @ViewBuilder
     private var preview: some View {
         switch item.content {
@@ -163,7 +186,7 @@ private struct ClipRow: View {
                 .lineLimit(1)
         case .image(let data):
             HStack(spacing: 8) {
-                if let image = NSImage(data: data) {
+                if let image = ClipThumbnailCache.image(for: item, data: data) {
                     Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
                         .frame(width: 30, height: 20).clipShape(RoundedRectangle(cornerRadius: 4))
                 }
@@ -174,5 +197,18 @@ private struct ClipRow: View {
                 .font(IslandType.body)
                 .lineLimit(1)
         }
+    }
+}
+
+@MainActor
+private enum ClipThumbnailCache {
+    private static let cache = NSCache<NSUUID, NSImage>()
+
+    static func image(for item: ClipItem, data: Data) -> NSImage? {
+        let key = item.id as NSUUID
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let image = NSImage(data: data) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
     }
 }

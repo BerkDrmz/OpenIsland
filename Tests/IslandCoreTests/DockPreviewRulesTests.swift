@@ -4,6 +4,11 @@ import Testing
 
 @Suite("Dock pencere önizlemeleri")
 struct DockPreviewRulesTests {
+    @Test func opensWithoutAnArtificialHoverDelayAndRetainsBoundedWork() {
+        #expect(DockPreviewRules.hoverDelay == 0)
+        #expect(DockPreviewRules.probeInterval == 0.08)
+        #expect(DockPreviewRules.concurrentCaptures == 2)
+    }
     @Test func ignoresInteriorAndSupportsDisplaysWithNegativeOrigins() {
         let screens = [CGRect(x: 0, y: 0, width: 1710, height: 1107), CGRect(x: -1920, y: 300, width: 1920, height: 1080)]
         #expect(!DockPreviewRules.nearDockEdge(CGPoint(x: 800, y: 600), screens: screens))

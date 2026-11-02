@@ -18,7 +18,7 @@ struct MaintenanceView: View {
                                         in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
-                    .disabled(controller.busy && !controller.isScanningUpdates)
+                    .disabled(controller.busy)
                     .accessibilityAddTraits(controller.section == section ? .isSelected : [])
                 }
                 Spacer()
@@ -32,7 +32,7 @@ struct MaintenanceView: View {
                     Text(controller.section.rawValue).font(.title2.bold())
                     Spacer()
                     if controller.section != .cleaner {
-                        Button(controller.section == .updater ? "Yeniden tara" : "Listeyi yenile", systemImage: "arrow.clockwise", action: controller.loadApplications)
+                        Button("Listeyi yenile", systemImage: "arrow.clockwise", action: controller.loadApplications)
                             .disabled(controller.busy)
                     }
                 }
@@ -40,7 +40,6 @@ struct MaintenanceView: View {
                 switch controller.section {
                 case .uninstaller: uninstallContent
                 case .cleaner: cacheContent
-                case .updater: updaterContent
                 }
                 Divider()
                 HStack(alignment: .top, spacing: 10) {
@@ -63,8 +62,6 @@ struct MaintenanceView: View {
             "Uygulamayı seç, kalıntılarını tara ve kaldırılacak öğeleri denetle. Kişisel veriler ve ada göre eşleşen klasörler ayrıca seçilir. Paylaşılan grup klasörlerine ve sistem yardımcılarına dokunulmaz."
         case .cleaner:
             "Kullanıcı önbelleklerini isteğe bağlı tara. Açık uygulamalara ait bilinen önbellekler korunur. Önce ilgili uygulamaları kapat; önbellekler daha sonra yeniden oluşabilir."
-        case .updater:
-            "Bu bölümü açınca mağaza, uygulama kaynağı ve ek sürüm kataloğu denetlenir. Güncelleme bulunanları seçip onayla; indirme veya mağaza sayfaları açılır. Sürümü doğrulanamayanlar güncel sayılmaz."
         }
     }
 
@@ -160,85 +157,6 @@ struct MaintenanceView: View {
             Button("Çöp Sepeti'ne Taşı", systemImage: "trash", action: controller.confirmTrash)
                 .disabled(controller.busy || controller.selectedFiles.isEmpty)
         }
-    }
-
-    private var updaterContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(controller.updateSummary).font(.caption).foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                if controller.onlyAvailableUpdates {
-                    Button("Tüm sonuçları göster") { controller.onlyAvailableUpdates = false }
-                        .font(.caption)
-                }
-            }
-            HStack(alignment: .top, spacing: 16) {
-                VStack(spacing: 10) {
-                    TextField("Uygulama ara", text: $controller.search).textFieldStyle(.roundedBorder)
-                    Toggle("Yalnızca güncellemeler", isOn: $controller.onlyAvailableUpdates).font(.caption)
-                        .onChange(of: controller.onlyAvailableUpdates) { _, onlyAvailable in
-                            if onlyAvailable, controller.selectedApplication.map({ controller.updates[$0.id]?.status != .available }) == true {
-                                controller.applicationID = controller.availableUpdateApplications.first?.id
-                            }
-                        }
-                    if controller.visibleApplications.isEmpty {
-                        VStack(spacing: 10) {
-                            Image(systemName: controller.isScanningUpdates ? "magnifyingglass" : "checkmark.circle").font(.title2).foregroundStyle(.secondary)
-                            Text(controller.isScanningUpdates ? "Uygulamalar denetleniyor…" : "Listelenecek güncelleme yok.")
-                                .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                            Text("Tüm sonuçlar için filtreyi kapat.").font(.caption).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        List(controller.visibleApplications) { app in
-                            HStack(spacing: 8) {
-                                if controller.updates[app.id]?.status == .available {
-                                    Toggle("\(app.name) güncellemesini seç", isOn: Binding(get: { controller.selectedUpdates.contains(app.id) }, set: { selected in
-                                        if selected { controller.selectedUpdates.insert(app.id) } else { controller.selectedUpdates.remove(app.id) }
-                                    })).labelsHidden().toggleStyle(.checkbox)
-                                } else { Image(systemName: app.isStore ? "bag" : "app").foregroundStyle(.secondary) }
-                                Button { controller.choose(app) } label: {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(app.name).lineLimit(1)
-                                        Text(controller.updates[app.id]?.message ?? app.version).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                                }.buttonStyle(.plain).disabled(controller.busy && !controller.isScanningUpdates)
-                            }
-                            .padding(6).contentShape(Rectangle())
-                            .background(controller.applicationID == app.id ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 6))
-                        }
-                    }
-                }.frame(width: 225)
-                VStack(alignment: .leading, spacing: 14) {
-                    if let app = controller.selectedApplication {
-                        Text(app.name).font(.title3.bold())
-                        Text("Kurulu sürüm: \(app.version)").font(.callout)
-                        Text(app.bundleID).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                        Label(app.isStore ? "App Store" : app.appcast?.scheme == "https" ? "Sparkle güncelleme kaynağı" : "Ek sürüm kataloğu",
-                              systemImage: app.isStore ? "bag" : "arrow.down.app").font(.callout).foregroundStyle(.secondary)
-                        if let update = controller.updates[app.id] {
-                            Text(update.message).font(.callout).fixedSize(horizontal: false, vertical: true)
-                            if update.destination != nil, update.status == .available {
-                                Button("Bu güncellemeyi onayla…", systemImage: "arrow.down.to.line", action: controller.openUpdate)
-                                    .disabled(controller.busy)
-                            }
-                        }
-                        Button("Sürümü denetle", systemImage: "arrow.clockwise", action: controller.checkUpdate).disabled(controller.busy)
-                        Button("Uygulamada aç", systemImage: "arrow.up.forward.app", action: controller.openApplication)
-                    } else { Text(controller.isScanningUpdates ? "Tarama bitince güncelleme bulunan uygulamalar burada listelenecek." : "Ayrıntılar için listeden bir uygulama seç.").foregroundStyle(.secondary) }
-                    Spacer()
-                    Button("App Store güncellemeleri", systemImage: "bag", action: controller.openStore)
-                    Text("İndirme ve kurulum yalnızca sen başlattığında yapılır.").font(.caption).foregroundStyle(.secondary)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack {
-                Text("\(controller.approvedUpdateApplications.count) güncelleme seçili").font(.caption).foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                Button("Tümünü seç", action: controller.selectAllUpdates).disabled(controller.busy || controller.availableUpdateApplications.isEmpty)
-                Button("Seçilenleri onayla…", action: controller.confirmSelectedUpdates)
-                    .disabled(controller.busy || controller.approvedUpdateApplications.isEmpty)
-            }
-        }.frame(maxHeight: .infinity)
     }
 
     private func kind(_ file: MaintenanceFile) -> String {

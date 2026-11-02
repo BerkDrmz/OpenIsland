@@ -17,6 +17,8 @@ final class AppEnvironment {
     let mirror = CameraMirror()
     let clipboard = ClipboardHistory()
     let colorPicker = ColorPickerService()
+    /// İsteğe bağlı bağlantıdan indirme; yalnız kullanıcı basınca çalışır.
+    let linkDownloader = LinkDownloader()
     let focusTimer = FocusTimer()
     let eventStore = EventStoreProvider()
     let calendar: CalendarService
@@ -43,6 +45,8 @@ final class AppEnvironment {
         calendar = CalendarService(provider: eventStore)
         reminders = RemindersService(provider: eventStore)
         shelf.hold = hold
+        linkDownloader.hold = hold
+        linkDownloader.shelf = shelf
         launcher.hold = hold
         dockPreviews.onRequestScreenAccess = { [weak self] in
             guard let self else { return }
@@ -53,6 +57,7 @@ final class AppEnvironment {
                 clipboard?.setShortcutMonitoring(state == .granted)
                 quitOnClose?.configure(enabled: preferences?.quitOnLastWindowClose == true)
             }
+            if kind == .clipboard { clipboard?.accessChanged() }
             if kind == .accessibility || kind == .screenCapture {
                 dockPreviews?.configure(enabled: preferences?.dockWindowPreviews == true)
             }
@@ -75,6 +80,7 @@ final class AppEnvironment {
         quitOnClose.stop()
         dockPreviews.stop()
         permissions.stop()
+        launcher.shutdown()
         notes.flush()
         focusTimer.shutdown()
         SpacePresentationController.shared.tearDown()
@@ -82,6 +88,7 @@ final class AppEnvironment {
         mirror.stop()
         hud.setObservesVolume(false)
         clipboard.stop()
+        linkDownloader.shutdown()
         power.stop()
         audioOutput.stop()
         bluetooth.stop()

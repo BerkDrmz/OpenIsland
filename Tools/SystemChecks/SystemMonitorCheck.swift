@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import IslandCore
 
@@ -5,6 +6,10 @@ import IslandCore
 /// parlaklık ve klavye ışığı yalnızca okunur.
 @main struct SystemMonitorCheck {
     @MainActor static func main() async throws {
+        // Koruma sürüm 1, çökmeden dönen geçersiz okumayı da kalıcı engel olarak saklıyordu (Ekim 2026: dahili ekran
+        // parlaklığı tek bir geçici hatadan sonra o macOS yapısı boyunca kapalı kaldı). Eski engel bir kez silinmeli.
+        UserDefaults.standard.removeObject(forKey: "privateAPI.guardVersion")
+        UserDefaults.standard.set(PrivateAPIGuard.build, forKey: "privateAPI.brightness.blocked")
         // The kernel right is shared by name, but every mach_host_self call adds a reference.
         // Repeated real sensor reads must leave the reference count unchanged.
         let host = mach_host_self()
@@ -45,11 +50,69 @@ import IslandCore
         } else {
             print("SKIP: thermal sensor lifecycle; compatible temperature sensors unavailable")
         }
+        // An intentionally suspended backend must not block UI work or publish after close.
+        let gate = SamplingGate()
+        let blocked = SystemMonitor(readPublic: {
+            await gate.read()
+            return SystemSensors.Snapshot(ticks: nil, gpu: 0.25, memory: nil, pressure: .normal)
+        })
+        blocked.privateEnabled = false
+        blocked.start()
+        try await Task.sleep(for: .milliseconds(50))
+        let publicEntered = await gate.entered
+        precondition(publicEntered, "test backend did not start")
+        blocked.stop()
+        await gate.release()
+        try await Task.sleep(for: .milliseconds(50))
+        precondition(blocked.gpu == nil && blocked.sampleCount == 0, "old backend published after close")
+
+        let thermalGate = SamplingGate()
+        let fakeWorker = ThermalSamplingWorker(read: {
+            await thermalGate.read()
+            return .init(cpu: 70, gpu: 60)
+        })
+        let racing = SystemMonitor(thermalWorker: fakeWorker, readPublic: {
+            .init(ticks: nil, gpu: 0.25, memory: nil, pressure: .normal)
+        })
+        racing.start()
+        try await Task.sleep(for: .milliseconds(100))
+        let thermalEntered = await thermalGate.entered
+        precondition(thermalEntered, "thermal backend did not start")
+        racing.privateEnabled = false
+        racing.privateEnabled = true
+        await thermalGate.release()
+        try await Task.sleep(for: .milliseconds(100))
+        precondition(racing.temperatures == nil, "old private settings result was published")
+        racing.stop()
+        print("PASS: asynchronous sensor reads leave main actor responsive; stale close/settings results discarded")
+
+        let shared = SystemMonitor(readPublic: {
+            .init(ticks: nil, gpu: 0.25, memory: nil, pressure: .normal)
+        })
+        shared.privateEnabled = false
+        shared.panelDidAppear()
+        shared.panelDidAppear()
+        precondition(shared.isRunning && shared.storageObserverCount == 3)
+        shared.panelDidDisappear()
+        precondition(shared.isRunning && shared.storageObserverCount == 3,
+                     "Closing one display stopped another visible System panel")
+        shared.panelDidDisappear()
+        precondition(!shared.isRunning && shared.storageObserverCount == 0)
+        shared.panelDidDisappear()
+        shared.panelDidAppear()
+        precondition(shared.isRunning && shared.storageObserverCount == 3)
+        shared.panelDidDisappear()
+        print("PASS: shared System panel viewer ownership; one observer set; stop on last close")
+
         let monitor = SystemMonitor()
         precondition(!monitor.isRunning)
         monitor.start()
         try await Task.sleep(for: .seconds(3.2))
         precondition(monitor.isRunning)
+        let sensorReads = await SystemSamplingWorker.shared.readCount
+        precondition(sensorReads > 0, "Default sensor worker was never called")
+        let sensorRanOnMain = await SystemSamplingWorker.shared.lastReadWasMainThread
+        precondition(!sensorRanOnMain, "Public sensors ran on the main thread")
         precondition(monitor.storageObserverCount == 3)
         let reads = monitor.storageReadCount
         precondition(reads == 1, "Storage must be read once on panel entry, not every CPU sample")
@@ -85,6 +148,18 @@ import IslandCore
             precondition(UserDefaults.standard.string(forKey: "privateAPI.\(feature).pending") == nil,
                          "\(feature): başarılı ilk çağrıdan sonra çökme işareti silinmeli")
         }
+        precondition(UserDefaults.standard.integer(forKey: "privateAPI.guardVersion") == 2, "Koruma sürüm geçişi yapılmadı")
+        for feature in ["temperature", "brightness", "keyboard"] {
+            precondition(UserDefaults.standard.string(forKey: "privateAPI.\(feature).blocked") == nil,
+                         "\(feature): çökme olmadan kalıcı engel kalmamalı")
+        }
+        var displays = [CGDirectDisplayID](repeating: 0, count: 8), displayCount: UInt32 = 0
+        _ = CGGetActiveDisplayList(8, &displays, &displayCount)
+        if displays.prefix(Int(displayCount)).contains(where: { CGDisplayIsBuiltin($0) != 0 }) {
+            precondition(monitor.brightness != nil && monitor.canAdjustBrightness,
+                         "Dahili ekran etkin ama parlaklık kaydırıcısı kullanılamıyor")
+        }
+        print("PASS: eski kalıcı engel silindi; dahili ekran parlaklığı okunuyor ve ayarlanabilir")
 
         // Kapatma: görev ve sensör istemcisi bırakılır; tekrar açılabilir.
         monitor.stop()
@@ -120,4 +195,14 @@ import IslandCore
         precondition(result == KERN_SUCCESS, "Cannot read process physical footprint")
         return info.phys_footprint
     }
+}
+
+private actor SamplingGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var entered = false
+    func read() async {
+        entered = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func release() { continuation?.resume(); continuation = nil }
 }

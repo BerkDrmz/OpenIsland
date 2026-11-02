@@ -2,20 +2,6 @@ import AppKit
 import Darwin
 import IslandCore
 
-private actor UpdateCheckProbe {
-    private(set) var calls = 0
-    let availableID: String, failingID: String
-    init(availableID: String, failingID: String) { self.availableID = availableID; self.failingID = failingID }
-    func check(_ app: ManagedApplication) async throws -> MaintenanceUpdate {
-        calls += 1
-        try await Task.sleep(for: .milliseconds(40))
-        if app.bundleID == failingID { throw MaintenanceError.invalidFeed }
-        if app.bundleID == availableID { return .init(status: .available, message: "Yeni sürüm: 1.3", destination: URL(string: "https://example.com/fixture.dmg")) }
-        if app.bundleID == "io.openisland.updates.current" { return .init(status: .current, message: "Güncel", destination: nil) }
-        return .init(status: .unsupported, message: "Desteklenmiyor", destination: nil)
-    }
-}
-
 @main struct MaintenanceChecks {
     @MainActor static func main() {
         let app = NSApplication.shared
@@ -116,34 +102,20 @@ private actor UpdateCheckProbe {
         catch is CancellationError { }
         print("PASS: cancelled scans stop")
 
-        // Exercise controller workflows against disposable data and a fake catalog, never an installer.
-        _ = try bundle("io.openisland.updates.current", "Current")
+        // Only two offline, on-demand tools remain. No update service or URL opener exists.
+        precondition(MaintenanceController.Section.allCases == [.uninstaller, .cleaner])
         if let runningID = NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier).first,
            MaintenanceRules.validComponent(runningID), runningID != "io.github.openisland.OpenIsland" {
             try write(library.appendingPathComponent("Caches/\(runningID)/active"))
         }
-        let probe = UpdateCheckProbe(availableID: id, failingID: otherID)
-        var opened: [URL] = []
-        let batch = MaintenanceController(worker: worker, updateChecker: { try await probe.check($0) },
-                                          updateOpener: { opened.append($0); return true })
+        let batch = MaintenanceController(worker: worker)
         func waitForCompletion(_ controller: MaintenanceController) async throws {
             let deadline = ContinuousClock.now + .seconds(5)
             while controller.busy, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
             precondition(!controller.busy, "Workflow failed to finish")
         }
-        func pressSheetButton(_ title: String) {
-            let window = NSApp.windows.first { $0.identifier?.rawValue == "OpenIslandMaintenance" && $0.attachedSheet != nil }!
-            func find(_ view: NSView) -> NSButton? {
-                if let button = view as? NSButton, button.title == title { return button }
-                for child in view.subviews { if let button = find(child) { return button } }
-                return nil
-            }
-            find(window.attachedSheet!.contentView!)!.performClick(nil)
-        }
         batch.open()
         try await waitForCompletion(batch)
-        let initialQueries = await probe.calls
-        precondition(initialQueries == 0, "Opening other tools must not query update sources")
         batch.select(.cleaner); batch.scan()
         try await waitForCompletion(batch)
         batch.selectAllCaches()
@@ -152,100 +124,13 @@ private actor UpdateCheckProbe {
         precondition(!batch.files.contains { $0.url.lastPathComponent == "io.github.openisland" })
         print("PASS: cache Select All selects every eligible item; excludes running apps and Shelf's only-copy files")
 
-        batch.select(.updater) // This action alone must start the full scan.
-        try await waitForCompletion(batch)
-        let firstQueries = await probe.calls
-        precondition(firstQueries == 4 && batch.updatesChecked == 4 && batch.updatesScanned)
-        precondition(batch.availableUpdateApplications.count == 1 && batch.visibleApplications.count == 1)
-        precondition(batch.updates.values.contains { $0.status == .failed } && batch.updates.values.contains { $0.status == .current })
-        precondition(opened.isEmpty && batch.selectedUpdates.isEmpty, "A scan must never start a download or approve an app")
-        for _ in 0..<10 { batch.select(.cleaner); batch.select(.updater) }
-        let repeatedQueries = await probe.calls
-        precondition(repeatedQueries == firstQueries && !batch.hasActiveTask)
-        batch.selectedUpdates = [app.id, catalog.first { $0.bundleID == otherID }!.id]
-        batch.confirmSelectedUpdates()
-        try await Task.sleep(for: .milliseconds(200))
-        precondition(opened.isEmpty, "Confirmation dialog opened a destination before approval")
-        pressSheetButton("Vazgeç")
-        try await Task.sleep(for: .milliseconds(300))
-        precondition(opened.isEmpty)
-        batch.confirmSelectedUpdates()
-        try await Task.sleep(for: .milliseconds(200))
-        pressSheetButton("Onayla ve Aç")
-        try await Task.sleep(for: .milliseconds(300))
-        precondition(opened == [URL(string: "https://example.com/fixture.dmg")!], "Only selected available updates may open; failed/current apps must be excluded")
-        print("PASS: automatic full scan, mixed results, 10 re-entries reuse results; no download before approval; cancel opens nothing; approval opens only the selected available update")
-        batch.checkAllUpdates(force: true)
-        try await waitForCompletion(batch)
-        let refreshedQueries = await probe.calls
-        precondition(refreshedQueries == firstQueries * 2)
-        batch.checkAllUpdates(force: true)
-        try await Task.sleep(for: .milliseconds(5))
-        batch.select(.cleaner)
-        try await Task.sleep(for: .milliseconds(100))
-        precondition(!batch.busy && !batch.hasActiveTask && !batch.isScanningUpdates)
-        let cancelledQueries = await probe.calls
-        precondition(cancelledQueries <= refreshedQueries + 1, "Leaving the section let the remaining requests run")
-        batch.select(.updater)
+        for _ in 0..<20 { batch.select(.uninstaller); batch.select(.cleaner) }
+        precondition(!batch.hasActiveTask && !batch.busy)
         batch.shutdown()
-        try await Task.sleep(for: .milliseconds(100))
         precondition(batch.observerCount == 0 && !batch.hasActiveTask && !batch.isPresented)
-        print("PASS: explicit refresh rechecks; leaving the section or closing cancels the batch and releases observers")
+        print("PASS: exactly two offline sections; repeated section selection starts no background task; close releases observers")
 
-        let catalogWorker = MaintenanceWorker(sourceLoader: { url in
-            try Task.checkCancellation()
-            if url.host == "itunes.apple.com" {
-                return Data("""
-                {"results":[{"bundleId":"net.whatsapp.WhatsApp","version":"26.39.75","kind":"software",
-                "trackId":310633997,"supportedDevices":["MacDesktop-MacDesktop"]}]}
-                """.utf8)
-            }
-            if url.lastPathComponent == "spotify.json" {
-                return Data("""
-                {"token":"spotify","version":"1.3.4.258","homepage":"https://www.spotify.com/download/",
-                "artifacts":[{"uninstall":[{"quit":"com.spotify.client"}]}]}
-                """.utf8)
-            }
-            if url.lastPathComponent == "editor.json" {
-                return Data("""
-                {"token":"editor","version":"99.0","homepage":"https://example.com/download",
-                "artifacts":[{"uninstall":[{"quit":"com.fixture.Namesake"}]}]}
-                """.utf8)
-            }
-            throw MaintenanceError.sourceNotFound
-        })
-        func catalogApp(_ id: String, _ filename: String, _ version: String, store: Bool = false) -> ManagedApplication {
-            .init(url: URL(fileURLWithPath: "/Applications/\(filename).app"), bundleID: id, name: filename,
-                  version: version, build: "1", bundleName: filename, appcast: nil, isStore: store)
-        }
-        let spotifyUpdate = try await catalogWorker.checkUpdate(catalogApp("com.spotify.client", "Spotify", "1.3.3.264"))
-        precondition(spotifyUpdate.status == .available && spotifyUpdate.destination?.host == "www.spotify.com")
-        let spotifyCurrent = try await catalogWorker.checkUpdate(catalogApp("com.spotify.client", "Spotify", "1.3.4.258"))
-        precondition(spotifyCurrent.status == .current && spotifyCurrent.destination == nil)
-        let unifiedUpdate = try await catalogWorker.checkUpdate(catalogApp("net.whatsapp.WhatsApp", "WhatsApp", "26.38.74", store: true))
-        precondition(unifiedUpdate.status == .available && unifiedUpdate.destination?.scheme == "macappstore")
-        let namesake = try await catalogWorker.checkUpdate(catalogApp("com.fixture.Editor", "Editor", "1.0"))
-        precondition(namesake.status == .unsupported && namesake.destination == nil)
-        let missing = try await catalogWorker.checkUpdate(catalogApp("com.fixture.Unknown", "Unknown", "1.0"))
-        precondition(missing.status == .unsupported)
-        let cancelledCatalog = Task { try await catalogWorker.checkUpdate(catalogApp("com.spotify.client", "Spotify", "1.0")) }
-        cancelledCatalog.cancel()
-        do { _ = try await cancelledCatalog.value; preconditionFailure("Cancelled catalog ran") }
-        catch is CancellationError { }
-        print("PASS: Spotify full/current levels, unified Mac Store updates, namesake rejection, missing source and cancellation")
-
-        if ProcessInfo.processInfo.environment["OPENISLAND_UPDATE_CHECK"] == "1" {
-            let actualWorker = MaintenanceWorker()
-            let installed = try await actualWorker.applications()
-            for id in ["org.wireshark.Wireshark", "com.apple.dt.Xcode"] {
-                if let app = installed.first(where: { $0.bundleID == id }) {
-                    let result = try await actualWorker.checkUpdate(app)
-                    print("LIVE UPDATE: \(app.name): \(result.message)")
-                }
-            }
-        }
-
-        let tools = MaintenanceController(worker: worker, updateChecker: { try await probe.check($0) }, updateOpener: { _ in true })
+        let tools = MaintenanceController(worker: worker)
         for _ in 0..<100 {
             tools.open()
             precondition(tools.observerCount == 2 && tools.isPresented)
@@ -260,16 +145,14 @@ private actor UpdateCheckProbe {
             try await Task.sleep(for: .seconds(2))
             for section in MaintenanceController.Section.allCases {
                 tools.select(section)
-                if section != .updater {
-                    tools.choose(app)
-                    tools.scan()
-                    let deadline = ContinuousClock.now + .seconds(5)
-                    while tools.busy, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
-                    precondition(!tools.busy && !tools.files.isEmpty)
-                    if section == .uninstaller {
-                        precondition(!tools.files.contains { $0.containsPersonalData && tools.selectedFiles.contains($0.id) })
-                    } else { precondition(tools.selectedFiles.isEmpty, "Cache cleanup must require an explicit selection") }
-                } else { try await waitForCompletion(tools) }
+                tools.choose(app)
+                tools.scan()
+                let deadline = ContinuousClock.now + .seconds(5)
+                while tools.busy, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+                precondition(!tools.busy && !tools.files.isEmpty)
+                if section == .uninstaller {
+                    precondition(!tools.files.contains { $0.containsPersonalData && tools.selectedFiles.contains($0.id) })
+                } else { precondition(tools.selectedFiles.isEmpty, "Cache cleanup must require an explicit selection") }
                 try await Task.sleep(for: .milliseconds(200))
                 let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "OpenIslandMaintenance" })!
                 precondition(abs(window.contentView!.bounds.height - 590) < 2, "Switching tools changed the window height")

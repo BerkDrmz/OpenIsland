@@ -71,7 +71,7 @@ final class ScreenManager {
             }
         }))
         let workspace = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification,
+        for name in [NSWorkspace.activeSpaceDidChangeNotification,
                      NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
             observers.append((workspace, workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.scheduleRefresh() }

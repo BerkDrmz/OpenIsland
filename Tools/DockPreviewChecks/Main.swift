@@ -41,6 +41,10 @@ import IslandCore
     }
 
     @MainActor private static func liveCheck(_ fixtureURL: URL) async throws {
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier != "com.apple.loginwindow" else {
+            print("SKIP Dock live: desktop is locked; unlock before testing hover/capture")
+            return
+        }
         guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else {
             print("SKIP Dock live: this test process needs existing Accessibility and Screen Recording permission; no permission is requested")
             return
@@ -78,9 +82,43 @@ import IslandCore
         }
         let expectedCount = singleWindow ? 1 : 3
         guard let anchor = dockAnchor(for: fixture) else { preconditionFailure("Fixture Dock icon missing") }
-        let hover = CGPoint(x: anchor.midX, y: anchor.midY)
+        var hover = CGPoint(x: anchor.midX, y: anchor.midY)
         let away = CGPoint(x: NSScreen.screens[0].frame.midX, y: NSScreen.screens[0].frame.midY)
         service.configure(enabled: true)
+        // Settle the fixture icon after Dock magnification changes its geometry.
+        // This bounded setup is test-only; production pointer handling is unchanged.
+        for _ in 0..<3 {
+            moveCursor(hover)
+            try await Task.sleep(for: .milliseconds(250))
+            if let stable = dockAnchor(for: fixture) {
+                hover = CGPoint(x: stable.midX, y: stable.midY)
+            }
+        }
+        // A deliberately slow, cancellation-ignoring catalogue must neither hold up
+        // the panel nor resurrect it after dismissal. Only fixture windows are used.
+        var catalogueStarted = false, catalogueFinished = false
+        let slow = DockPreviewController(screenCaptureAllowed: { true }, captureCatalog: { _ in
+            catalogueStarted = true
+            try? await Task.sleep(for: .seconds(1))
+            catalogueFinished = true
+            return []
+        })
+        slow.configure(enabled: true)
+        moveCursor(hover); slow.pointerMoved(to: hover)
+        for _ in 0..<30 {
+            if slow.isVisible { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        precondition(slow.isVisible && catalogueStarted && !catalogueFinished,
+                     "Preview panel waited for the slow image catalogue")
+        precondition(slow.previewedWindows.count == expectedCount && slow.captureCount == 0)
+        slow.dismiss()
+        try await Task.sleep(for: .milliseconds(100))
+        precondition(!slow.isVisible && slow.imageCount == 0 && slow.pendingCaptureCount == 0,
+                     "Late catalogue completion resurrected dismissed preview work")
+        slow.stop()
+        precondition(slow.monitorCount == 0 && slow.observerCount == 0)
+        print("PASS Dock live: panel visible while one-second catalogue still pending; cancellation-ignoring completion cannot resurrect dismissed panel/captures")
         moveCursor(hover); service.pointerMoved(to: hover)
         for _ in 0..<20 {
             if service.previewedWindows.count == expectedCount && (deniedCapture || service.imageCount == expectedCount) { break }
@@ -136,11 +174,17 @@ import IslandCore
             try await Task.sleep(for: .milliseconds(25))
         }
         try await Task.sleep(for: .milliseconds(400))
-        precondition(service.captureCount == captures && !service.isVisible && service.imageCount == 0,
-                     "Rapid cancelled hovers started captures or left a panel/image behind")
+        // Immediate hover deliberately permits a preview even during a brief visit.
+        // Each visit is still bounded to one snapshot per card, and leaving cancels it.
+        precondition(service.captureCount <= captures + expectedCount * 10 && !service.isVisible
+                     && service.imageCount == 0 && service.pendingCaptureCount == 0,
+                     "Rapid hovers accumulated captures or left a panel/image/task behind")
+        let settledCaptures = service.captureCount
+        try await Task.sleep(for: .milliseconds(400))
+        precondition(service.captureCount == settledCaptures, "Capture work restarted after pointer exit")
         service.stop()
         precondition(service.monitorCount == 0 && service.observerCount == 0)
-        print("PASS Dock live: \(expectedCount) cards / \(deniedCapture ? 0 : expectedCount) snapshots incl. minimized; static/panel hover does not recapture; selected minimized window restored and focused; 10 rapid cancelled hovers do no capture; all images/tasks/observers released")
+        print("PASS Dock live: \(expectedCount) cards / \(deniedCapture ? 0 : expectedCount) snapshots incl. minimized; static/panel hover does not recapture; selected minimized window restored and focused; 10 rapid hovers remain bounded and stop on exit; all images/tasks/observers released")
     }
 
     @MainActor private static func moveCursor(_ point: CGPoint) {

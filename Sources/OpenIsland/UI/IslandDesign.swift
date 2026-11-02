@@ -13,7 +13,14 @@ enum IslandPalette {
     /// #9E9E9E eşdeğeri; siyah üzerinde ~7,5:1 kontrast. "Kontrastı Artır"da ~12:1.
     static let secondary = white(0.62, increased: 0.8)
     /// Yardımcı metin; siyah üzerinde ~4,8:1 (WCAG AA). "Kontrastı Artır"da ~9:1.
-    static let tertiary = white(0.48, increased: 0.7)
+    static let tertiary = white(tertiaryAlpha.standard, increased: tertiaryAlpha.increased)
+    /// `tertiary`'nin (beyaz) alfa değerleri. Sekme ikonları bu alfayı renk yerine katman opaklığı olarak canlandırır:
+    /// sonuç aynı beyaz × alfadır, fakat geçişin her karesinde renk çözümlenip ikon CPU'da yeniden çizilmez.
+    static let tertiaryAlpha = (standard: 0.48, increased: 0.7)
+    /// `tertiary` ile aynı kaynaktan (Kontrastı Artır) okunan güncel alfa.
+    static var currentTertiaryAlpha: Double {
+        NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? tertiaryAlpha.increased : tertiaryAlpha.standard
+    }
     static let fill = white(0.07, increased: 0.14)
     static let fillHover = white(0.12, increased: 0.22)
     static let separator = white(0.12, increased: 0.32)
@@ -105,11 +112,14 @@ enum IslandMotion {
     static let livelyHover = Animation.spring(response: 0.21, dampingFraction: 0.7, blendDuration: 0.06)
     static let livelyContentIn = Animation.spring(response: 0.19, dampingFraction: 1).delay(0.02)
     static let livelyContentOut = Animation.spring(response: 0.11, dampingFraction: 1)
+    static let livelyResize = Animation.spring(response: 0.22, dampingFraction: 0.95, blendDuration: 0.06)
+    static let naturalResize = Animation.spring(response: 0.28, dampingFraction: 0.95, blendDuration: 0.08)
 
     static func morph(from old: IslandPresentation, to new: IslandPresentation, style: MotionStyle) -> Animation {
         if style == .reduced { return reduced }
         let lively = style == .expressive
         switch (old, new) {
+        case (.expanded, .expanded): return resize(style: style)
         case (_, .expanded), (_, .dropTarget): return lively ? livelyExpand : expand
         case (.expanded, _), (.dropTarget, _): return lively ? livelyCollapse : collapse
         case (_, .hud), (.hud, _): return hud
@@ -120,12 +130,12 @@ enum IslandMotion {
         }
     }
 
-    /// Gövde yeniden boyutlanırken (içerik miktarı değişti) kullanılan yay.
+    /// Gövde yeniden boyutlanırken (içerik miktarı değişti veya sekmeler arası) kullanılan yay.
     static func resize(style: MotionStyle) -> Animation {
         switch style {
         case .reduced: reduced
-        case .natural: expand
-        case .expressive: livelyExpand
+        case .natural: naturalResize
+        case .expressive: livelyResize
         }
     }
 }
@@ -138,9 +148,17 @@ extension AnyTransition {
     @MainActor static func islandReveal(_ style: MotionStyle, expanded: Bool = false) -> AnyTransition {
         let lively = style == .expressive
         let blurs = style != .reduced && !expanded
+        if expanded {
+            let inDuration = style == .reduced ? 0.10 : (lively ? 0.12 : 0.15)
+            let outDuration = style == .reduced ? 0.06 : (lively ? 0.08 : 0.10)
+            return .asymmetric(
+                insertion: .opacity.animation(.easeOut(duration: inDuration)),
+                removal: .opacity.animation(.easeIn(duration: outDuration))
+            )
+        }
         return .asymmetric(
             insertion: .modifier(active: RevealModifier(progress: 0, blurs: blurs), identity: RevealModifier(progress: 1, blurs: blurs))
-                .animation(expanded ? IslandMotion.resize(style: style) : lively ? IslandMotion.livelyContentIn : IslandMotion.contentIn),
+                .animation(lively ? IslandMotion.livelyContentIn : IslandMotion.contentIn),
             removal: .opacity.animation(lively ? IslandMotion.livelyContentOut : IslandMotion.contentOut)
         )
     }
@@ -184,8 +202,3 @@ private struct RevealModifier: ViewModifier {
     }
 }
 
-extension IslandPresentation {
-    var isExpanded: Bool {
-        if case .expanded = self { true } else { false }
-    }
-}
