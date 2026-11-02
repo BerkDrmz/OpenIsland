@@ -35,8 +35,6 @@ final class IslandCanvasView: NSView {
 
     private var slots: [ContentSlot] = []
     private var lastShapeKey: [CGFloat] = []
-    private var lastRelaxScale: CGFloat = -1
-    private var lastRelaxHeight: CGFloat = -1
     var spareExpanded: ExpandedContentView?
     /// Kapanışta sönen açık içerik: kapatma işi (`suspend`) yüzey durunca yapılır (bkz. `tick`).
     private var pendingSuspend: ExpandedContentView?
@@ -78,6 +76,7 @@ final class IslandCanvasView: NSView {
         appearance = NSAppearance(named: .darkAqua)
         registerForDraggedTypes(Self.draggedTypes)
         FrameDriver.installRunLoopProbe()
+        DisplayProbe.installIfRequested()
         ImageRedrawProbe.install()
         wantsLayer = true
         layerContentsRedrawPolicy = .never
@@ -389,37 +388,29 @@ final class IslandCanvasView: NSView {
         let canvas = bounds.size
         let inset = topInset.value
         let surfaceSize = CGSize(width: width.value, height: height.value)
-        let shape = IslandShape(style: metrics.style, topRadius: topRadius.value, bottomRadius: bottomRadius.value)
-        let rect = CGRect(x: canvas.width / 2 - surfaceSize.width / 2, y: inset, width: surfaceSize.width, height: surfaceSize.height)
+        // Gevşeme (SwiftUI `scaleEffect(anchor: .top)`): yalnız yüzey şekli ve içerik maskesi tuvalin üst ortasına sabit
+        // küçülür. Önceden kök katmana `sublayerTransform` uygulanıyordu; ölçek her karede değişince AppKit bütün
+        // panellerdeki simge/resim görünümlerini her karede yeniden çiziyordu (kapanışta ~0,55 sn boyunca karede 34+
+        // görüntü; gerçek veriyle kare hazırlığı 22–39 ms, kapanışta kare atlama — 2 Kasım, Instruments + çizim sayacı).
+        // İçerik ölçeklenmez; aynı maskeyle kırpıldığı için %0,6'lık fark görünmez.
+        let s = CGFloat(relax.value)
+        let shape = IslandShape(style: metrics.style, topRadius: topRadius.value * s, bottomRadius: bottomRadius.value * s)
+        let rect = CGRect(x: canvas.width / 2 - surfaceSize.width * s / 2, y: inset * s,
+                          width: surfaceSize.width * s, height: surfaceSize.height * s)
         if FrameDriver.isLogging { FrameDriver.note(String(format: "geo w=%.2f h=%.2f", surfaceSize.width, surfaceSize.height)) }
         // SwiftUI yolu y-aşağı koordinatta üretir; görünüm de çevrilmiş (flipped).
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         // Yalnız değişince yazılır: aynı yolu yeniden atamak bile katmanı kirletir; maske yolu değişince maskelenen
         // bütün içerik pencere sunucusunda ekran dışında yeniden birleştirilir.
-        let shapeKey: [CGFloat] = [rect.minX, rect.minY, rect.width, rect.height, CGFloat(topRadius.value), CGFloat(bottomRadius.value), metrics.style == .notch ? 1 : 0]
+        let shapeKey: [CGFloat] = [rect.minX, rect.minY, rect.width, rect.height, CGFloat(topRadius.value) * s, CGFloat(bottomRadius.value) * s, metrics.style == .notch ? 1 : 0]
         if shapeKey != lastShapeKey {
             lastShapeKey = shapeKey
             let path = shape.path(in: rect).cgPath
             surfaceView.shapeLayer.path = path
             maskLayer.path = path
         }
-        // Gevşeme: bütün ada (yüzey + içerik) üst kenara sabit küçülür (SwiftUI `scaleEffect(anchor: .top)`).
-        let s = CGFloat(relax.value)
-        if let root = layer, s != lastRelaxScale || root.bounds.height != lastRelaxHeight {
-            lastRelaxScale = s
-            lastRelaxHeight = root.bounds.height
-            if s == 1 {
-                root.sublayerTransform = CATransform3DIdentity
-            } else {
-                // sublayerTransform katmanın merkezine göre uygulanır; üst kenar (y-aşağıda 0) sabit kalsın.
-                let half = bounds.height / 2 * (root.contentsAreFlipped() ? -1 : 1)
-                var t = CATransform3DMakeTranslation(0, half, 0)
-                t = CATransform3DScale(t, s, s, 1)
-                t = CATransform3DTranslate(t, 0, -half, 0)
-                root.sublayerTransform = t
-            }
-        }
+        if let root = layer, !CATransform3DIsIdentity(root.sublayerTransform) { root.sublayerTransform = CATransform3DIdentity }
         for slot in slots {
             let size = slot.view.fittingFrameSize(canvas: canvas, metrics: metrics)
             let frame = CGRect(x: (canvas.width - size.width) / 2, y: inset, width: size.width, height: size.height)
