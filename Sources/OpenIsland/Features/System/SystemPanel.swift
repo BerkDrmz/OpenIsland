@@ -79,11 +79,11 @@ private struct UsageColumn: View {
             row("CPU", fraction: system.cpu, text: system.cpu.map(Self.percent) ?? "—")
             row("GPU", fraction: system.gpu, text: system.gpu.map(Self.percent) ?? "—")
             if let memory = system.memory {
-                row("Bellek", fraction: memory.usedFraction, text: "\(Self.bytes(memory.usedBytes)) / \(Self.bytes(memory.totalBytes))",
+                row("Bellek", fraction: memory.usedFraction, text: "\(Self.gigabytes(memory.usedBytes)) / \(Self.bytes(memory.totalBytes))",
                     tint: pressureTint)
                     .help("Mac'in toplam RAM kullanımıdır; OpenIsland'in kendi kullanımı değildir. Bellek basıncı: \(pressureDescription).")
                     .accessibilityHint("Mac'in toplam RAM kullanımı. Bellek basıncı: \(pressureDescription).")
-                Text("Sıkıştırılmış \(Self.bytes(memory.compressedBytes)) · Takas \(Self.bytes(memory.swapUsedBytes))")
+                Text("Sıkıştırılmış \(Self.bytes(memory.compressedBytes)) · \(memory.swapUsedBytes == 0 ? "Takas yok" : "Takas \(Self.bytes(memory.swapUsedBytes))")")
                     .font(IslandType.caption2).foregroundStyle(IslandPalette.tertiary).lineLimit(1).minimumScaleFactor(0.8)
             } else {
                 row("Bellek", fraction: nil, text: "—")
@@ -128,6 +128,15 @@ private struct UsageColumn: View {
         formatter.countStyle = .memory
         formatter.allowedUnits = [.useGB, .useMB]
         formatter.includesUnit = true
+        return formatter.string(fromByteCount: Int64(value))
+    }
+
+    /// Bellek satırında birim bir kez yazılır ("12.38 / 16 GB"); iki birimle değer alanına sığmıyordu.
+    private static func gigabytes(_ value: UInt64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .memory
+        formatter.allowedUnits = [.useGB]
+        formatter.includesUnit = false
         return formatter.string(fromByteCount: Int64(value))
     }
 }

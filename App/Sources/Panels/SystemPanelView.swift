@@ -199,10 +199,12 @@ private final class UsageColumnView: FlippedView {
             case .critical: .systemRed
             }
             let pressure = switch system.pressure { case .normal: "Normal"; case .warning: "Yüksek"; case .critical: "Kritik" }
-            memory.set(fraction: m.usedFraction, text: "\(Self.bytes(m.usedBytes)) / \(Self.bytes(m.totalBytes))", tint: tint)
+            memory.set(fraction: m.usedFraction, text: "\(Self.gigabytes.string(fromByteCount: Int64(m.usedBytes))) / \(Self.bytes(m.totalBytes))", tint: tint)
             memory.toolTip = "Mac'in toplam RAM kullanımıdır; OpenIsland'in kendi kullanımı değildir. Bellek basıncı: \(pressure)."
             memory.setAccessibilityHelp("Mac'in toplam RAM kullanımı. Bellek basıncı: \(pressure).")
-            let text = "Sıkıştırılmış \(Self.bytes(m.compressedBytes)) · Takas \(Self.bytes(m.swapUsedBytes))"
+            // ByteCountFormatter sıfırı "Sıfır KB" yazıyor.
+            let swap = m.swapUsedBytes == 0 ? "Takas yok" : "Takas \(Self.bytes(m.swapUsedBytes))"
+            let text = "Sıkıştırılmış \(Self.bytes(m.compressedBytes)) · \(swap)"
             if detail.stringValue != text || detail.isHidden {
                 detail.set(text)
                 detail.isHidden = false
@@ -246,6 +248,15 @@ private final class UsageColumnView: FlippedView {
     }()
 
     static func bytes(_ value: UInt64) -> String { formatter.string(fromByteCount: Int64(value)) }
+    /// Bellek satırında birim bir kez yazılır ("12.38 / 16 GB"): 66 pt'lik değer alanına "12.38 GB / 16 GB" sığmıyor,
+    /// sondan kesiliyordu.
+    private static let gigabytes: ByteCountFormatter = {
+        let f = ByteCountFormatter()
+        f.countStyle = .memory
+        f.allowedUnits = [.useGB]
+        f.includesUnit = false
+        return f
+    }()
 }
 
 private final class UsageRow: FlippedView {
