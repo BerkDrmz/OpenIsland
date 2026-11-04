@@ -19,6 +19,16 @@ import IslandCore
     }
     var failures: [String] = [], checks = 0
     func check(_ ok: Bool, _ message: String) { checks += 1; if !ok { failures.append(message); print("FAIL: \(message)") } }
+    /// Koşul gerçekleşene kadar bekler (en çok `ms`). "X ms bekle, sonra bak" kontrolleri yükte rastgele düşüyordu;
+    /// belirli bir anı sınayan kontroller (hareket ortasında katman ekleme, eski completion'ın park etmemesi) sabit kalır.
+    func waitUntil(_ ms: Int, _ condition: () -> Bool) async -> Bool {
+        let end = Date().addingTimeInterval(Double(ms) / 1000)
+        while !condition() {
+            if Date() >= end { return false }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return true
+    }
     func applicationDidFinishLaunching(_ note: Notification) { Task { await run() } }
     func run() async {
         let env = AppEnvironment(); env.system.privateEnabled = false
@@ -31,11 +41,11 @@ import IslandCore
         window.orderFrontRegardless()
         try? await Task.sleep(for: .milliseconds(1300))
         model.send(.tapped)
-        try? await Task.sleep(for: .milliseconds(90))
         let offloadEnabled = ProcessInfo.processInfo.environment["OPENISLAND_APPKIT_CLIENT_TICKS"] != "1"
+        _ = await waitUntil(400) { canvas.compositorOnlyMotion == offloadEnabled }
         check(canvas.compositorOnlyMotion == offloadEnabled,
               "empty-media notch opening did not select the expected frame owner")
-        try? await Task.sleep(for: .milliseconds(1000))
+        _ = await waitUntil(2500) { !canvas.compositorOnlyMotion }
         check(!canvas.compositorOnlyMotion, "surface completion did not release frame ownership")
         func expanded(in view: NSView) -> ExpandedContentView? {
             if let v = view as? ExpandedContentView { return v }
@@ -45,10 +55,10 @@ import IslandCore
         check(original != nil && original?.isDormant == false, "expanded content missing or dormant after opening")
         for cycle in 0..<3 {
             model.send(.escapePressed)
-            try? await Task.sleep(for: .milliseconds(300))
+            _ = await waitUntil(800) { original?.isHidden == true }
             check(original?.isHidden == true && original?.isDormant == false,
                   "outgoing host remained focusable after its fade, or suspended before the outline settled")
-            try? await Task.sleep(for: .milliseconds(1200))
+            _ = await waitUntil(2500) { !model.presentation.isExpanded && original?.isDormant == true }
             check(!model.presentation.isExpanded, "escape did not collapse cycle \(cycle)")
             check(canvas.spareExpanded === original, "expanded cache identity lost cycle \(cycle)")
             check(original?.window === window, "expanded cache detached from window cycle \(cycle)")
@@ -58,7 +68,7 @@ import IslandCore
             check(!canvas.isWarmingSpare, "spare warmup did not finish cycle \(cycle)")
             check(original?.isHidden == true && original?.isDormant == true, "parked cache is visible or active cycle \(cycle)")
             model.send(.tapped)
-            try? await Task.sleep(for: .milliseconds(600))
+            _ = await waitUntil(1500) { expanded(in: canvas) === original && original?.isHidden == false && original?.isDormant == false }
             check(expanded(in: canvas) === original && original?.isHidden == false && original?.isDormant == false, "reopen lost original content or visibility cycle \(cycle)")
         }
         // Real fast-hover path: closing content is still attached when peek
@@ -73,7 +83,11 @@ import IslandCore
             model.send(.escapePressed)
             try? await Task.sleep(for: .milliseconds(delay))
             model.send(.pointerEntered)
-            try? await Task.sleep(for: .milliseconds(360))
+            _ = await waitUntil(1200) {
+                let view = expanded(in: canvas)
+                return model.presentation.isExpanded && view?.isHidden == false
+                    && (view?.layer?.presentation()?.opacity ?? view?.layer?.opacity ?? 0) > 0.7
+            }
             check(model.presentation.isExpanded, "fast-hover reentry did not expand after \(delay) ms")
             let shown = expanded(in: canvas)
             let opacity = shown?.layer?.presentation()?.opacity ?? shown?.layer?.opacity ?? 0
@@ -83,7 +97,7 @@ import IslandCore
         // Mid-animation overlay insertion must immediately restore the client
         // path. No warm host is discarded and no stale completion may park it.
         model.send(.pointerExited); model.send(.escapePressed)
-        try? await Task.sleep(for: .milliseconds(1200))
+        _ = await waitUntil(2500) { !model.presentation.isExpanded && !canvas.compositorOnlyMotion && original?.isDormant == true }
         model.send(.tapped)
         try? await Task.sleep(for: .milliseconds(90))
         let overlay = FlippedView(frame: .zero)
@@ -94,7 +108,7 @@ import IslandCore
         check(original?.isHidden == false && original?.isDormant == false,
               "retired compositor completion parked the reopened host")
         model.send(.escapePressed)
-        try? await Task.sleep(for: .milliseconds(1200))
+        _ = await waitUntil(2500) { !canvas.compositorOnlyMotion && original?.isDormant == true }
         check(!canvas.compositorOnlyMotion && original?.isDormant == true,
               "completion left outgoing host active")
         // Two genuinely different tabs with the same body geometry must still
