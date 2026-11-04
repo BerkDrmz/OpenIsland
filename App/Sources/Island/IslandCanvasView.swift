@@ -53,6 +53,8 @@ final class IslandCanvasView: NSView {
     var spareExpanded: ExpandedContentView?
     /// Kapanışta sönen açık içerik: kapatma işi (`suspend`) yüzey durunca yapılır (bkz. `tick`).
     private var pendingSuspend: ExpandedContentView?
+    /// Uyuyan içerik ön çizim için bir-iki kare görünür (%0,4 opak, kapalı adada kırpılmış): kasıtlıdır.
+    private(set) var isWarmingSpare = false
     /// Açılıştan sonraki ilk saniyeler: ön çizim kompakt adadaki canlı etkinliği beklemez (ilk hover önceliklidir).
     private let warmupDeadline = CACurrentMediaTime() + 15
     /// Açık adanın içeriğinin üstünde tek görünüm (ilk kurulum karşılaması); bkz. `presentOverlay`.
@@ -880,11 +882,13 @@ extension IslandCanvasView {
     /// hemen başlar. Ada maskesi içeriği kapalı yüzeyle sınırlar. İki sunulan kareden sonra görünüm yeniden gizlenir;
     /// bu arada açılış başlarsa (`takeSpareExpanded`) görünüm açılışa devredilir ve burada dokunulmaz.
     private func presentSpare(_ view: ExpandedContentView, then next: @escaping @MainActor () -> Void) {
+        isWarmingSpare = true
         view.wantsLayer = true
         if view.superview !== contentView { contentView.addSubview(view, positioned: .below, relativeTo: media) }
         view.layer?.opacity = 0.004
         view.isHidden = false
         FrameDriver.afterPresentedFrame(of: self) { [weak self, weak view] in
+            self?.isWarmingSpare = false
             guard let self, let view, self.spareExpanded === view else { return }
             view.isHidden = true
             view.layer?.opacity = 0

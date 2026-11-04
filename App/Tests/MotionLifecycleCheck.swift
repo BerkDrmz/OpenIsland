@@ -52,6 +52,10 @@ import IslandCore
             check(!model.presentation.isExpanded, "escape did not collapse cycle \(cycle)")
             check(canvas.spareExpanded === original, "expanded cache identity lost cycle \(cycle)")
             check(original?.window === window, "expanded cache detached from window cycle \(cycle)")
+            // Boştaki ön çizim (kurulmamış paneller) uyuyan içeriği bir-iki kare görünür yapar; bu kasıtlıdır ve denetim
+            // anına denk gelince test rastgele düşüyordu. Park durumu ön çizim bitince denetlenir (en çok 1 sn).
+            for _ in 0..<40 where canvas.isWarmingSpare { try? await Task.sleep(for: .milliseconds(25)) }
+            check(!canvas.isWarmingSpare, "spare warmup did not finish cycle \(cycle)")
             check(original?.isHidden == true && original?.isDormant == true, "parked cache is visible or active cycle \(cycle)")
             model.send(.tapped)
             try? await Task.sleep(for: .milliseconds(600))
