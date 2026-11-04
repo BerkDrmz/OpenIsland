@@ -181,7 +181,9 @@ private struct ClipRow: View {
     private var preview: some View {
         switch item.content {
         case .text(let text):
-            Text(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            Text(LinkDisplay.compact(trimmed) ?? trimmed)
+                .accessibilityLabel(trimmed)
                 .font(IslandType.body)
                 .lineLimit(1)
         case .image(let data):

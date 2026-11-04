@@ -271,7 +271,7 @@ private final class ClipRowView: RoundedView, TransientStateResettable {
         switch item.content {
         case .text(let value):
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            text.set(Self.visiblePrefix(trimmed))
+            text.set(LinkDisplay.compact(trimmed) ?? Self.visiblePrefix(trimmed))
             setAccessibilityLabel(trimmed)
             thumbnail.isHidden = true
             fileIcon.isHidden = true
