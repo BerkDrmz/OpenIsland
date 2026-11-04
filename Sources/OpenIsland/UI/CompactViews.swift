@@ -99,7 +99,7 @@ struct CountdownLabel: View {
         let anchor: Date = if case .running(let end) = running { end } else { .now }
         TimelineView(PausablePeriodicSchedule(anchor: anchor, interval: 1, isPaused: !timer.isRunning)) { context in
             let remaining = timer.remaining(at: context.date).rounded(.up)
-            Text(remaining.clockString)
+            Text(remaining.compactMinutesString)
                 .font(font)
                 .monospacedDigit()
                 .lineLimit(1)

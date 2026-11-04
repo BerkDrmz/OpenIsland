@@ -92,7 +92,7 @@ final class CompactContentView: FlippedView, IslandContentView {
             (leading as? TimeProgressLayerView)?.configure(timing: timer.progressTiming, tint: NSColor(timer.phase.tint),
                                                            track: .white.withAlphaComponent(0.18))
             let remaining = timer.remaining(at: .now).rounded(.up)
-            value.set(remaining.clockString)
+            value.set(remaining.compactMinutesString)
             value.textColor = NSColor(timer.phase.tint)
             setAccessibilityLabel("\(timer.phase.title), kalan \(remaining.clockString)")
             countdown?.set(running: timer.isRunning)

@@ -107,6 +107,13 @@ extension View {
 }
 
 extension TimeInterval {
+    /// Kapalı adanın dar kanadı için yalnız dakika, yukarı yuvarlanır (45:12 → "46", son dakika → "1", bitince "0"):
+    /// "dakika:saniye" kanada sığmıyor, "46:…" diye kesiliyordu.
+    var compactMinutesString: String {
+        guard isFinite, self > 0 else { return "0" }
+        return String(Int((self / 60).rounded(.up)))
+    }
+
     /// 3:07 veya 1:02:45 biçimi.
     var clockString: String {
         guard isFinite, self >= 0 else { return "0:00" }
